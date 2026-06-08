@@ -34,7 +34,7 @@ onshape-export cache reconcile [--model <slug>]
 
 Command behavior:
 
-- `validate-catalog` checks schema, slug rules, duplicate source identities, override parameter IDs, and public-export suitability flags.
+- `validate-catalog` checks schema, supported catalog version fields, slug rules, duplicate source identities, override parameter IDs, `entryVersion` consistency when comparing against a previous catalog state, and public-export suitability flags.
 - `refresh-parameters` creates or finds a `parameter_refresh` job.
 - `generate-preview` and `generate-export` create or find deterministic work keys.
 - `jobs retry` respects retryability and max-attempt policy unless a future `--force` option is added.
