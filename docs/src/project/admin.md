@@ -15,6 +15,32 @@ Initial admin operations:
 - Invalidate artifacts after exporter option changes.
 - List cached outputs for a model.
 
+## MVP CLI Commands
+
+Start with CLI or Fly-run commands. These commands may enqueue jobs rather than doing all work synchronously.
+
+```text
+onshape-export validate-catalog [--model <slug>]
+onshape-export refresh-parameters <slug> [--wait]
+onshape-export generate-preview <slug> [--config <json>] [--missing-only] [--wait]
+onshape-export generate-export <slug> --format step|stl|3mf [--config <json>] [--missing-only] [--wait]
+onshape-export jobs list [--status queued|running|ready|failed]
+onshape-export jobs show <job-id>
+onshape-export jobs retry <job-id>
+onshape-export cache list <slug>
+onshape-export cache invalidate <artifact-id-or-group-id> --reason <text>
+onshape-export cache reconcile [--model <slug>]
+```
+
+Command behavior:
+
+- `validate-catalog` checks schema, slug rules, duplicate source identities, override parameter IDs, and public-export suitability flags.
+- `refresh-parameters` creates or finds a `parameter_refresh` job.
+- `generate-preview` and `generate-export` create or find deterministic work keys.
+- `jobs retry` respects retryability and max-attempt policy unless a future `--force` option is added.
+- `cache invalidate` marks artifacts superseded and should not delete public objects during normal operation.
+- `cache reconcile` repairs SQLite/Tigris drift such as uploaded objects whose jobs were not marked ready.
+
 ## Web Admin Deferral
 
 Do not add `/admin` routes in the MVP.

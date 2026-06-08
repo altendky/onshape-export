@@ -14,7 +14,7 @@ This repository currently contains planning documentation only. No application c
 - Onshape document versions only, not mutable workspaces.
 - Anonymous end users, using server-owned Onshape credentials.
 - Download formats: STEP, STL, and 3MF.
-- Preview format: cached GLB/glTF export shown in a browser 3D viewer.
+- Preview format: cached GLB export shown in a browser 3D viewer.
 - Runtime: Fly.io Rust app at `https://onshape-export.fly.dev` if the app name is available.
 - Cache backend: Tigris Object Storage via Fly, with public stable artifact URLs.
 - Coordination database: SQLite on a Fly volume for queue/job uniqueness.
@@ -33,6 +33,7 @@ Project documentation is under `docs/src/project/`.
 - [Frontend and Preview](docs/src/project/frontend-preview.md)
 - [Catalog](docs/src/project/catalog.md)
 - [Admin Operations](docs/src/project/admin.md)
+- [CI And Local Tooling](docs/src/project/ci.md)
 - [Library Reuse](docs/src/project/library-reuse.md)
 - [Implementation Plan](docs/src/project/implementation.md)
 - [Decisions](docs/src/project/decisions.md)

@@ -11,8 +11,10 @@ For the viewer, start with `<model-viewer>` consuming cached GLB files. Move to 
 The preview is not generated from STEP, STL, or 3MF locally. It is another Onshape export for the same selected configuration:
 
 ```text
-selected configuration -> Onshape GLB/glTF export -> Tigris -> browser viewer
+selected configuration -> Onshape GLB export -> Tigris -> browser viewer
 ```
+
+The MVP preview artifact is strictly GLB. glTF may appear in Onshape API terminology, but cache keys, manifests, public URLs, and viewer behavior should treat preview output as one `.glb` file rather than a loose `.gltf` asset set.
 
 The final download is independently cached:
 
@@ -68,6 +70,5 @@ Final export defaults:
 Fallback order:
 
 1. Cached GLB preview.
-2. Cached STL preview if GLB generation fails.
-3. Static thumbnail if available.
-4. Download-only state with clear messaging.
+2. Static thumbnail if available.
+3. Download-only state with clear messaging.

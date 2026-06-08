@@ -14,7 +14,7 @@ Initial scope:
 - Anonymous end users.
 - Server-owned Onshape API access.
 - STEP, STL, and 3MF downloads.
-- GLB/glTF browser preview for every selected configuration.
+- GLB browser preview for selected configurations.
 - Fly.io Rust app at `https://onshape-export.fly.dev` if the app name is available.
 - Tigris artifact cache with stable public artifact URLs.
 - SQLite on a Fly volume for queue coordination and job uniqueness.

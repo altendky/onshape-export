@@ -5,10 +5,13 @@
 Use a single-provider Fly-oriented MVP:
 
 - Rust `axum` service on Fly.io for public pages, cache checks, queue submission, status routes, and Onshape orchestration.
+- A bounded embedded worker loop in the same Rust process for MVP export and metadata jobs.
 - Tigris Object Storage via Fly for completed artifacts, manifests, and cached Onshape metadata.
 - SQLite on a Fly volume for queue coordination, job uniqueness, artifact index state, and failure summaries.
 
 This keeps the MVP on Fly/Tigris, avoids the fixed cost of Fly Managed Postgres, and still provides transactional coordination so duplicate Onshape parameter fetches and exports are prevented.
+
+The MVP assumes one Fly machine running one Rust service process. The public web server and worker loop share the same local SQLite database on the attached Fly volume. A separate worker process group is deferred until shared coordination is introduced or Fly volume sharing semantics are explicitly verified.
 
 Initial public hostname:
 
@@ -34,6 +37,7 @@ Costs:
 - Fly volumes are region and machine scoped.
 - Recovery and backup policy must be explicit if job history becomes important.
 - Multi-machine scaling requires redesigning coordination, likely Postgres.
+- Web and worker restarts are coupled until the worker is split out later.
 
 Best use:
 
@@ -41,6 +45,13 @@ Best use:
 - Deterministic queue coordination.
 - Low-cost durable job state.
 - Public artifact delivery through stable Tigris URLs.
+
+Initial worker policy:
+
+- Run a bounded worker loop inside the Rust service process.
+- Start with conservative Onshape concurrency and increase only after real API behavior is measured.
+- Keep SQLite transactions short and never hold a database write transaction while calling Onshape.
+- Replace SQLite with Postgres or another shared coordination backend before adding multi-machine workers.
 
 ## Option: Fly Managed Postgres
 
@@ -83,7 +94,6 @@ Best use:
 
 ## Initial Runtime Decision Points
 
-- Whether the web server and worker loop run in one process or separate Fly process groups on the same machine.
 - How many concurrent Onshape jobs are allowed initially.
 - What Tigris public hostname or URL shape is used for stable artifact URLs.
 - What backup/snapshot policy is enough for the SQLite volume.

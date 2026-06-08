@@ -6,28 +6,76 @@ Start with a curated catalog in the repository, documented and reviewed like cod
 
 The catalog should describe only approved Onshape document versions and elements.
 
+Catalog entries must be safe for public export. Because completed artifacts are public and normally immutable, do not add private, customer-specific, or access-controlled models to the MVP catalog.
+
+Initial files:
+
+```text
+catalog/v1/models.json
+catalog/v1/models/{slug}.json
+```
+
+`catalog/v1/models.json` is an index of published slugs and lightweight display data. Each `catalog/v1/models/{slug}.json` file is the source of truth for one model entry.
+
 ## Model Entry
 
 Each model entry should include:
 
 ```json
 {
+  "catalogSchemaVersion": 1,
+  "entryVersion": 1,
   "slug": "example-model",
   "name": "Example Model",
   "description": "Short public description.",
+  "published": true,
+  "tags": ["example"],
+  "thumbnail": null,
   "onshape": {
     "documentId": "...",
     "versionId": "...",
     "elementId": "...",
-    "elementKind": "part_studio"
+    "elementKind": "part_studio",
+    "linkDocumentId": null
   },
   "exports": {
-    "downloads": ["step", "stl", "3mf"],
-    "preview": "glb"
+    "preview": {
+      "format": "glb",
+      "defaults": {
+        "meshResolution": "MEDIUM"
+      }
+    },
+    "downloads": {
+      "step": {
+        "enabled": true,
+        "defaults": {
+          "stepVersion": "AP242"
+        }
+      },
+      "stl": {
+        "enabled": true,
+        "defaults": {}
+      },
+      "3mf": {
+        "enabled": true,
+        "defaults": {}
+      }
+    }
   },
   "parameterPolicy": {
     "source": "onshape",
-    "allowUnknown": false
+    "allowUnknown": false,
+    "autoRefresh": false
+  },
+  "parameterOverrides": {
+    "parameter-id": {
+      "label": "Public Label",
+      "description": "Short help text.",
+      "visible": true,
+      "precision": 3,
+      "widget": "number",
+      "previewAutoGenerate": false
+    }
   }
 }
 ```
@@ -37,6 +85,15 @@ For Assemblies, use:
 ```json
 "elementKind": "assembly"
 ```
+
+Slug rules:
+
+- Lowercase ASCII letters, numbers, and hyphens only.
+- Start with a letter or number.
+- Do not use slugs as immutable cache identity.
+- Treat slug renames as URL/display changes; Onshape source identity and hashes remain the durable cache identity.
+
+`entryVersion` should increment when catalog settings affect UI validation, parameter defaults, export options, or public presentation. Export-affecting changes should produce new cache identities through option or config hashes rather than overwriting existing public artifacts.
 
 ## Parameter Metadata
 
@@ -51,6 +108,13 @@ Possible overrides:
 - Preferred input widget.
 - Preview auto-generation policy.
 - Export option defaults.
+
+Override merge rules:
+
+- Onshape raw metadata remains the source of truth for parameter IDs and allowed values.
+- Catalog overrides may narrow visibility or presentation, but should not expand accepted values beyond Onshape metadata.
+- Unknown override parameter IDs fail catalog validation.
+- Unsupported Onshape parameter types may be hidden only if they are not required to generate a valid configuration.
 
 ## Later Configurability
 
