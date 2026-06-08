@@ -1,0 +1,8 @@
+[book]
+title = "Onshape Export"
+authors = ["altendky"]
+src = "src"
+language = "en"
+
+[output.html]
+git-repository-url = "https://github.com/altendky/onshape-export"
