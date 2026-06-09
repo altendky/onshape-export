@@ -40,6 +40,12 @@ format-specific options
 exporter version
 ```
 
+The current implementation folds exporter and option versions into the
+deterministic `config_hash` used by artifact records, job work keys, status
+URLs, object paths, and manifests. That means changing the package version or
+the preview/download option version constants causes the worker to generate a
+fresh artifact set for the same visible parameter values.
+
 Use canonical JSON for parameter values and options before hashing:
 
 - Apply defaults.
@@ -61,11 +67,11 @@ onshape/{did}/v/{vid}/e/{eid}/parameters.normalized.json
 
 encodings/{did}/v/{vid}/e/{eid}/{config_hash}.json
 
-previews/{slug}/{vid}/{eid}/{config_hash}/{preview_options_hash}/preview.glb
+previews/{slug}/{vid}/{eid}/{config_hash}/{preview_options_version}/preview.glb
 
-artifacts/{slug}/{vid}/{eid}/{config_hash}/step/{artifact_id}.step
-artifacts/{slug}/{vid}/{eid}/{config_hash}/stl/{artifact_id}.stl
-artifacts/{slug}/{vid}/{eid}/{config_hash}/3mf/{artifact_id}.3mf
+artifacts/{slug}/{vid}/{eid}/{config_hash}/{export_options_version}/step/{artifact_id}.step
+artifacts/{slug}/{vid}/{eid}/{config_hash}/{export_options_version}/stl/{artifact_id}.stl
+artifacts/{slug}/{vid}/{eid}/{config_hash}/{export_options_version}/3mf/{artifact_id}.3mf
 
 manifests/{group_id}.json
 ```

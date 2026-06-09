@@ -152,6 +152,9 @@ Implemented pieces:
 - `ops check` validates deployment-critical configuration before serving
   traffic: catalog loading, SQLite connectivity, Tigris client construction,
   Tigris public URL configuration, and Onshape/Tigris credential presence.
+- Artifact cache identity now includes the exporter package version plus the
+  preview/download option version strings, so option or code changes naturally
+  generate fresh cache entries instead of reusing stale exports.
 
 Possible additions:
 

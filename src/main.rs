@@ -35,6 +35,10 @@ use crate::{
     storage::StorageClient,
 };
 
+const EXPORTER_VERSION: &str = env!("CARGO_PKG_VERSION");
+const PREVIEW_OPTIONS_VERSION: &str = "mesh-medium-v1";
+const DOWNLOAD_OPTIONS_VERSION: &str = "default-v1";
+
 #[derive(Clone)]
 struct AppState {
     catalog: Arc<Catalog>,
@@ -1676,7 +1680,7 @@ fn build_manifest(
         },
         outputs,
         created_at,
-        exporter_version: env!("CARGO_PKG_VERSION"),
+        exporter_version: EXPORTER_VERSION,
     }
 }
 
@@ -1693,16 +1697,21 @@ fn manifest_object_key(model: &catalog::Model, config_hash: &str) -> String {
 
 fn preview_artifact_key(model: &catalog::Model, config_hash: &str) -> String {
     format!(
-        "preview-glb:{}:{}:{config_hash}:mesh-medium-v1",
+        "preview-glb:{}:{}:{config_hash}:{}",
         model.slug,
-        source_identity(&model.onshape)
+        source_identity(&model.onshape),
+        PREVIEW_OPTIONS_VERSION,
     )
 }
 
 fn preview_object_key(model: &catalog::Model, config_hash: &str) -> String {
     format!(
-        "previews/{}/{}/{}/{}/mesh-medium-v1/preview.glb",
-        model.slug, model.onshape.version_id, model.onshape.element_id, config_hash
+        "previews/{}/{}/{}/{}/{}/preview.glb",
+        model.slug,
+        model.onshape.version_id,
+        model.onshape.element_id,
+        config_hash,
+        PREVIEW_OPTIONS_VERSION,
     )
 }
 
@@ -1712,10 +1721,11 @@ fn download_artifact_key(
     format: catalog::DownloadFormat,
 ) -> String {
     format!(
-        "download-{}:{}:{}:{config_hash}:default-v1",
+        "download-{}:{}:{}:{config_hash}:{}",
         format.slug(),
         model.slug,
-        source_identity(&model.onshape)
+        source_identity(&model.onshape),
+        DOWNLOAD_OPTIONS_VERSION,
     )
 }
 
@@ -1725,11 +1735,12 @@ fn download_object_key(
     format: catalog::DownloadFormat,
 ) -> String {
     format!(
-        "artifacts/{}/{}/{}/{}/{}/{}.{}",
+        "artifacts/{}/{}/{}/{}/{}/{}/{}.{}",
         model.slug,
         model.onshape.version_id,
         model.onshape.element_id,
         config_hash,
+        DOWNLOAD_OPTIONS_VERSION,
         format.slug(),
         safe_filename_stem(&model.slug),
         format.extension()
@@ -1790,9 +1801,23 @@ fn element_kind_key(kind: &catalog::ElementKind) -> &'static str {
 
 fn configuration_hash(values: &HashMap<String, String>) -> anyhow::Result<String> {
     let mut object = Map::new();
+    object.insert(
+        "exporterVersion".to_owned(),
+        Value::String(EXPORTER_VERSION.to_owned()),
+    );
+    object.insert(
+        "previewOptionsVersion".to_owned(),
+        Value::String(PREVIEW_OPTIONS_VERSION.to_owned()),
+    );
+    object.insert(
+        "downloadOptionsVersion".to_owned(),
+        Value::String(DOWNLOAD_OPTIONS_VERSION.to_owned()),
+    );
+    let mut values_object = Map::new();
     for key in canonical_values(values).keys() {
-        object.insert(key.clone(), Value::String(values[key].clone()));
+        values_object.insert(key.clone(), Value::String(values[key].clone()));
     }
+    object.insert("values".to_owned(), Value::Object(values_object));
     let canonical = serde_json::to_vec(&Value::Object(object))?;
     Ok(hex_sha256(&canonical))
 }
@@ -2116,6 +2141,23 @@ mod tests {
         assert_eq!(
             configuration_hash(&first).unwrap(),
             configuration_hash(&second).unwrap()
+        );
+    }
+
+    #[test]
+    fn cache_keys_include_export_option_versions() {
+        let model = test_model();
+        let config_hash = "abc";
+
+        assert!(preview_artifact_key(&model, config_hash).ends_with(PREVIEW_OPTIONS_VERSION));
+        assert!(preview_object_key(&model, config_hash).contains(PREVIEW_OPTIONS_VERSION));
+        assert!(
+            download_artifact_key(&model, config_hash, catalog::DownloadFormat::Step)
+                .ends_with(DOWNLOAD_OPTIONS_VERSION)
+        );
+        assert!(
+            download_object_key(&model, config_hash, catalog::DownloadFormat::Step)
+                .contains(DOWNLOAD_OPTIONS_VERSION)
         );
     }
 
