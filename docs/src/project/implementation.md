@@ -124,10 +124,12 @@ Current phase foundation implemented.
 Implemented pieces:
 
 - Prometheus-style `/metrics` route with catalog, job, artifact, and artifact-byte gauges.
+- Request handlers enqueue parameter, preview, and download jobs for a background worker instead of running Onshape calls inline.
+- SQLite job leases allow queued or expired work to be claimed without starting duplicate work.
 
 Possible additions:
 
-- Separate Fly worker process group.
+- Separate Fly worker process group or worker-only runtime mode.
 - Postgres if SQLite-on-volume limits become painful.
 - Web admin UI and authentication if CLI operations become insufficient.
 - Scheduled rebuilds.

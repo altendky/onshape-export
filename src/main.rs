@@ -5,7 +5,7 @@ mod onshape;
 mod parameters;
 mod storage;
 
-use std::{collections::HashMap, env, sync::Arc};
+use std::{collections::HashMap, env, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use axum::{
@@ -15,6 +15,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use tower_http::trace::TraceLayer;
@@ -35,6 +36,23 @@ struct AppState {
     db: Database,
     onshape: OnshapeClient,
     storage: StorageClient,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum JobPayload {
+    ParameterRefresh {
+        model_slug: String,
+    },
+    PreviewGlb {
+        model_slug: String,
+        values: HashMap<String, String>,
+    },
+    DownloadExport {
+        model_slug: String,
+        values: HashMap<String, String>,
+        format: catalog::DownloadFormat,
+    },
 }
 
 #[tokio::main]
@@ -65,6 +83,8 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         onshape,
         storage,
     };
+
+    tokio::spawn(worker_loop(state.clone()));
 
     let listener = tokio::net::TcpListener::bind(config.bind_addr)
         .await
@@ -266,6 +286,71 @@ async fn generate_default_preview(
     refresh_preview(state, model, &values, &config_hash, &artifact_key)
         .await
         .map(Some)
+}
+
+async fn enqueue_parameter_refresh(
+    state: &AppState,
+    model: &catalog::Model,
+) -> anyhow::Result<bool> {
+    let payload = JobPayload::ParameterRefresh {
+        model_slug: model.slug.clone(),
+    };
+    enqueue_job(
+        state,
+        &format!("parameter-refresh:{}", model.slug),
+        "parameter_refresh",
+        &payload,
+    )
+    .await
+}
+
+async fn enqueue_preview(
+    state: &AppState,
+    model: &catalog::Model,
+    values: &HashMap<String, String>,
+) -> anyhow::Result<bool> {
+    let config_hash = configuration_hash(values)?;
+    let artifact_key = preview_artifact_key(model, &config_hash);
+    let payload = JobPayload::PreviewGlb {
+        model_slug: model.slug.clone(),
+        values: values.clone(),
+    };
+    enqueue_job(state, &artifact_key, "preview_glb", &payload).await
+}
+
+async fn enqueue_download(
+    state: &AppState,
+    model: &catalog::Model,
+    values: &HashMap<String, String>,
+    format: catalog::DownloadFormat,
+) -> anyhow::Result<bool> {
+    let config_hash = configuration_hash(values)?;
+    let artifact_key = download_artifact_key(model, &config_hash, format);
+    let payload = JobPayload::DownloadExport {
+        model_slug: model.slug.clone(),
+        values: values.clone(),
+        format,
+    };
+    enqueue_job(
+        state,
+        &artifact_key,
+        &format!("export_{}", format.slug()),
+        &payload,
+    )
+    .await
+}
+
+async fn enqueue_job(
+    state: &AppState,
+    work_key: &str,
+    job_kind: &str,
+    payload: &JobPayload,
+) -> anyhow::Result<bool> {
+    let payload_json = serde_json::to_string(payload)?;
+    Ok(state
+        .db
+        .enqueue_job(work_key, job_kind, &payload_json)
+        .await?)
 }
 
 async fn generate_download_for_values(
@@ -534,45 +619,13 @@ async fn generate_preview(
         ));
     }
 
-    let work_key = artifact_key.clone();
-    if !state.db.try_start_job(&work_key, "preview_glb").await? {
-        return Ok(render_model_html(
-            model,
-            &parameter_controls,
-            "<p>Preview generation is already running. Reload this page shortly.</p>",
-            &render_download_prompt(model),
-        ));
-    }
-
-    let result = refresh_preview(
-        &state,
+    enqueue_preview(&state, model, &validated.values).await?;
+    Ok(render_model_html(
         model,
-        &validated.values,
-        &config_hash,
-        &artifact_key,
-    )
-    .await;
-    match result {
-        Ok(object_key) => {
-            state.db.finish_job(&work_key, "ready", None).await?;
-            let preview = render_preview_result(&state, &object_key);
-            let downloads = render_downloads_for_values(&state, model, &validated.values).await?;
-            Ok(render_model_html(
-                model,
-                &parameter_controls,
-                &preview,
-                &downloads,
-            ))
-        }
-        Err(error) => {
-            let summary = error.to_string();
-            state
-                .db
-                .finish_job(&work_key, "failed", Some(&summary))
-                .await?;
-            Err(error.into())
-        }
-    }
+        &parameter_controls,
+        "<p>Preview generation is queued. Reload this page shortly.</p>",
+        &render_download_prompt(model),
+    ))
 }
 
 async fn generate_download(
@@ -626,54 +679,17 @@ async fn generate_download(
         ));
     }
 
-    let work_key = artifact_key.clone();
-    if !state
-        .db
-        .try_start_job(&work_key, &format!("export_{}", format.slug()))
-        .await?
-    {
-        let preview = render_preview_for_values(&state, model, &validated.values).await?;
-        return Ok(render_model_html(
-            model,
-            &parameter_controls,
-            &preview,
-            &format!(
-                "<p>{} export is already running. Reload this page shortly.</p>",
-                format.label()
-            ),
-        ));
-    }
-
-    let result = refresh_download(
-        &state,
+    enqueue_download(&state, model, &validated.values, format).await?;
+    let preview = render_preview_for_values(&state, model, &validated.values).await?;
+    Ok(render_model_html(
         model,
-        &validated.values,
-        &config_hash,
-        &artifact_key,
-        format,
-    )
-    .await;
-    match result {
-        Ok(object_key) => {
-            state.db.finish_job(&work_key, "ready", None).await?;
-            let preview = render_preview_for_values(&state, model, &validated.values).await?;
-            let downloads = render_download_result(&state, format, &object_key);
-            Ok(render_model_html(
-                model,
-                &parameter_controls,
-                &preview,
-                &downloads,
-            ))
-        }
-        Err(error) => {
-            let summary = error.to_string();
-            state
-                .db
-                .finish_job(&work_key, "failed", Some(&summary))
-                .await?;
-            Err(error.into())
-        }
-    }
+        &parameter_controls,
+        &preview,
+        &format!(
+            "<p>{} export generation is queued. Reload this page shortly.</p>",
+            format.label()
+        ),
+    ))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -714,30 +730,98 @@ async fn load_or_refresh_parameters(
         return Ok(Some(schema));
     }
 
-    let work_key = format!("parameter-refresh:{}", model.slug);
-    if !state
-        .db
-        .try_start_job(&work_key, "parameter_refresh")
-        .await?
-    {
-        return Ok(None);
-    }
+    enqueue_parameter_refresh(state, model).await?;
+    Ok(None)
+}
 
-    let result = refresh_parameters(state, model).await;
-    match result {
-        Ok(schema) => {
-            state.db.finish_job(&work_key, "ready", None).await?;
-            Ok(Some(schema))
+async fn worker_loop(state: AppState) {
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+    loop {
+        interval.tick().await;
+        loop {
+            match process_next_job(&state).await {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(error) => {
+                    tracing::error!(%error, "worker failed to process job");
+                    break;
+                }
+            }
         }
+    }
+}
+
+async fn process_next_job(state: &AppState) -> anyhow::Result<bool> {
+    let Some(job) = state.db.claim_next_job(15 * 60).await? else {
+        return Ok(false);
+    };
+
+    let result = execute_job(state, &job).await;
+    match result {
+        Ok(()) => state.db.finish_job(&job.work_key, "ready", None).await?,
         Err(error) => {
             let summary = error.to_string();
             state
                 .db
-                .finish_job(&work_key, "failed", Some(&summary))
+                .finish_job(&job.work_key, "failed", Some(&summary))
                 .await?;
-            Err(error.into())
+            return Err(error);
         }
     }
+
+    Ok(true)
+}
+
+async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()> {
+    let payload: JobPayload = serde_json::from_str(&job.payload_json)?;
+    match payload {
+        JobPayload::ParameterRefresh { model_slug } => {
+            let model = state
+                .catalog
+                .find(&model_slug)
+                .ok_or_else(|| anyhow::anyhow!("unknown model slug: {model_slug}"))?;
+            refresh_parameters(state, model).await?;
+        }
+        JobPayload::PreviewGlb { model_slug, values } => {
+            anyhow::ensure!(job.job_kind == "preview_glb", "unexpected preview job kind");
+            let model = state
+                .catalog
+                .find(&model_slug)
+                .ok_or_else(|| anyhow::anyhow!("unknown model slug: {model_slug}"))?;
+            let config_hash = configuration_hash(&values)?;
+            let artifact_key = preview_artifact_key(model, &config_hash);
+            if state.db.artifact(&artifact_key).await?.is_none() {
+                refresh_preview(state, model, &values, &config_hash, &artifact_key).await?;
+            }
+        }
+        JobPayload::DownloadExport {
+            model_slug,
+            values,
+            format,
+        } => {
+            anyhow::ensure!(
+                job.job_kind == format!("export_{}", format.slug()),
+                "unexpected download job kind"
+            );
+            let model = state
+                .catalog
+                .find(&model_slug)
+                .ok_or_else(|| anyhow::anyhow!("unknown model slug: {model_slug}"))?;
+            anyhow::ensure!(
+                model.exports.downloads.contains(&format),
+                "{} does not expose {} downloads",
+                model.slug,
+                format.label()
+            );
+            let config_hash = configuration_hash(&values)?;
+            let artifact_key = download_artifact_key(model, &config_hash, format);
+            if state.db.artifact(&artifact_key).await?.is_none() {
+                refresh_download(state, model, &values, &config_hash, &artifact_key, format)
+                    .await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn refresh_parameters(

@@ -29,6 +29,13 @@ pub struct JobRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct JobLease {
+    pub work_key: String,
+    pub job_kind: String,
+    pub payload_json: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct JobMetric {
     pub job_kind: String,
     pub status: String,
@@ -115,24 +122,62 @@ impl Database {
         Ok(())
     }
 
-    pub async fn try_start_job(&self, work_key: &str, job_kind: &str) -> sqlx::Result<bool> {
+    pub async fn enqueue_job(
+        &self,
+        work_key: &str,
+        job_kind: &str,
+        payload_json: &str,
+    ) -> sqlx::Result<bool> {
         let result = sqlx::query(
             r#"
-            INSERT INTO jobs (work_key, job_kind, status)
-            VALUES (?, ?, 'running')
+            INSERT INTO jobs (work_key, job_kind, status, payload_json)
+            VALUES (?, ?, 'queued', ?)
             ON CONFLICT(work_key) DO UPDATE SET
-                status = 'running',
+                status = 'queued',
+                payload_json = excluded.payload_json,
                 error_summary = NULL,
+                lease_until = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE jobs.status IN ('failed', 'expired')
+            WHERE jobs.status IN ('ready', 'failed', 'expired')
             "#,
         )
         .bind(work_key)
         .bind(job_kind)
+        .bind(payload_json)
         .execute(&self.pool)
         .await?;
 
         Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn claim_next_job(&self, lease_seconds: i64) -> sqlx::Result<Option<JobLease>> {
+        sqlx::query(
+            r#"
+            UPDATE jobs
+            SET status = 'running',
+                attempt = attempt + 1,
+                lease_until = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+' || ? || ' seconds'),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE id = (
+                SELECT id
+                FROM jobs
+                WHERE status IN ('queued', 'expired')
+                ORDER BY created_at
+                LIMIT 1
+            )
+            RETURNING work_key, job_kind, payload_json
+            "#,
+        )
+        .bind(lease_seconds)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| {
+            row.map(|row| JobLease {
+                work_key: row.get("work_key"),
+                job_kind: row.get("job_kind"),
+                payload_json: row.get("payload_json"),
+            })
+        })
     }
 
     pub async fn finish_job(
@@ -231,7 +276,7 @@ impl Database {
             r#"
             SELECT work_key, job_kind, status, error_summary, attempt, created_at, updated_at
             FROM jobs
-            WHERE status = 'failed'
+            WHERE status = 'failed' AND payload_json <> '{}'
             ORDER BY updated_at DESC
             LIMIT ?
             "#,
@@ -274,9 +319,9 @@ impl Database {
         let result = sqlx::query(
             r#"
             UPDATE jobs
-            SET status = 'expired',
-                attempt = attempt + 1,
+            SET status = 'queued',
                 error_summary = NULL,
+                lease_until = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             WHERE status = 'failed'
             "#,
@@ -333,5 +378,58 @@ fn artifact_metric_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactMetric {
         output_kind: row.get("output_kind"),
         count: row.get("count"),
         byte_len: row.get("byte_len"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ready_jobs_can_be_requeued_after_artifact_invalidation() {
+        let db = test_database().await;
+        let payload = r#"{"kind":"parameter_refresh","model_slug":"demo"}"#;
+
+        assert!(
+            db.enqueue_job("work", "parameter_refresh", payload)
+                .await
+                .unwrap()
+        );
+        let job = db.claim_next_job(60).await.unwrap().unwrap();
+        assert_eq!(job.work_key, "work");
+        db.finish_job("work", "ready", None).await.unwrap();
+
+        assert!(
+            db.enqueue_job("work", "parameter_refresh", payload)
+                .await
+                .unwrap()
+        );
+        let job = db.claim_next_job(60).await.unwrap().unwrap();
+        assert_eq!(job.work_key, "work");
+    }
+
+    #[tokio::test]
+    async fn running_jobs_are_not_reclaimed_without_retry() {
+        let db = test_database().await;
+        let payload = r#"{"kind":"parameter_refresh","model_slug":"demo"}"#;
+
+        assert!(
+            db.enqueue_job("work", "parameter_refresh", payload)
+                .await
+                .unwrap()
+        );
+        let job = db.claim_next_job(0).await.unwrap().unwrap();
+        assert_eq!(job.work_key, "work");
+
+        assert!(db.claim_next_job(0).await.unwrap().is_none());
+    }
+
+    async fn test_database() -> Database {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("test.db");
+        let url = format!("sqlite://{}?mode=rwc", path.display());
+        let db = Database::connect(&url).await.unwrap();
+        std::mem::forget(directory);
+        db
     }
 }
