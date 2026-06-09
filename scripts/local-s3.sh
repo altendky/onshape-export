@@ -28,16 +28,16 @@ if ! docker ps --format '{{.Names}}' | grep -qx "${container_name}"; then
 fi
 
 until docker run --rm --network "container:${container_name}" \
-  quay.io/minio/mc alias set local http://127.0.0.1:9000 "${root_user}" "${root_password}" >/dev/null 2>&1; do
+  --entrypoint /bin/sh \
+  quay.io/minio/mc \
+  -c "mc alias set local http://127.0.0.1:9000 '${root_user}' '${root_password}' >/dev/null && mc ready local >/dev/null" >/dev/null 2>&1; do
   sleep 1
 done
 
 docker run --rm --network "container:${container_name}" \
-  quay.io/minio/mc alias set local http://127.0.0.1:9000 "${root_user}" "${root_password}" >/dev/null
-docker run --rm --network "container:${container_name}" \
-  quay.io/minio/mc mb --ignore-existing "local/${bucket}" >/dev/null
-docker run --rm --network "container:${container_name}" \
-  quay.io/minio/mc anonymous set download "local/${bucket}" >/dev/null
+  --entrypoint /bin/sh \
+  quay.io/minio/mc \
+  -c "mc alias set local http://127.0.0.1:9000 '${root_user}' '${root_password}' >/dev/null && mc mb --ignore-existing 'local/${bucket}' >/dev/null && mc anonymous set download 'local/${bucket}' >/dev/null"
 
 cat <<EOF
 MinIO is running.
