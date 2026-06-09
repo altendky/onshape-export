@@ -122,6 +122,8 @@ Implemented hardening:
 - Successful preview/export generation now rewrites a Tigris manifest for the
   selected model configuration from SQLite artifact records; invalidation
   rewrites the same manifest after deleting the artifact record.
+- `artifacts manifest` renders a SQLite-derived manifest for one model
+  configuration and can rewrite that manifest to Tigris with `--rewrite`.
 - `failures retry` supports targeted retries by work key or job kind, while
   preserving all-failures retry as the default.
 

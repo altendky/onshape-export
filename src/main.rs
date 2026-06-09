@@ -80,6 +80,11 @@ struct PruneOptions {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ManifestOptions {
+    rewrite: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FailureRetrySelector<'a> {
     All,
     Kind(&'a str),
@@ -354,6 +359,30 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             );
             Ok(())
         }
+        ("artifacts", [subcommand, slug, config_hash, manifest_args @ ..])
+            if subcommand == "manifest" =>
+        {
+            let options = parse_manifest_options(manifest_args)?;
+            let state = cli_state(config).await?;
+            let model = state
+                .catalog
+                .find(slug)
+                .ok_or_else(|| anyhow::anyhow!("unknown model slug: {slug}"))?;
+            let artifacts = state
+                .db
+                .artifacts_for_configuration(&model.slug, config_hash)
+                .await?;
+            let manifest = build_manifest(model, config_hash, None, &artifacts);
+
+            if options.rewrite {
+                let object_key = manifest_object_key(model, config_hash);
+                state.storage.put_json(&object_key, &manifest).await?;
+                eprintln!("rewrote manifest {object_key}");
+            }
+
+            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            Ok(())
+        }
         ("artifacts", [subcommand, selector, prune_args @ ..]) if subcommand == "prune" => {
             let options = parse_prune_options(prune_args)?;
             let state = cli_state(config).await?;
@@ -518,6 +547,19 @@ fn parse_prune_options(args: &[String]) -> anyhow::Result<PruneOptions> {
             .ok_or_else(|| anyhow::anyhow!("--older-than-days is required"))?,
         dry_run,
     })
+}
+
+fn parse_manifest_options(args: &[String]) -> anyhow::Result<ManifestOptions> {
+    let mut rewrite = false;
+
+    for arg in args {
+        match arg.as_str() {
+            "--rewrite" => rewrite = true,
+            _ => anyhow::bail!("unknown manifest option: {arg}"),
+        }
+    }
+
+    Ok(ManifestOptions { rewrite })
 }
 
 async fn cli_state(config: Config) -> anyhow::Result<AppState> {
@@ -735,7 +777,7 @@ fn validated_parameter_set(
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export ops check\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
+        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export ops check\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts manifest <slug> <config-hash> [--rewrite]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
     );
 }
 
@@ -2166,6 +2208,19 @@ mod tests {
             Some("small")
         );
         assert!(optional_parameter_selector(&["a".to_owned(), "b".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn parses_manifest_options() {
+        assert_eq!(
+            parse_manifest_options(&[]).unwrap(),
+            ManifestOptions { rewrite: false }
+        );
+        assert_eq!(
+            parse_manifest_options(&["--rewrite".to_owned()]).unwrap(),
+            ManifestOptions { rewrite: true }
+        );
+        assert!(parse_manifest_options(&["--missing".to_owned()]).is_err());
     }
 
     fn test_model() -> catalog::Model {

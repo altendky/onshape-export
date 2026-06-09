@@ -16,6 +16,7 @@ Initial admin operations:
   object before removing the SQLite artifact record.
 - Prune artifacts older than an explicit age threshold, with dry-run support.
 - List cached outputs for a model.
+- Inspect and optionally rewrite the manifest for a cached model configuration.
 
 Implemented CLI commands:
 
@@ -27,6 +28,7 @@ onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|prese
 onshape-export failures list
 onshape-export failures retry [--all|<work-key>|--kind <job-kind>]
 onshape-export artifacts list <slug|--all>
+onshape-export artifacts manifest <slug> <config-hash> [--rewrite]
 onshape-export artifacts invalidate <artifact-key>
 onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]
 ```
@@ -41,6 +43,10 @@ should be retried.
 each matching object-store object, removes the artifact record, and rewrites the
 affected manifest. Use `--dry-run` first to inspect matches without deleting
 anything.
+
+`artifacts manifest` renders the manifest that would be materialized from
+SQLite artifact records for one model configuration. Use `--rewrite` to upload
+that manifest to object storage after inspecting or repairing cache state.
 
 ## Web Admin Deferral
 

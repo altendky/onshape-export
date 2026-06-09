@@ -23,6 +23,7 @@ Implemented foundation:
 - Worker-only runtime mode for separate Fly process groups.
 - Configurable worker concurrency through `WORKER_CONCURRENCY`.
 - CLI maintenance commands for catalog validation, parameter refresh, pre-generation, failure retry, and artifact inspection/invalidation.
+- CLI manifest inspection and rewrite support for cached model configurations.
 - Catalog-defined parameter presets for targeted preview/export pre-generation.
 - Deploy-time `ops check` command for catalog, SQLite, storage, public URL, and credential readiness.
 
