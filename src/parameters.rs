@@ -194,8 +194,13 @@ fn normalize_parameter(value: &Value) -> Option<Parameter> {
         .and_then(|value| value.get("units"))
         .and_then(value_to_string)
         .filter(|units| !units.is_empty());
-    let type_hint = first_string(object, &["type", "typeName"])
-        .or_else(|| first_string(message, &["type", "parameterType", "quantityType"]))
+    let type_hint = first_text(object, &["typeName", "parameterType", "type"])
+        .or_else(|| {
+            first_text(
+                message,
+                &["typeName", "parameterType", "quantityType", "type"],
+            )
+        })
         .unwrap_or_default()
         .to_ascii_lowercase();
     let kind = if !options.is_empty() {
@@ -319,6 +324,13 @@ fn first_string(object: &serde_json::Map<String, Value>, names: &[&str]) -> Opti
         .find_map(value_to_string)
 }
 
+fn first_text(object: &serde_json::Map<String, Value>, names: &[&str]) -> Option<String> {
+    names
+        .iter()
+        .filter_map(|name| object.get(*name))
+        .find_map(|value| value.as_str().map(ToOwned::to_owned))
+}
+
 fn value_to_string(value: &Value) -> Option<String> {
     match value {
         Value::String(value) => Some(value.clone()),
@@ -411,6 +423,7 @@ mod tests {
         assert_eq!(schema.parameters[0].default_value.as_deref(), Some("1.5"));
         assert_eq!(schema.parameters[0].units.as_deref(), Some("millimeter"));
         assert_eq!(schema.parameters[0].kind, ParameterKind::Number);
+        assert_eq!(schema.parameters[1].default_value.as_deref(), Some("true"));
         assert_eq!(schema.parameters[1].kind, ParameterKind::Boolean);
         assert_eq!(schema.parameters[2].kind, ParameterKind::Enum);
         assert_eq!(schema.parameters[2].options[0].label, "None");
