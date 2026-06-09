@@ -200,6 +200,7 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             println!("catalog ok: {} models", catalog.models().len());
             Ok(())
         }
+        ("ops", [subcommand]) if subcommand == "check" => run_ops_check(config).await,
         ("parameters", [subcommand, selector]) if subcommand == "refresh" => {
             let state = cli_state(config).await?;
             for model in selected_models(&state.catalog, selector)? {
@@ -411,6 +412,61 @@ fn optional_output_format(args: &[String]) -> anyhow::Result<OutputFormat> {
         [flag] if flag == "--json" => Ok(OutputFormat::Json),
         [flag] => anyhow::bail!("unknown output option: {flag}"),
         _ => anyhow::bail!("expected at most one output option"),
+    }
+}
+
+async fn run_ops_check(config: Config) -> anyhow::Result<()> {
+    let mut failures = Vec::new();
+
+    match Catalog::load(&config.catalog_path) {
+        Ok(catalog) => println!("catalog ok: {} models", catalog.models().len()),
+        Err(error) => failures.push(format!("catalog load failed: {error:#}")),
+    }
+
+    match Database::connect(&config.database_url).await {
+        Ok(db) => match db.ping().await {
+            Ok(()) => println!("database ok: {}", config.database_url),
+            Err(error) => failures.push(format!("database ping failed: {error:#}")),
+        },
+        Err(error) => failures.push(format!("database connect failed: {error:#}")),
+    }
+
+    match StorageClient::new(config.storage.clone()).await {
+        Ok(storage) => println!("storage client ok: bucket {}", storage.bucket()),
+        Err(error) => failures.push(format!("storage client failed: {error:#}")),
+    }
+    if config.storage.access_key_id.is_none() || config.storage.secret_access_key.is_none() {
+        failures.push(
+            "storage credentials are incomplete; set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY"
+                .to_owned(),
+        );
+    }
+    if config.storage.public_base_url.is_none() {
+        failures.push(
+            "TIGRIS_PUBLIC_BASE_URL is not set; generated artifact URLs will not be public"
+                .to_owned(),
+        );
+    }
+
+    match OnshapeClient::new(config.onshape.clone()) {
+        Ok(onshape) => println!("onshape client ok: {}", onshape.base_url()),
+        Err(error) => failures.push(format!("onshape client failed: {error:#}")),
+    }
+    if config.onshape.access_key.is_none() || config.onshape.secret_key.is_none() {
+        failures.push(
+            "Onshape credentials are incomplete; set ONSHAPE_ACCESS_KEY and ONSHAPE_SECRET_KEY"
+                .to_owned(),
+        );
+    }
+
+    if failures.is_empty() {
+        println!("ops check ok");
+        Ok(())
+    } else {
+        for failure in &failures {
+            eprintln!("ops check failed: {failure}");
+        }
+        anyhow::bail!("ops check failed with {} issue(s)", failures.len())
     }
 }
 
@@ -679,7 +735,7 @@ fn validated_parameter_set(
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
+        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export ops check\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
     );
 }
 

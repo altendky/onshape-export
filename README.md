@@ -24,6 +24,7 @@ Implemented foundation:
 - Configurable worker concurrency through `WORKER_CONCURRENCY`.
 - CLI maintenance commands for catalog validation, parameter refresh, pre-generation, failure retry, and artifact inspection/invalidation.
 - Catalog-defined parameter presets for targeted preview/export pre-generation.
+- Deploy-time `ops check` command for catalog, SQLite, storage, public URL, and credential readiness.
 
 Local run:
 
@@ -46,8 +47,9 @@ Fly deployment foundation:
 
 ```sh
 fly volumes create onshape_export_data --size 1 --region ord
-fly secrets set ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... TIGRIS_BUCKET=...
+fly secrets set ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... TIGRIS_BUCKET=... TIGRIS_PUBLIC_BASE_URL=...
 fly deploy
+fly ssh console -C "/app/onshape-export ops check"
 ```
 
 The included `fly.toml` runs a single web machine with the in-process worker enabled so SQLite coordination stays on one mounted Fly volume at `/data`.

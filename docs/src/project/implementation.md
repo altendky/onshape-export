@@ -146,6 +146,9 @@ Implemented pieces:
 - Fly deployment scaffolding is available through `Dockerfile`, `.dockerignore`,
   and `fly.toml`, using a single machine with the in-process worker enabled so
   SQLite coordination stays on one mounted volume.
+- `ops check` validates deployment-critical configuration before serving
+  traffic: catalog loading, SQLite connectivity, Tigris client construction,
+  Tigris public URL configuration, and Onshape/Tigris credential presence.
 
 Possible additions:
 

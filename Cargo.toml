@@ -7,7 +7,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 anyhow = "1.0.98"
 aws-credential-types = "1.2.3"
-aws-sdk-s3 = { version = "1.88.0", default-features = false, features = ["rt-tokio", "rustls"] }
+aws-sdk-s3 = { version = "1.88.0", default-features = false, features = ["behavior-version-latest", "rt-tokio", "rustls"] }
 axum = "0.8.4"
 base64 = "0.22.1"
 hmac = "0.12.1"

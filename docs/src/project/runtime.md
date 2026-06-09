@@ -111,4 +111,12 @@ Create the volume before first deploy:
 fly volumes create onshape_export_data --size 1 --region ord
 ```
 
-Set Onshape and Tigris credentials as Fly secrets. Change `primary_region` and the volume region together if `ord` is not the intended deployment region.
+Set Onshape and Tigris credentials plus `TIGRIS_PUBLIC_BASE_URL` as Fly secrets or environment variables. Change `primary_region` and the volume region together if `ord` is not the intended deployment region.
+
+Run a deploy-time readiness check after setting secrets or changing runtime configuration:
+
+```sh
+fly ssh console -C "/app/onshape-export ops check"
+```
+
+The check validates catalog loading, SQLite connectivity, storage client construction, Tigris public URL configuration, and required Onshape/Tigris credential presence without issuing Onshape or object-store API calls.
