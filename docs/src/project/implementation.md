@@ -17,7 +17,7 @@ Outputs:
 
 Set up the Rust project without implementing every feature.
 
-Current phase.
+Completed.
 
 Expected pieces:
 
@@ -35,6 +35,8 @@ Expected pieces:
 
 Implement parameter discovery.
 
+Current phase foundation implemented.
+
 Expected pieces:
 
 - Fetch raw configuration metadata for Part Studios and Assemblies.
@@ -43,6 +45,12 @@ Expected pieces:
 - Store raw and normalized parameter metadata in Tigris.
 - Render a model page with controls.
 - Validate submitted parameter values against normalized metadata.
+
+Remaining hardening:
+
+- Verify normalized schema against real target model responses.
+- Add UI-specific catalog overrides if models need labels, units, precision, or visibility changes.
+- Decide whether refreshes should stay request-driven or move to a worker loop.
 
 ## Phase 3: Preview Path
 

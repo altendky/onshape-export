@@ -1,0 +1,306 @@
+use std::collections::{HashMap, HashSet};
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::catalog::OnshapeSource;
+
+pub const SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParameterSchema {
+    pub schema_version: u32,
+    pub source: OnshapeSource,
+    pub parameters: Vec<Parameter>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Parameter {
+    pub id: String,
+    pub label: String,
+    pub kind: ParameterKind,
+    pub required: bool,
+    pub default_value: Option<String>,
+    pub options: Vec<ParameterOption>,
+    pub raw: Value,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParameterKind {
+    Text,
+    Number,
+    Boolean,
+    Enum,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParameterOption {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ValidatedConfiguration {
+    pub values: HashMap<String, String>,
+}
+
+pub fn normalize_configuration(source: &OnshapeSource, raw: &Value) -> ParameterSchema {
+    let parameters = find_parameter_array(raw)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(normalize_parameter)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    ParameterSchema {
+        schema_version: SCHEMA_VERSION,
+        source: source.clone(),
+        parameters,
+    }
+}
+
+pub fn validate_values(
+    schema: &ParameterSchema,
+    submitted: &HashMap<String, String>,
+    allow_unknown: bool,
+) -> Result<ValidatedConfiguration, Vec<String>> {
+    let known = schema
+        .parameters
+        .iter()
+        .map(|parameter| parameter.id.as_str())
+        .collect::<HashSet<_>>();
+    let mut errors = Vec::new();
+
+    if !allow_unknown {
+        for name in submitted.keys() {
+            if !known.contains(name.as_str()) {
+                errors.push(format!("unknown parameter: {name}"));
+            }
+        }
+    }
+
+    let mut values = HashMap::new();
+    for parameter in &schema.parameters {
+        let value = submitted
+            .get(&parameter.id)
+            .filter(|value| !value.is_empty())
+            .or(parameter.default_value.as_ref());
+
+        match value {
+            Some(value) => match parameter.kind {
+                ParameterKind::Text => {
+                    values.insert(parameter.id.clone(), value.clone());
+                }
+                ParameterKind::Number => {
+                    if value.parse::<f64>().is_ok() {
+                        values.insert(parameter.id.clone(), value.clone());
+                    } else {
+                        errors.push(format!("{} must be a number", parameter.label));
+                    }
+                }
+                ParameterKind::Boolean => match value.as_str() {
+                    "true" | "false" | "on" | "0" | "1" => {
+                        values.insert(parameter.id.clone(), normalize_bool(value).to_owned());
+                    }
+                    _ => errors.push(format!("{} must be a boolean", parameter.label)),
+                },
+                ParameterKind::Enum => {
+                    if parameter
+                        .options
+                        .iter()
+                        .any(|option| option.value == *value)
+                    {
+                        values.insert(parameter.id.clone(), value.clone());
+                    } else {
+                        errors.push(format!("{} has an invalid option", parameter.label));
+                    }
+                }
+            },
+            None if parameter.required => errors.push(format!("{} is required", parameter.label)),
+            None => {}
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(ValidatedConfiguration { values })
+    } else {
+        Err(errors)
+    }
+}
+
+fn normalize_parameter(value: &Value) -> Option<Parameter> {
+    let object = value.as_object()?;
+    let id = first_string(object, &["parameterId", "id", "messageId"])?;
+    let label =
+        first_string(object, &["parameterName", "name", "label"]).unwrap_or_else(|| id.clone());
+    let options = extract_options(value);
+    let default_value = object
+        .get("defaultValue")
+        .or_else(|| object.get("default"))
+        .or_else(|| object.get("value"))
+        .and_then(value_to_string);
+    let type_hint = first_string(object, &["type", "parameterType"])
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let kind = if !options.is_empty() {
+        ParameterKind::Enum
+    } else if type_hint.contains("bool") || object.values().any(Value::is_boolean) {
+        ParameterKind::Boolean
+    } else if type_hint.contains("double")
+        || type_hint.contains("number")
+        || type_hint.contains("integer")
+        || type_hint.contains("real")
+        || type_hint.contains("length")
+        || type_hint.contains("angle")
+        || default_value
+            .as_deref()
+            .is_some_and(|value| value.parse::<f64>().is_ok())
+    {
+        ParameterKind::Number
+    } else {
+        ParameterKind::Text
+    };
+
+    Some(Parameter {
+        id,
+        label,
+        kind,
+        required: object
+            .get("required")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        default_value,
+        options,
+        raw: value.clone(),
+    })
+}
+
+fn find_parameter_array(value: &Value) -> Option<&Vec<Value>> {
+    if let Some(array) = value
+        .get("configurationParameters")
+        .or_else(|| value.get("parameters"))
+        .and_then(Value::as_array)
+    {
+        return Some(array);
+    }
+
+    value.as_object()?.values().find_map(find_parameter_array)
+}
+
+fn extract_options(value: &Value) -> Vec<ParameterOption> {
+    let arrays = value
+        .as_object()
+        .into_iter()
+        .flat_map(|object| [object.get("options"), object.get("items")])
+        .flatten()
+        .filter_map(Value::as_array);
+
+    arrays
+        .flatten()
+        .filter_map(|item| {
+            if let Some(text) = value_to_string(item) {
+                return Some(ParameterOption {
+                    value: text.clone(),
+                    label: text,
+                });
+            }
+
+            let object = item.as_object()?;
+            let value = first_string(object, &["option", "value", "id", "message"])?;
+            let label = first_string(object, &["label", "name", "displayName"])
+                .unwrap_or_else(|| value.clone());
+            Some(ParameterOption { value, label })
+        })
+        .collect()
+}
+
+fn first_string(object: &serde_json::Map<String, Value>, names: &[&str]) -> Option<String> {
+    names
+        .iter()
+        .filter_map(|name| object.get(*name))
+        .find_map(value_to_string)
+}
+
+fn value_to_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn normalize_bool(value: &str) -> &str {
+    match value {
+        "on" | "1" => "true",
+        "0" => "false",
+        value => value,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::catalog::ElementKind;
+
+    #[test]
+    fn normalizes_common_parameter_shapes() {
+        let schema = normalize_configuration(
+            &source(),
+            &json!({
+                "configurationParameters": [
+                    {"parameterId": "size", "parameterName": "Size", "type": "BTMParameterQuantity", "defaultValue": 3},
+                    {"parameterId": "color", "parameterName": "Color", "options": [{"value": "red", "label": "Red"}]},
+                    {"parameterId": "enabled", "parameterName": "Enabled", "defaultValue": true}
+                ]
+            }),
+        );
+
+        assert_eq!(schema.parameters.len(), 3);
+        assert_eq!(schema.parameters[0].kind, ParameterKind::Number);
+        assert_eq!(schema.parameters[1].kind, ParameterKind::Enum);
+        assert_eq!(schema.parameters[2].kind, ParameterKind::Boolean);
+    }
+
+    #[test]
+    fn rejects_unknown_and_invalid_values() {
+        let schema = ParameterSchema {
+            schema_version: SCHEMA_VERSION,
+            source: source(),
+            parameters: vec![Parameter {
+                id: "size".to_owned(),
+                label: "Size".to_owned(),
+                kind: ParameterKind::Number,
+                required: true,
+                default_value: None,
+                options: Vec::new(),
+                raw: Value::Null,
+            }],
+        };
+        let submitted = HashMap::from([
+            ("size".to_owned(), "large".to_owned()),
+            ("extra".to_owned(), "x".to_owned()),
+        ]);
+
+        let errors = validate_values(&schema, &submitted, false).unwrap_err();
+
+        assert_eq!(errors.len(), 2);
+    }
+
+    fn source() -> OnshapeSource {
+        OnshapeSource {
+            document_id: "did".to_owned(),
+            version_id: "vid".to_owned(),
+            element_id: "eid".to_owned(),
+            element_kind: ElementKind::PartStudio,
+        }
+    }
+}

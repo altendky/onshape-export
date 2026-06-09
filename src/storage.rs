@@ -1,5 +1,9 @@
 use aws_credential_types::Credentials;
-use aws_sdk_s3::config::{Builder, Region, SharedCredentialsProvider};
+use aws_sdk_s3::{
+    config::{Builder, Region, SharedCredentialsProvider},
+    primitives::ByteStream,
+};
+use serde::{Serialize, de::DeserializeOwned};
 
 use crate::config::StorageConfig;
 
@@ -45,5 +49,30 @@ impl StorageClient {
 
     pub fn client(&self) -> &aws_sdk_s3::Client {
         &self.client
+    }
+
+    pub async fn put_json<T: Serialize>(&self, key: &str, value: &T) -> anyhow::Result<()> {
+        let body = serde_json::to_vec(value)?;
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .content_type("application/json")
+            .body(ByteStream::from(body))
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_json<T: DeserializeOwned>(&self, key: &str) -> anyhow::Result<T> {
+        let output = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await?;
+        let bytes = output.body.collect().await?.into_bytes();
+        Ok(serde_json::from_slice(&bytes)?)
     }
 }

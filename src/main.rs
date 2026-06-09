@@ -2,13 +2,14 @@ mod catalog;
 mod config;
 mod db;
 mod onshape;
+mod parameters;
 mod storage;
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Context;
 use axum::{
-    Router,
+    Form, Router,
     extract::{Path, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
@@ -17,6 +18,7 @@ use axum::{
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+use crate::parameters::{ParameterKind, ParameterSchema, normalize_configuration, validate_values};
 use crate::{
     catalog::Catalog, config::Config, db::Database, onshape::OnshapeClient, storage::StorageClient,
 };
@@ -63,7 +65,10 @@ fn app(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/healthz", get(healthz))
-        .route("/models/{slug}", get(model_page))
+        .route(
+            "/models/{slug}",
+            get(model_page).post(validate_model_config),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -118,6 +123,15 @@ async fn model_page(
     Path(slug): Path<String>,
 ) -> Result<Html<String>, AppError> {
     let model = state.catalog.find(&slug).ok_or(AppError::NotFound)?;
+    let parameters = load_or_refresh_parameters(&state, model).await?;
+    let parameter_controls = parameters
+        .as_ref()
+        .map(render_parameter_controls)
+        .unwrap_or_else(|| {
+            "<p>Parameter metadata refresh is already running. Reload this page shortly.</p>"
+                .to_owned()
+        });
+
     Ok(Html(format!(
         r#"<!doctype html>
 <html lang="en">
@@ -131,13 +145,46 @@ async fn model_page(
     <p><a href="/">Back to catalog</a></p>
     <h1>{name}</h1>
     <p>{description}</p>
-    <p>Parameter discovery and export generation will be added in the next phases.</p>
+    <form method="post">
+      {parameter_controls}
+      <button type="submit">Validate Parameters</button>
+    </form>
   </main>
 </body>
 </html>"#,
         name = escape_html(&model.name),
         description = escape_html(&model.description),
+        parameter_controls = parameter_controls,
     )))
+}
+
+async fn validate_model_config(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Html<String>, AppError> {
+    let model = state.catalog.find(&slug).ok_or(AppError::NotFound)?;
+    let Some(parameters) = load_or_refresh_parameters(&state, model).await? else {
+        return Ok(Html(
+            "Parameter metadata is still refreshing. Try again shortly.\n".to_owned(),
+        ));
+    };
+
+    match validate_values(&parameters, &values, model.parameter_policy.allow_unknown) {
+        Ok(validated) => Ok(Html(format!(
+            "Parameters are valid. Normalized values: <pre>{}</pre>\n",
+            escape_html(
+                &serde_json::to_string_pretty(&validated.values).map_err(anyhow::Error::from)?
+            )
+        ))),
+        Err(errors) => Ok(Html(format!(
+            "Parameter errors:<ul>{}</ul>\n",
+            errors
+                .iter()
+                .map(|error| format!("<li>{}</li>", escape_html(error)))
+                .collect::<String>()
+        ))),
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -146,6 +193,8 @@ enum AppError {
     NotFound,
     #[error(transparent)]
     Database(#[from] sqlx::Error),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 impl IntoResponse for AppError {
@@ -156,8 +205,137 @@ impl IntoResponse for AppError {
                 tracing::error!(%error, "database error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error\n").into_response()
             }
+            Self::Other(error) => {
+                tracing::error!(%error, "application error");
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal server error\n").into_response()
+            }
         }
     }
+}
+
+async fn load_or_refresh_parameters(
+    state: &AppState,
+    model: &catalog::Model,
+) -> Result<Option<ParameterSchema>, AppError> {
+    if let Some(record) = state.db.parameter_metadata(&model.slug).await? {
+        let schema = state
+            .storage
+            .get_json::<ParameterSchema>(&record.normalized_object_key)
+            .await?;
+        return Ok(Some(schema));
+    }
+
+    let work_key = format!("parameter-refresh:{}", model.slug);
+    if !state
+        .db
+        .try_start_job(&work_key, "parameter_refresh")
+        .await?
+    {
+        return Ok(None);
+    }
+
+    let result = refresh_parameters(state, model).await;
+    match result {
+        Ok(schema) => {
+            state.db.finish_job(&work_key, "ready", None).await?;
+            Ok(Some(schema))
+        }
+        Err(error) => {
+            let summary = error.to_string();
+            state
+                .db
+                .finish_job(&work_key, "failed", Some(&summary))
+                .await?;
+            Err(error.into())
+        }
+    }
+}
+
+async fn refresh_parameters(
+    state: &AppState,
+    model: &catalog::Model,
+) -> anyhow::Result<ParameterSchema> {
+    let raw = state.onshape.fetch_configuration(&model.onshape).await?;
+    let schema = normalize_configuration(&model.onshape, &raw);
+    let raw_key = parameter_raw_key(model);
+    let normalized_key = parameter_normalized_key(model);
+
+    state.storage.put_json(&raw_key, &raw).await?;
+    state.storage.put_json(&normalized_key, &schema).await?;
+    state
+        .db
+        .upsert_parameter_metadata(&model.slug, &raw_key, &normalized_key)
+        .await?;
+
+    Ok(schema)
+}
+
+fn parameter_raw_key(model: &catalog::Model) -> String {
+    format!(
+        "onshape/{}/v/{}/e/{}/configuration.raw.json",
+        model.onshape.document_id, model.onshape.version_id, model.onshape.element_id
+    )
+}
+
+fn parameter_normalized_key(model: &catalog::Model) -> String {
+    format!(
+        "onshape/{}/v/{}/e/{}/parameters.normalized.json",
+        model.onshape.document_id, model.onshape.version_id, model.onshape.element_id
+    )
+}
+
+fn render_parameter_controls(schema: &ParameterSchema) -> String {
+    if schema.parameters.is_empty() {
+        return "<p>This model does not expose configurable parameters.</p>".to_owned();
+    }
+
+    schema
+        .parameters
+        .iter()
+        .map(|parameter| {
+            let id = escape_html(&parameter.id);
+            let label = escape_html(&parameter.label);
+            let default_value = parameter.default_value.as_deref().unwrap_or_default();
+            let required = if parameter.required { " required" } else { "" };
+            let input = match parameter.kind {
+                ParameterKind::Text => format!(
+                    r#"<input id="{id}" name="{id}" value="{value}"{required}>"#,
+                    value = escape_html(default_value),
+                ),
+                ParameterKind::Number => format!(
+                    r#"<input id="{id}" name="{id}" type="number" step="any" value="{value}"{required}>"#,
+                    value = escape_html(default_value),
+                ),
+                ParameterKind::Boolean => {
+                    let checked = matches!(default_value, "true" | "on" | "1")
+                        .then_some(" checked")
+                        .unwrap_or("");
+                    format!(
+                        r#"<input type="hidden" name="{id}" value="false"><input id="{id}" name="{id}" type="checkbox" value="true"{checked}>"#
+                    )
+                }
+                ParameterKind::Enum => {
+                    let options = parameter
+                        .options
+                        .iter()
+                        .map(|option| {
+                            let selected = (option.value == default_value)
+                                .then_some(" selected")
+                                .unwrap_or("");
+                            format!(
+                                r#"<option value="{value}"{selected}>{label}</option>"#,
+                                value = escape_html(&option.value),
+                                label = escape_html(&option.label),
+                            )
+                        })
+                        .collect::<String>();
+                    format!(r#"<select id="{id}" name="{id}"{required}>{options}</select>"#)
+                }
+            };
+
+            format!(r#"<p><label for="{id}">{label}</label><br>{input}</p>"#)
+        })
+        .collect()
 }
 
 fn init_tracing() {

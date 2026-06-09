@@ -6,7 +6,7 @@ The service is aimed at models where publishing every parameter combination ahea
 
 ## Current Status
 
-This repository contains planning documentation and an initial Rust service skeleton.
+This repository contains planning documentation and an initial Rust service with parameter discovery.
 
 Implemented foundation:
 
@@ -15,8 +15,10 @@ Implemented foundation:
 - Environment-based runtime configuration.
 - SQLite connection setup with migrations and MVP durability PRAGMAs.
 - Tigris/S3-compatible client construction.
-- Onshape client construction placeholder.
+- Signed Onshape API-key client for configuration metadata reads.
 - In-repo catalog JSON loading and validation.
+- Onshape parameter metadata refresh, normalization, Tigris caching, and SQLite deduplication.
+- Server-rendered model parameter controls and submitted-value validation.
 
 Local run:
 
