@@ -115,6 +115,18 @@ Each successful preview or download upload rewrites the manifest from the
 SQLite artifact records for that model/configuration. Artifact invalidation
 also rewrites the manifest after removing the deleted artifact row.
 
+## Eviction
+
+Artifact eviction is explicit and operational. The CLI command:
+
+```text
+onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]
+```
+
+selects SQLite artifact records older than the requested age. Without
+`--dry-run`, it deletes each object-store artifact, removes the SQLite artifact
+record, and rewrites the affected manifest from remaining records.
+
 ## Job Records
 
 SQLite job records are the coordination source of truth.

@@ -73,6 +73,12 @@ struct SelectedParameterSet {
     values: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PruneOptions {
+    older_than_days: i64,
+    dry_run: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ArtifactManifest {
@@ -311,18 +317,55 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
                 return Ok(());
             };
 
-            state
-                .storage
-                .delete_object(&artifact.object_key)
-                .await
-                .with_context(|| format!("deleting object {}", artifact.object_key))?;
-            state.db.delete_artifact(artifact_key).await?;
-            if let Some(model) = state.catalog.find(&artifact.model_slug) {
-                rewrite_manifest(&state, model, &artifact.config_hash, None).await?;
-            }
+            delete_artifact_and_rewrite_manifest(&state, &artifact).await?;
             println!(
                 "invalidated artifact {artifact_key} and deleted {}",
                 artifact.object_key
+            );
+            Ok(())
+        }
+        ("artifacts", [subcommand, selector, prune_args @ ..]) if subcommand == "prune" => {
+            let options = parse_prune_options(prune_args)?;
+            let state = cli_state(config).await?;
+            let mut pruned = 0usize;
+
+            for model in selected_models(&state.catalog, selector)? {
+                let artifacts = state
+                    .db
+                    .artifacts_older_than_days(&model.slug, options.older_than_days)
+                    .await?;
+                if artifacts.is_empty() {
+                    println!(
+                        "no artifacts older than {} days for {}",
+                        options.older_than_days, model.slug
+                    );
+                    continue;
+                }
+
+                for artifact in artifacts {
+                    println!(
+                        "{} {} {} {} {}",
+                        if options.dry_run {
+                            "would prune"
+                        } else {
+                            "pruning"
+                        },
+                        artifact.artifact_key,
+                        artifact.created_at,
+                        artifact.byte_len.unwrap_or_default(),
+                        artifact.object_key,
+                    );
+                    if !options.dry_run {
+                        delete_artifact_and_rewrite_manifest(&state, &artifact).await?;
+                    }
+                    pruned += 1;
+                }
+            }
+
+            println!(
+                "{} {pruned} artifact(s) older than {} days",
+                if options.dry_run { "matched" } else { "pruned" },
+                options.older_than_days
             );
             Ok(())
         }
@@ -348,6 +391,35 @@ fn optional_parameter_selector(args: &[String]) -> anyhow::Result<Option<&str>> 
         [selector] => Ok(Some(selector.as_str())),
         _ => anyhow::bail!("expected at most one parameter set selector"),
     }
+}
+
+fn parse_prune_options(args: &[String]) -> anyhow::Result<PruneOptions> {
+    let mut older_than_days = None;
+    let mut dry_run = false;
+    let mut args = args.iter();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--older-than-days" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--older-than-days requires a value"))?;
+                let days = value
+                    .parse::<i64>()
+                    .with_context(|| format!("invalid --older-than-days value: {value}"))?;
+                anyhow::ensure!(days > 0, "--older-than-days must be greater than zero");
+                older_than_days = Some(days);
+            }
+            "--dry-run" => dry_run = true,
+            _ => anyhow::bail!("unknown prune option: {arg}"),
+        }
+    }
+
+    Ok(PruneOptions {
+        older_than_days: older_than_days
+            .ok_or_else(|| anyhow::anyhow!("--older-than-days is required"))?,
+        dry_run,
+    })
 }
 
 async fn cli_state(config: Config) -> anyhow::Result<AppState> {
@@ -565,7 +637,7 @@ fn validated_parameter_set(
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export failures list [--json]\n  onshape-export failures retry\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>"
+        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export failures list [--json]\n  onshape-export failures retry\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
     );
 }
 
@@ -1378,6 +1450,22 @@ async fn rewrite_manifest(
     let object_key = manifest_object_key(model, config_hash);
     state.storage.put_json(&object_key, &manifest).await?;
     Ok(object_key)
+}
+
+async fn delete_artifact_and_rewrite_manifest(
+    state: &AppState,
+    artifact: &db::ArtifactRecord,
+) -> anyhow::Result<()> {
+    state
+        .storage
+        .delete_object(&artifact.object_key)
+        .await
+        .with_context(|| format!("deleting object {}", artifact.object_key))?;
+    state.db.delete_artifact(&artifact.artifact_key).await?;
+    if let Some(model) = state.catalog.find(&artifact.model_slug) {
+        rewrite_manifest(state, model, &artifact.config_hash, None).await?;
+    }
+    Ok(())
 }
 
 fn build_manifest(

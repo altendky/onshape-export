@@ -14,6 +14,7 @@ Initial admin operations:
 - Retry failed jobs.
 - Invalidate artifacts after exporter option changes, deleting the object-store
   object before removing the SQLite artifact record.
+- Prune artifacts older than an explicit age threshold, with dry-run support.
 - List cached outputs for a model.
 
 Implemented CLI commands:
@@ -27,9 +28,15 @@ onshape-export failures list
 onshape-export failures retry
 onshape-export artifacts list <slug|--all>
 onshape-export artifacts invalidate <artifact-key>
+onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]
 ```
 
 `default` uses Onshape parameter defaults. A preset slug targets a model's catalog-defined `parameterPresets` entry. `--all-parameter-sets` generates the default set plus every configured preset.
+
+`artifacts prune` uses SQLite artifact records as the source of truth, deletes
+each matching object-store object, removes the artifact record, and rewrites the
+affected manifest. Use `--dry-run` first to inspect matches without deleting
+anything.
 
 ## Web Admin Deferral
 

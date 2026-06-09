@@ -241,6 +241,28 @@ impl Database {
         .map(|rows| rows.into_iter().map(artifact_record_from_row).collect())
     }
 
+    pub async fn artifacts_older_than_days(
+        &self,
+        model_slug: &str,
+        days: i64,
+    ) -> sqlx::Result<Vec<ArtifactRecord>> {
+        sqlx::query(
+            r#"
+            SELECT artifact_key, model_slug, config_hash, output_kind, object_key,
+                   content_type, byte_len, created_at
+            FROM artifacts
+            WHERE model_slug = ?
+              AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || ? || ' days')
+            ORDER BY created_at, output_kind
+            "#,
+        )
+        .bind(model_slug)
+        .bind(days)
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| rows.into_iter().map(artifact_record_from_row).collect())
+    }
+
     pub async fn artifacts_for_configuration(
         &self,
         model_slug: &str,
@@ -469,6 +491,44 @@ mod tests {
         let job = db.job("work").await.unwrap().unwrap();
         assert_eq!(job.work_key, "work");
         assert_eq!(job.status, "queued");
+    }
+
+    #[tokio::test]
+    async fn artifacts_can_be_selected_by_age() {
+        let db = test_database().await;
+        db.upsert_artifact(ArtifactUpsert {
+            artifact_key: "old",
+            model_slug: "demo",
+            config_hash: "abc",
+            output_kind: "preview_glb",
+            object_key: "previews/demo/old.glb",
+            content_type: "model/gltf-binary",
+            byte_len: 10,
+        })
+        .await
+        .unwrap();
+        db.upsert_artifact(ArtifactUpsert {
+            artifact_key: "new",
+            model_slug: "demo",
+            config_hash: "def",
+            output_kind: "step",
+            object_key: "artifacts/demo/new.step",
+            content_type: "model/step",
+            byte_len: 20,
+        })
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE artifacts SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 days') WHERE artifact_key = 'old'",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        let artifacts = db.artifacts_older_than_days("demo", 7).await.unwrap();
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].artifact_key, "old");
     }
 
     #[tokio::test]

@@ -138,9 +138,10 @@ Implemented pieces:
 - Worker-only runtime mode through `onshape-export worker`, plus `WORKER_ENABLED=false` for web-only `serve` processes.
 - Opt-in scheduled rebuilds through `REBUILD_INTERVAL_SECONDS` enqueue catalog parameter refreshes and missing default artifacts from the worker runtime.
 - Preview and download generation pages expose deterministic JSON status endpoints and poll queued jobs until the artifact is ready or failed.
+- Age-based cache eviction is available through `artifacts prune`, deleting
+  matching object-store artifacts and rewriting affected manifests.
 
 Possible additions:
 
 - Postgres if SQLite-on-volume limits become painful.
 - Web admin UI and authentication if CLI operations become insufficient.
-- Cache eviction policies.
