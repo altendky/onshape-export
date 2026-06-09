@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    hash::Hash,
     path::Path,
 };
 
@@ -67,7 +68,7 @@ pub struct ExportConfig {
     pub preview: PreviewFormat,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DownloadFormat {
     Step,
@@ -159,6 +160,11 @@ impl Catalog {
         for model in &self.models {
             anyhow::ensure!(!model.slug.is_empty(), "catalog model slug cannot be empty");
             anyhow::ensure!(
+                is_path_slug(&model.slug),
+                "catalog model slug must use lowercase letters, numbers, and hyphens: {}",
+                model.slug
+            );
+            anyhow::ensure!(
                 slugs.insert(&model.slug),
                 "duplicate catalog model slug: {}",
                 model.slug
@@ -166,6 +172,11 @@ impl Catalog {
             anyhow::ensure!(
                 !model.name.is_empty(),
                 "catalog model name cannot be empty for {}",
+                model.slug
+            );
+            anyhow::ensure!(
+                !model.description.is_empty(),
+                "catalog model description cannot be empty for {}",
                 model.slug
             );
             anyhow::ensure!(
@@ -183,12 +194,26 @@ impl Catalog {
                 "element id cannot be empty for {}",
                 model.slug
             );
+            anyhow::ensure!(
+                !model.exports.downloads.is_empty(),
+                "at least one download format is required for {}",
+                model.slug
+            );
+            ensure_unique(&model.exports.downloads, || {
+                format!("duplicate download format for {}", model.slug)
+            })?;
             let mut preset_slugs = HashSet::new();
             for preset in &model.parameter_presets {
                 anyhow::ensure!(
                     !preset.slug.is_empty(),
                     "parameter preset slug cannot be empty for {}",
                     model.slug
+                );
+                anyhow::ensure!(
+                    is_path_slug(&preset.slug),
+                    "parameter preset slug must use lowercase letters, numbers, and hyphens for {}: {}",
+                    model.slug,
+                    preset.slug
                 );
                 anyhow::ensure!(
                     preset.slug != "default",
@@ -250,6 +275,28 @@ impl Catalog {
     }
 }
 
+fn ensure_unique<T, F>(values: &[T], message: F) -> anyhow::Result<()>
+where
+    T: Copy + Eq + Hash,
+    F: Fn() -> String,
+{
+    let mut seen = HashSet::new();
+    for value in values {
+        anyhow::ensure!(seen.insert(*value), "{}", message());
+    }
+    Ok(())
+}
+
+fn is_path_slug(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && !value.contains("--")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,6 +314,26 @@ mod tests {
     fn rejects_duplicate_parameter_preset_slugs() {
         let mut model = model("model");
         model.parameter_presets = vec![preset("small"), preset("small")];
+        let catalog = Catalog {
+            models: vec![model],
+        };
+
+        assert!(catalog.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_unsafe_slugs() {
+        let catalog = Catalog {
+            models: vec![model("Bad/Slug")],
+        };
+
+        assert!(catalog.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_download_formats() {
+        let mut model = model("model");
+        model.exports.downloads = vec![DownloadFormat::Step, DownloadFormat::Step];
         let catalog = Catalog {
             models: vec![model],
         };
