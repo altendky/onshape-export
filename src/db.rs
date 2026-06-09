@@ -365,6 +365,22 @@ impl Database {
         .map(|rows| rows.into_iter().map(job_record_from_row).collect())
     }
 
+    pub async fn jobs(&self, limit: i64) -> sqlx::Result<Vec<JobRecord>> {
+        sqlx::query(
+            r#"
+            SELECT work_key, job_kind, status, error_summary, attempt, created_at, updated_at
+            FROM jobs
+            WHERE payload_json <> '{}'
+            ORDER BY updated_at DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| rows.into_iter().map(job_record_from_row).collect())
+    }
+
     pub async fn job(&self, work_key: &str) -> sqlx::Result<Option<JobRecord>> {
         sqlx::query(
             r#"
@@ -551,6 +567,25 @@ mod tests {
         let job = db.job("work").await.unwrap().unwrap();
         assert_eq!(job.work_key, "work");
         assert_eq!(job.status, "queued");
+    }
+
+    #[tokio::test]
+    async fn jobs_can_be_listed_for_operations() {
+        let db = test_database().await;
+        let payload = r#"{"kind":"parameter_refresh","model_slug":"demo"}"#;
+
+        db.enqueue_job("first", "parameter_refresh", payload)
+            .await
+            .unwrap();
+        db.enqueue_job("second", "parameter_refresh", payload)
+            .await
+            .unwrap();
+
+        let jobs = db.jobs(10).await.unwrap();
+
+        assert_eq!(jobs.len(), 2);
+        assert!(jobs.iter().any(|job| job.work_key == "first"));
+        assert!(jobs.iter().any(|job| job.work_key == "second"));
     }
 
     #[tokio::test]

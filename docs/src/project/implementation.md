@@ -126,6 +126,8 @@ Implemented hardening:
   configuration and can rewrite that manifest to Tigris with `--rewrite`.
 - `failures retry` supports targeted retries by work key or job kind, while
   preserving all-failures retry as the default.
+- `jobs list` exposes recent queued, running, ready, and failed job state with
+  text and JSON output for operational inspection.
 
 ## Phase 6: Runtime Hardening
 

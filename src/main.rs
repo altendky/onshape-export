@@ -283,24 +283,14 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             let output_format = optional_output_format(output_args)?;
             let state = cli_state(config).await?;
             let jobs = state.db.failed_jobs(100).await?;
-            match output_format {
-                OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&jobs)?),
-                OutputFormat::Text if jobs.is_empty() => println!("no failed jobs"),
-                OutputFormat::Text => {
-                    for job in jobs {
-                        println!(
-                            "{}\t{}\t{}\tattempt={}\tcreated={}\tupdated={}\t{}",
-                            job.work_key,
-                            job.job_kind,
-                            job.status,
-                            job.attempt,
-                            job.created_at,
-                            job.updated_at,
-                            job.error_summary.unwrap_or_default()
-                        );
-                    }
-                }
-            }
+            print_jobs(jobs, output_format, "no failed jobs")?;
+            Ok(())
+        }
+        ("jobs", [subcommand, output_args @ ..]) if subcommand == "list" => {
+            let output_format = optional_output_format(output_args)?;
+            let state = cli_state(config).await?;
+            let jobs = state.db.jobs(100).await?;
+            print_jobs(jobs, output_format, "no jobs")?;
             Ok(())
         }
         ("failures", [subcommand, retry_args @ ..]) if subcommand == "retry" => {
@@ -446,6 +436,32 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             anyhow::bail!("unknown command")
         }
     }
+}
+
+fn print_jobs(
+    jobs: Vec<db::JobRecord>,
+    output_format: OutputFormat,
+    empty_message: &str,
+) -> anyhow::Result<()> {
+    match output_format {
+        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&jobs)?),
+        OutputFormat::Text if jobs.is_empty() => println!("{empty_message}"),
+        OutputFormat::Text => {
+            for job in jobs {
+                println!(
+                    "{}\t{}\t{}\tattempt={}\tcreated={}\tupdated={}\t{}",
+                    job.work_key,
+                    job.job_kind,
+                    job.status,
+                    job.attempt,
+                    job.created_at,
+                    job.updated_at,
+                    job.error_summary.unwrap_or_default()
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn optional_output_format(args: &[String]) -> anyhow::Result<OutputFormat> {
@@ -790,7 +806,7 @@ fn validated_parameter_set(
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export ops check\n  onshape-export ops backup <destination.db>\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts manifest <slug> <config-hash> [--rewrite]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
+        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export ops check\n  onshape-export ops backup <destination.db>\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export jobs list [--json]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts manifest <slug> <config-hash> [--rewrite]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
     );
 }
 

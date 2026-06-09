@@ -10,7 +10,7 @@ Initial admin operations:
 - Fetch and refresh parameter metadata.
 - Generate missing GLB previews.
 - Generate missing STEP, STL, and 3MF exports.
-- Inspect job status and failures.
+- Inspect recent job status and failures.
 - Create a consistent SQLite backup snapshot for Fly volume recovery.
 - Retry all failed jobs, one failed job by work key, or failed jobs by kind.
 - Invalidate artifacts after exporter option changes, deleting the object-store
@@ -28,7 +28,8 @@ onshape-export ops backup <destination.db>
 onshape-export parameters refresh <slug|--all>
 onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]
 onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]
-onshape-export failures list
+onshape-export jobs list [--json]
+onshape-export failures list [--json]
 onshape-export failures retry [--all|<work-key>|--kind <job-kind>]
 onshape-export artifacts list <slug|--all>
 onshape-export artifacts manifest <slug> <config-hash> [--rewrite]
