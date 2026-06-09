@@ -37,7 +37,16 @@ Each model entry should include:
         "size": "10"
       }
     }
-  ]
+  ],
+  "parameterOverrides": {
+    "size": {
+      "label": "Public Size",
+      "description": "Shown below the input.",
+      "hidden": false,
+      "precision": 1,
+      "widget": "number"
+    }
+  }
 }
 ```
 
@@ -53,13 +62,16 @@ Parameter metadata can be fetched from Onshape and cached in Tigris. SQLite coor
 
 `parameterPresets` is optional. Each preset names a reusable parameter value set for operational pre-generation. Preset values are validated against the normalized Onshape parameter schema before previews or downloads are generated; omitted values fall back to Onshape defaults.
 
-Possible overrides:
+Implemented UI overrides are keyed by Onshape parameter id:
 
 - Public label.
 - Description/help text.
 - Visibility.
 - Numeric precision.
 - Preferred input widget.
+
+Possible future overrides:
+
 - Preview auto-generation policy.
 - Export option defaults.
 

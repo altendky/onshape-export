@@ -26,7 +26,9 @@ use sha2::{Digest, Sha256};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::parameters::{ParameterKind, ParameterSchema, normalize_configuration, validate_values};
+use crate::parameters::{
+    ParameterKind, ParameterSchema, apply_overrides, normalize_configuration, validate_values,
+};
 use crate::{
     catalog::Catalog,
     config::Config,
@@ -1227,6 +1229,8 @@ async fn load_or_refresh_parameters(
             .storage
             .get_json::<ParameterSchema>(&record.normalized_object_key)
             .await?;
+        let mut schema = schema;
+        apply_overrides(&mut schema, &model.parameter_overrides);
         return Ok(Some(schema));
     }
 
@@ -1442,7 +1446,8 @@ async fn refresh_parameters(
     model: &catalog::Model,
 ) -> anyhow::Result<ParameterSchema> {
     let raw = state.onshape.fetch_configuration(&model.onshape).await?;
-    let schema = normalize_configuration(&model.onshape, &raw);
+    let mut schema = normalize_configuration(&model.onshape, &raw);
+    apply_overrides(&mut schema, &model.parameter_overrides);
     let raw_key = parameter_raw_key(model);
     let normalized_key = parameter_normalized_key(model);
 
@@ -1982,21 +1987,39 @@ fn render_parameter_controls(schema: &ParameterSchema) -> String {
         return "<p>This model does not expose configurable parameters.</p>".to_owned();
     }
 
-    schema
+    let controls = schema
         .parameters
         .iter()
+        .filter(|parameter| !parameter.hidden)
         .map(|parameter| {
             let id = escape_html(&parameter.id);
             let label = escape_html(&parameter.label);
             let default_value = parameter.default_value.as_deref().unwrap_or_default();
             let required = if parameter.required { " required" } else { "" };
+            let help = parameter
+                .description
+                .as_deref()
+                .map(|description| format!(r#"<br><small>{}</small>"#, escape_html(description)))
+                .unwrap_or_default();
             let input = match parameter.kind {
-                ParameterKind::Text => format!(
-                    r#"<input id="{id}" name="{id}" value="{value}"{required}>"#,
+                ParameterKind::Text if parameter.widget.as_deref() == Some("textarea") => format!(
+                    r#"<textarea id="{id}" name="{id}"{required}>{value}</textarea>"#,
                     value = escape_html(default_value),
                 ),
+                ParameterKind::Text => {
+                    format!(
+                        r#"<input id="{id}" name="{id}" value="{value}"{required}>"#,
+                        value = escape_html(default_value),
+                    )
+                }
                 ParameterKind::Number => format!(
-                    r#"<input id="{id}" name="{id}" type="number" step="any" value="{value}"{required}>"#,
+                    r#"<input id="{id}" name="{id}" type="{input_type}" step="{step}" value="{value}"{required}>"#,
+                    input_type = if parameter.widget.as_deref() == Some("range") {
+                        "range"
+                    } else {
+                        "number"
+                    },
+                    step = number_step(parameter.precision),
                     value = escape_html(default_value),
                 ),
                 ParameterKind::Boolean => {
@@ -2028,9 +2051,23 @@ fn render_parameter_controls(schema: &ParameterSchema) -> String {
                 }
             };
 
-            format!(r#"<p><label for="{id}">{label}</label><br>{input}</p>"#)
+            format!(r#"<p><label for="{id}">{label}</label><br>{input}{help}</p>"#)
         })
-        .collect()
+        .collect::<String>();
+
+    if controls.is_empty() {
+        "<p>This model does not expose public configurable parameters.</p>".to_owned()
+    } else {
+        controls
+    }
+}
+
+fn number_step(precision: Option<u32>) -> String {
+    match precision {
+        Some(0) => "1".to_owned(),
+        Some(precision) => format!("0.{}1", "0".repeat(precision.saturating_sub(1) as usize)),
+        None => "any".to_owned(),
+    }
 }
 
 fn render_metrics(
@@ -2310,6 +2347,7 @@ mod tests {
                 allow_unknown: false,
             },
             parameter_presets: Vec::new(),
+            parameter_overrides: HashMap::new(),
         }
     }
 }

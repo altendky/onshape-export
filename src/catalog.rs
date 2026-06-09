@@ -22,6 +22,19 @@ pub struct Model {
     pub parameter_policy: ParameterPolicy,
     #[serde(default)]
     pub parameter_presets: Vec<ParameterPreset>,
+    #[serde(default)]
+    pub parameter_overrides: HashMap<String, ParameterOverride>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParameterOverride {
+    pub label: Option<String>,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub hidden: bool,
+    pub precision: Option<u32>,
+    pub widget: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -200,6 +213,38 @@ impl Catalog {
                     preset.slug
                 );
             }
+            for (parameter_id, override_) in &model.parameter_overrides {
+                anyhow::ensure!(
+                    !parameter_id.is_empty(),
+                    "parameter override id cannot be empty for {}",
+                    model.slug
+                );
+                if let Some(label) = &override_.label {
+                    anyhow::ensure!(
+                        !label.is_empty(),
+                        "parameter override label cannot be empty for {}:{}",
+                        model.slug,
+                        parameter_id
+                    );
+                }
+                if let Some(precision) = override_.precision {
+                    anyhow::ensure!(
+                        precision <= 12,
+                        "parameter override precision cannot exceed 12 for {}:{}",
+                        model.slug,
+                        parameter_id
+                    );
+                }
+                if let Some(widget) = &override_.widget {
+                    anyhow::ensure!(
+                        matches!(widget.as_str(), "number" | "range" | "text" | "textarea"),
+                        "unsupported parameter override widget for {}:{}: {}",
+                        model.slug,
+                        parameter_id,
+                        widget
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -222,6 +267,23 @@ mod tests {
     fn rejects_duplicate_parameter_preset_slugs() {
         let mut model = model("model");
         model.parameter_presets = vec![preset("small"), preset("small")];
+        let catalog = Catalog {
+            models: vec![model],
+        };
+
+        assert!(catalog.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_parameter_overrides() {
+        let mut model = model("model");
+        model.parameter_overrides.insert(
+            "size".to_owned(),
+            ParameterOverride {
+                precision: Some(13),
+                ..Default::default()
+            },
+        );
         let catalog = Catalog {
             models: vec![model],
         };
@@ -261,6 +323,7 @@ mod tests {
                 allow_unknown: false,
             },
             parameter_presets: Vec::new(),
+            parameter_overrides: HashMap::new(),
         }
     }
 }

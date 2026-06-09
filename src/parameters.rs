@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::catalog::OnshapeSource;
+use crate::catalog::{OnshapeSource, ParameterOverride};
 
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -20,10 +20,18 @@ pub struct ParameterSchema {
 pub struct Parameter {
     pub id: String,
     pub label: String,
+    #[serde(default)]
+    pub description: Option<String>,
     pub kind: ParameterKind,
     pub required: bool,
     pub default_value: Option<String>,
     pub options: Vec<ParameterOption>,
+    #[serde(default)]
+    pub hidden: bool,
+    #[serde(default)]
+    pub precision: Option<u32>,
+    #[serde(default)]
+    pub widget: Option<String>,
     pub raw: Value,
 }
 
@@ -62,6 +70,36 @@ pub fn normalize_configuration(source: &OnshapeSource, raw: &Value) -> Parameter
         schema_version: SCHEMA_VERSION,
         source: source.clone(),
         parameters,
+    }
+}
+
+pub fn apply_overrides(
+    schema: &mut ParameterSchema,
+    overrides: &HashMap<String, ParameterOverride>,
+) {
+    if overrides.is_empty() {
+        return;
+    }
+
+    for parameter in &mut schema.parameters {
+        let Some(override_) = overrides.get(&parameter.id) else {
+            continue;
+        };
+        if let Some(label) = &override_.label {
+            parameter.label = label.clone();
+        }
+        if override_.description.is_some() {
+            parameter.description = override_.description.clone();
+        }
+        if override_.hidden {
+            parameter.hidden = true;
+        }
+        if override_.precision.is_some() {
+            parameter.precision = override_.precision;
+        }
+        if override_.widget.is_some() {
+            parameter.widget = override_.widget.clone();
+        }
     }
 }
 
@@ -170,6 +208,7 @@ fn normalize_parameter(value: &Value) -> Option<Parameter> {
     Some(Parameter {
         id,
         label,
+        description: first_string(object, &["description", "helpText"]),
         kind,
         required: object
             .get("required")
@@ -177,6 +216,9 @@ fn normalize_parameter(value: &Value) -> Option<Parameter> {
             .unwrap_or(false),
         default_value,
         options,
+        hidden: false,
+        precision: None,
+        widget: None,
         raw: value.clone(),
     })
 }
@@ -271,6 +313,41 @@ mod tests {
     }
 
     #[test]
+    fn applies_catalog_parameter_overrides() {
+        let mut schema = normalize_configuration(
+            &source(),
+            &json!({
+                "configurationParameters": [
+                    {"parameterId": "size", "parameterName": "Size", "type": "BTMParameterQuantity", "defaultValue": 3}
+                ]
+            }),
+        );
+
+        apply_overrides(
+            &mut schema,
+            &HashMap::from([(
+                "size".to_owned(),
+                ParameterOverride {
+                    label: Some("Public Size".to_owned()),
+                    description: Some("Shown to users".to_owned()),
+                    hidden: true,
+                    precision: Some(2),
+                    widget: Some("slider".to_owned()),
+                },
+            )]),
+        );
+
+        assert_eq!(schema.parameters[0].label, "Public Size");
+        assert_eq!(
+            schema.parameters[0].description.as_deref(),
+            Some("Shown to users")
+        );
+        assert!(schema.parameters[0].hidden);
+        assert_eq!(schema.parameters[0].precision, Some(2));
+        assert_eq!(schema.parameters[0].widget.as_deref(), Some("slider"));
+    }
+
+    #[test]
     fn rejects_unknown_and_invalid_values() {
         let schema = ParameterSchema {
             schema_version: SCHEMA_VERSION,
@@ -278,10 +355,14 @@ mod tests {
             parameters: vec![Parameter {
                 id: "size".to_owned(),
                 label: "Size".to_owned(),
+                description: None,
                 kind: ParameterKind::Number,
                 required: true,
                 default_value: None,
                 options: Vec::new(),
+                hidden: false,
+                precision: None,
+                widget: None,
                 raw: Value::Null,
             }],
         };
