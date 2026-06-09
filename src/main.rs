@@ -964,6 +964,65 @@ fn render_model_html(
       {downloads}
     </section>
   </main>
+  <script>
+(() => {{
+  const runInlineScripts = (root) => {{
+    for (const script of root.querySelectorAll("script")) {{
+      if (script.src || script.type === "module") {{
+        continue;
+      }}
+      const replacement = document.createElement("script");
+      replacement.textContent = script.textContent;
+      script.replaceWith(replacement);
+    }}
+  }};
+
+  document.addEventListener("submit", async (event) => {{
+    const form = event.target;
+    const submitter = event.submitter;
+    if (!(form instanceof HTMLFormElement) || !(submitter instanceof HTMLButtonElement)) {{
+      return;
+    }}
+    if (!submitter.hasAttribute("formaction")) {{
+      return;
+    }}
+
+    event.preventDefault();
+    submitter.disabled = true;
+    const label = submitter.textContent;
+    submitter.textContent = "Working...";
+
+    try {{
+      const response = await fetch(submitter.formAction, {{
+        method: "POST",
+        body: new FormData(form),
+        headers: {{ "Accept": "text/html" }},
+      }});
+      if (!response.ok) {{
+        throw new Error(`Request failed: ${{response.status}}`);
+      }}
+
+      const html = await response.text();
+      const page = new DOMParser().parseFromString(html, "text/html");
+      const nextMain = page.querySelector("main");
+      if (!nextMain) {{
+        throw new Error("Response did not include page content");
+      }}
+
+      document.querySelector("main").replaceWith(nextMain);
+      if (page.title) {{
+        document.title = page.title;
+      }}
+      window.history.replaceState(null, "", form.action || window.location.pathname);
+      runInlineScripts(nextMain);
+    }} catch (error) {{
+      submitter.disabled = false;
+      submitter.textContent = label;
+      alert(error.message);
+    }}
+  }});
+}})();
+  </script>
 </body>
 </html>"#,
         slug = escape_html(&model.slug),
@@ -2379,6 +2438,16 @@ mod tests {
 
         assert!(controls.contains(r#"value="2 in""#));
         assert!(!controls.contains(r#"value="42 mm""#));
+    }
+
+    #[test]
+    fn model_page_enhances_generation_submits() {
+        let model = test_model();
+        let html = render_model_html(&model, "", "", "").0;
+
+        assert!(html.contains("document.addEventListener(\"submit\""));
+        assert!(html.contains("fetch(submitter.formAction"));
+        assert!(html.contains("replaceWith(nextMain)"));
     }
 
     #[test]
