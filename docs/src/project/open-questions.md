@@ -42,7 +42,4 @@
 
 ## Resolved Working Decisions
 
-- The MVP runs the web server and bounded worker loop in one Rust process.
-- The MVP assumes server-owned Onshape API keys, pending real-call verification.
-- The MVP preview artifact is GLB only.
-- Normal public artifact invalidation uses supersession, not overwrite or deletion.
+Resolved or working MVP decisions are tracked in [Decisions](decisions.md).
