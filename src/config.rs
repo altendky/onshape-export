@@ -6,6 +6,7 @@ pub struct Config {
     pub catalog_path: PathBuf,
     pub database_url: String,
     pub worker_enabled: bool,
+    pub worker_concurrency: usize,
     pub rebuild_interval: Option<Duration>,
     pub storage: StorageConfig,
     pub onshape: OnshapeConfig,
@@ -34,6 +35,7 @@ impl Config {
         let catalog_path = PathBuf::from(env_or("CATALOG_PATH", "catalog/models.json"));
         let database_url = env_or("DATABASE_URL", "sqlite://onshape-export.db?mode=rwc");
         let worker_enabled = env_bool("WORKER_ENABLED", true)?;
+        let worker_concurrency = env_usize("WORKER_CONCURRENCY", 1)?;
         let rebuild_interval = env_optional_duration("REBUILD_INTERVAL_SECONDS")?;
 
         Ok(Self {
@@ -41,6 +43,7 @@ impl Config {
             catalog_path,
             database_url,
             worker_enabled,
+            worker_concurrency,
             rebuild_interval,
             storage: StorageConfig {
                 bucket: env_or("TIGRIS_BUCKET", "onshape-export"),
@@ -75,6 +78,19 @@ fn env_bool(name: &str, default: bool) -> anyhow::Result<bool> {
     }
 }
 
+fn env_usize(name: &str, default: usize) -> anyhow::Result<usize> {
+    let Ok(value) = env::var(name) else {
+        return Ok(default);
+    };
+    parse_positive_usize(&value, name)
+}
+
+fn parse_positive_usize(value: &str, name: &str) -> anyhow::Result<usize> {
+    let parsed = value.parse::<usize>()?;
+    anyhow::ensure!(parsed > 0, "{name} must be greater than zero");
+    Ok(parsed)
+}
+
 fn env_optional_duration(name: &str) -> anyhow::Result<Option<Duration>> {
     let Ok(value) = env::var(name) else {
         return Ok(None);
@@ -84,5 +100,18 @@ fn env_optional_duration(name: &str) -> anyhow::Result<Option<Duration>> {
         Ok(None)
     } else {
         Ok(Some(Duration::from_secs(seconds)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_worker_concurrency() {
+        assert_eq!(parse_positive_usize("1", "WORKER_CONCURRENCY").unwrap(), 1);
+        assert_eq!(parse_positive_usize("3", "WORKER_CONCURRENCY").unwrap(), 3);
+        assert!(parse_positive_usize("0", "WORKER_CONCURRENCY").is_err());
+        assert!(parse_positive_usize("nope", "WORKER_CONCURRENCY").is_err());
     }
 }

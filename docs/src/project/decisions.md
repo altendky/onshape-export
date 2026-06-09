@@ -72,6 +72,8 @@ Move to Tigris JSON or a relational database only when admin-editable catalog re
 
 The initial service is a Rust `axum` app on Fly.io, served at `https://onshape-export.fly.dev` if that app name is available. It handles public pages, parameter validation, queue submission, status routes, Onshape orchestration, and Tigris object writes.
 
+Worker processes default to one claimed job at a time. `WORKER_CONCURRENCY` can raise concurrency explicitly after observing real Onshape API behavior, translation latency, and SQLite volume performance.
+
 ## Public Artifact Delivery
 
 **Decision:** Completed artifacts are public.

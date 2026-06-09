@@ -151,12 +151,17 @@ async fn main() -> anyhow::Result<()> {
 
 async fn serve(config: Config) -> anyhow::Result<()> {
     let worker_enabled = config.worker_enabled;
+    let worker_concurrency = config.worker_concurrency;
     let bind_addr = config.bind_addr;
     let rebuild_interval = config.rebuild_interval;
     let state = build_state(config).await?;
 
     if worker_enabled {
-        tokio::spawn(background_runtime(state.clone(), rebuild_interval));
+        tokio::spawn(background_runtime(
+            state.clone(),
+            rebuild_interval,
+            worker_concurrency,
+        ));
     } else {
         tracing::info!("background worker disabled for serve process");
     }
@@ -174,11 +179,12 @@ async fn serve(config: Config) -> anyhow::Result<()> {
 
 async fn run_worker(config: Config) -> anyhow::Result<()> {
     let rebuild_interval = config.rebuild_interval;
+    let worker_concurrency = config.worker_concurrency;
     let state = build_state(config).await?;
-    tracing::info!("starting worker-only runtime");
+    tracing::info!(worker_concurrency, "starting worker-only runtime");
 
     tokio::select! {
-        () = background_runtime(state, rebuild_interval) => {},
+        () = background_runtime(state, rebuild_interval, worker_concurrency) => {},
         () = shutdown_signal() => {
             tracing::info!("worker shutdown requested");
         },
@@ -1101,14 +1107,18 @@ async fn load_or_refresh_parameters(
     Ok(None)
 }
 
-async fn background_runtime(state: AppState, rebuild_interval: Option<Duration>) {
+async fn background_runtime(
+    state: AppState,
+    rebuild_interval: Option<Duration>,
+    worker_concurrency: usize,
+) {
     if let Some(rebuild_interval) = rebuild_interval {
         tokio::select! {
-            () = worker_loop(state.clone()) => {},
+            () = worker_loop(state.clone(), worker_concurrency) => {},
             () = scheduled_rebuild_loop(state, rebuild_interval) => {},
         }
     } else {
-        worker_loop(state).await;
+        worker_loop(state, worker_concurrency).await;
     }
 }
 
@@ -1186,7 +1196,20 @@ async fn cached_default_parameter_values(
     }
 }
 
-async fn worker_loop(state: AppState) {
+async fn worker_loop(state: AppState, worker_concurrency: usize) {
+    if worker_concurrency == 1 {
+        single_worker_loop(state, 0).await;
+        return;
+    }
+
+    tracing::info!(worker_concurrency, "starting worker loops");
+    for worker_index in 0..worker_concurrency {
+        tokio::spawn(single_worker_loop(state.clone(), worker_index));
+    }
+    std::future::pending::<()>().await;
+}
+
+async fn single_worker_loop(state: AppState, worker_index: usize) {
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     loop {
         interval.tick().await;
@@ -1195,7 +1218,7 @@ async fn worker_loop(state: AppState) {
                 Ok(true) => {}
                 Ok(false) => break,
                 Err(error) => {
-                    tracing::error!(%error, "worker failed to process job");
+                    tracing::error!(%error, worker_index, "worker failed to process job");
                     break;
                 }
             }

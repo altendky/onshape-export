@@ -3,7 +3,6 @@
 ## Runtime
 
 - Should the web server and worker loop run in one process or separate Fly process groups on the same machine?
-- What initial Onshape export concurrency limit is safe?
 - What backup or snapshot policy is enough for the SQLite Fly volume?
 - What Tigris public URL shape should be used for stable artifact links?
 - When should SQLite be replaced with Postgres?

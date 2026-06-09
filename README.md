@@ -21,6 +21,7 @@ Implemented foundation:
 - Server-rendered model parameter controls and submitted-value validation.
 - Background worker loop for queued parameter refreshes, previews, and downloads.
 - Worker-only runtime mode for separate Fly process groups.
+- Configurable worker concurrency through `WORKER_CONCURRENCY`.
 - CLI maintenance commands for catalog validation, parameter refresh, pre-generation, failure retry, and artifact inspection/invalidation.
 - Catalog-defined parameter presets for targeted preview/export pre-generation.
 
@@ -37,6 +38,7 @@ cargo run -- worker
 ```
 
 Set `WORKER_ENABLED=false` when running a web process that should not also claim queued work.
+Set `WORKER_CONCURRENCY` to control how many queued jobs a worker process may run at once; the default is `1`.
 
 The default local database is `onshape-export.db`. Set `DATABASE_URL` for deployment, for example to a SQLite file on a Fly volume.
 
