@@ -71,8 +71,8 @@ impl OnshapeClient {
         )?;
         headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
 
-        let response = self.client.get(url).headers(headers).send().await?;
-        let response = response.error_for_status()?;
+        let response =
+            onshape_response(self.client.get(url).headers(headers).send().await?).await?;
         Ok(response.json().await?)
     }
 
@@ -147,16 +147,14 @@ impl OnshapeClient {
         let mut headers =
             self.signed_json_headers(Method::POST, url.path(), url.query().unwrap_or_default())?;
         headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
-        let response: Value = self
+        let response = self
             .client
             .post(url)
             .headers(headers)
             .json(&body)
             .send()
-            .await?
-            .error_for_status()?
-            .json()
             .await?;
+        let response: Value = onshape_response(response).await?.json().await?;
 
         first_string(&response, &["id", "translationId"]).ok_or_else(|| {
             anyhow::anyhow!("Onshape GLB export response did not include a translation id")
@@ -231,16 +229,14 @@ impl OnshapeClient {
         let mut headers =
             self.signed_json_headers(Method::POST, url.path(), url.query().unwrap_or_default())?;
         headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
-        let response: Value = self
+        let response = self
             .client
             .post(url)
             .headers(headers)
             .json(&body)
             .send()
-            .await?
-            .error_for_status()?
-            .json()
             .await?;
+        let response: Value = onshape_response(response).await?.json().await?;
 
         first_string(&response, &["id", "translationId"]).ok_or_else(|| {
             anyhow::anyhow!("Onshape {label} export response did not include a translation id")
@@ -261,15 +257,8 @@ impl OnshapeClient {
             let mut headers =
                 self.signed_json_headers(Method::GET, url.path(), url.query().unwrap_or_default())?;
             headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
-            let response: Value = self
-                .client
-                .get(url)
-                .headers(headers)
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
+            let response = self.client.get(url).headers(headers).send().await?;
+            let response: Value = onshape_response(response).await?.json().await?;
 
             match first_string(&response, &["requestState", "state"]).as_deref() {
                 Some("DONE") => {
@@ -303,15 +292,8 @@ impl OnshapeClient {
         let mut headers =
             self.signed_json_headers(Method::GET, url.path(), url.query().unwrap_or_default())?;
         headers.insert(header::ACCEPT, HeaderValue::from_static("*/*"));
-        let bytes = self
-            .client
-            .get(url)
-            .headers(headers)
-            .send()
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await?;
+        let response = self.client.get(url).headers(headers).send().await?;
+        let bytes = onshape_response(response).await?.bytes().await?;
         Ok(bytes.to_vec())
     }
 
@@ -352,6 +334,20 @@ fn first_array_string(value: &Value, name: &str) -> Option<String> {
         .as_array()?
         .iter()
         .find_map(|value| value.as_str().map(ToOwned::to_owned))
+}
+
+async fn onshape_response(response: reqwest::Response) -> anyhow::Result<reqwest::Response> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+
+    let url = response.url().clone();
+    let body = response
+        .text()
+        .await
+        .unwrap_or_else(|error| format!("<failed to read Onshape error response body: {error}>"));
+    anyhow::bail!("Onshape request failed: {status} {url}: {body}")
 }
 
 fn default_headers() -> HeaderMap {

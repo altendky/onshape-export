@@ -1375,6 +1375,13 @@ async fn process_next_job(state: &AppState) -> anyhow::Result<bool> {
         }
         Err(error) => {
             let summary = error.to_string();
+            tracing::error!(
+                error = %error,
+                work_key = %job.work_key,
+                job_kind = %job.job_kind,
+                attempt = job.attempt,
+                "job failed"
+            );
             if !state
                 .db
                 .finish_job(&job.work_key, job.attempt, "failed", Some(&summary))
