@@ -131,10 +131,10 @@ Implemented pieces:
 - SQLite job leases allow queued or expired work to be claimed without starting duplicate work.
 - Expired running job leases are reclaimable, and job completion is fenced by claim attempt to avoid stale worker status updates.
 - Worker-only runtime mode through `onshape-export worker`, plus `WORKER_ENABLED=false` for web-only `serve` processes.
+- Opt-in scheduled rebuilds through `REBUILD_INTERVAL_SECONDS` enqueue catalog parameter refreshes and missing default artifacts from the worker runtime.
 
 Possible additions:
 
 - Postgres if SQLite-on-volume limits become painful.
 - Web admin UI and authentication if CLI operations become insufficient.
-- Scheduled rebuilds.
 - Cache eviction policies.

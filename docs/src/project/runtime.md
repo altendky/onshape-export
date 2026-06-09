@@ -96,3 +96,5 @@ The default `serve` process starts the public web app and an in-process backgrou
 ```sh
 onshape-export worker
 ```
+
+Scheduled rebuilds are opt-in. Set `REBUILD_INTERVAL_SECONDS` on a process with a worker to periodically enqueue parameter refreshes for every catalog model and enqueue missing default preview/download artifacts once cached parameter metadata exists. A missing or `0` value disables scheduled rebuilds.

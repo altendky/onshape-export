@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr, path::PathBuf};
+use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -6,6 +6,7 @@ pub struct Config {
     pub catalog_path: PathBuf,
     pub database_url: String,
     pub worker_enabled: bool,
+    pub rebuild_interval: Option<Duration>,
     pub storage: StorageConfig,
     pub onshape: OnshapeConfig,
 }
@@ -33,12 +34,14 @@ impl Config {
         let catalog_path = PathBuf::from(env_or("CATALOG_PATH", "catalog/models.json"));
         let database_url = env_or("DATABASE_URL", "sqlite://onshape-export.db?mode=rwc");
         let worker_enabled = env_bool("WORKER_ENABLED", true)?;
+        let rebuild_interval = env_optional_duration("REBUILD_INTERVAL_SECONDS")?;
 
         Ok(Self {
             bind_addr,
             catalog_path,
             database_url,
             worker_enabled,
+            rebuild_interval,
             storage: StorageConfig {
                 bucket: env_or("TIGRIS_BUCKET", "onshape-export"),
                 endpoint_url: env::var("TIGRIS_ENDPOINT_URL").ok(),
@@ -69,5 +72,17 @@ fn env_bool(name: &str, default: bool) -> anyhow::Result<bool> {
         "1" | "true" | "yes" | "on" => Ok(true),
         "0" | "false" | "no" | "off" => Ok(false),
         _ => anyhow::bail!("{name} must be a boolean value"),
+    }
+}
+
+fn env_optional_duration(name: &str) -> anyhow::Result<Option<Duration>> {
+    let Ok(value) = env::var(name) else {
+        return Ok(None);
+    };
+    let seconds = value.parse::<u64>()?;
+    if seconds == 0 {
+        Ok(None)
+    } else {
+        Ok(Some(Duration::from_secs(seconds)))
     }
 }

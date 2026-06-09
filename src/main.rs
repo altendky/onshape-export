@@ -78,10 +78,11 @@ async fn main() -> anyhow::Result<()> {
 async fn serve(config: Config) -> anyhow::Result<()> {
     let worker_enabled = config.worker_enabled;
     let bind_addr = config.bind_addr;
+    let rebuild_interval = config.rebuild_interval;
     let state = build_state(config).await?;
 
     if worker_enabled {
-        tokio::spawn(worker_loop(state.clone()));
+        tokio::spawn(background_runtime(state.clone(), rebuild_interval));
     } else {
         tracing::info!("background worker disabled for serve process");
     }
@@ -98,11 +99,12 @@ async fn serve(config: Config) -> anyhow::Result<()> {
 }
 
 async fn run_worker(config: Config) -> anyhow::Result<()> {
+    let rebuild_interval = config.rebuild_interval;
     let state = build_state(config).await?;
     tracing::info!("starting worker-only runtime");
 
     tokio::select! {
-        () = worker_loop(state) => {},
+        () = background_runtime(state, rebuild_interval) => {},
         () = shutdown_signal() => {
             tracing::info!("worker shutdown requested");
         },
@@ -771,6 +773,91 @@ async fn load_or_refresh_parameters(
 
     enqueue_parameter_refresh(state, model).await?;
     Ok(None)
+}
+
+async fn background_runtime(state: AppState, rebuild_interval: Option<Duration>) {
+    if let Some(rebuild_interval) = rebuild_interval {
+        tokio::select! {
+            () = worker_loop(state.clone()) => {},
+            () = scheduled_rebuild_loop(state, rebuild_interval) => {},
+        }
+    } else {
+        worker_loop(state).await;
+    }
+}
+
+async fn scheduled_rebuild_loop(state: AppState, rebuild_interval: Duration) {
+    tracing::info!(
+        interval_seconds = rebuild_interval.as_secs(),
+        "scheduled rebuilds enabled"
+    );
+    let mut interval = tokio::time::interval(rebuild_interval);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        interval.tick().await;
+        if let Err(error) = enqueue_scheduled_rebuild(&state).await {
+            tracing::error!(%error, "scheduled rebuild enqueue failed");
+        }
+    }
+}
+
+async fn enqueue_scheduled_rebuild(state: &AppState) -> anyhow::Result<()> {
+    let mut enqueued = 0usize;
+    for model in state.catalog.models() {
+        if enqueue_parameter_refresh(state, model).await? {
+            enqueued += 1;
+        }
+
+        let Some(values) = cached_default_parameter_values(state, model).await? else {
+            tracing::debug!(model = %model.slug, "default artifact rebuild skipped until parameter metadata is cached");
+            continue;
+        };
+
+        let config_hash = configuration_hash(&values)?;
+        let preview_artifact_key = preview_artifact_key(model, &config_hash);
+        if state.db.artifact(&preview_artifact_key).await?.is_none()
+            && enqueue_preview(state, model, &values).await?
+        {
+            enqueued += 1;
+        }
+        for format in &model.exports.downloads {
+            let artifact_key = download_artifact_key(model, &config_hash, *format);
+            if state.db.artifact(&artifact_key).await?.is_none()
+                && enqueue_download(state, model, &values, *format).await?
+            {
+                enqueued += 1;
+            }
+        }
+    }
+
+    tracing::info!(enqueued, "scheduled rebuild enqueue complete");
+    Ok(())
+}
+
+async fn cached_default_parameter_values(
+    state: &AppState,
+    model: &catalog::Model,
+) -> anyhow::Result<Option<HashMap<String, String>>> {
+    let Some(record) = state.db.parameter_metadata(&model.slug).await? else {
+        return Ok(None);
+    };
+    let schema = state
+        .storage
+        .get_json::<ParameterSchema>(&record.normalized_object_key)
+        .await?;
+
+    match validate_values(
+        &schema,
+        &HashMap::new(),
+        model.parameter_policy.allow_unknown,
+    ) {
+        Ok(validated) => Ok(Some(validated.values)),
+        Err(errors) => {
+            tracing::warn!(model = %model.slug, errors = ?errors, "scheduled default parameter validation failed");
+            Ok(None)
+        }
+    }
 }
 
 async fn worker_loop(state: AppState) {
