@@ -1,0 +1,6 @@
+/.git/
+/target/
+/.sqlx/
+*.db
+*.db-shm
+*.db-wal

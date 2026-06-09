@@ -42,6 +42,16 @@ Set `WORKER_CONCURRENCY` to control how many queued jobs a worker process may ru
 
 The default local database is `onshape-export.db`. Set `DATABASE_URL` for deployment, for example to a SQLite file on a Fly volume.
 
+Fly deployment foundation:
+
+```sh
+fly volumes create onshape_export_data --size 1 --region ord
+fly secrets set ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... TIGRIS_BUCKET=...
+fly deploy
+```
+
+The included `fly.toml` runs a single web machine with the in-process worker enabled so SQLite coordination stays on one mounted Fly volume at `/data`.
+
 ## Product Direction
 
 - Curated model catalog, not arbitrary Onshape URL export.

@@ -100,3 +100,15 @@ onshape-export worker
 Scheduled rebuilds are opt-in. Set `REBUILD_INTERVAL_SECONDS` on a process with a worker to periodically enqueue parameter refreshes for every catalog model and enqueue missing default preview/download artifacts once cached parameter metadata exists. A missing or `0` value disables scheduled rebuilds.
 
 Worker concurrency is explicit through `WORKER_CONCURRENCY`. The default is `1`, which keeps the MVP conservative for Onshape API and translation load. Increase it only after observing real export latency, API limits, and SQLite volume behavior.
+
+## Fly Deployment Scaffold
+
+The repository includes a Dockerfile and `fly.toml` for the initial Fly deployment. The default config runs one app machine with `WORKER_ENABLED=true`, so public routes and queued work share the same SQLite database on the mounted `/data` volume.
+
+Create the volume before first deploy:
+
+```sh
+fly volumes create onshape_export_data --size 1 --region ord
+```
+
+Set Onshape and Tigris credentials as Fly secrets. Change `primary_region` and the volume region together if `ord` is not the intended deployment region.
