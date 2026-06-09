@@ -46,11 +46,16 @@ Expected pieces:
 - Render a model page with controls.
 - Validate submitted parameter values against normalized metadata.
 
-Remaining hardening:
+Needs live Onshape verification:
 
 - Verify normalized schema against real target model responses.
-- Add UI-specific catalog overrides if models need labels, units, precision, or visibility changes.
-- Decide whether refreshes should stay request-driven or move to a worker loop.
+
+Implemented hardening:
+
+- UI-specific catalog `parameterOverrides` support public labels, help text,
+  hidden parameters, numeric precision, and preferred basic widgets.
+- Parameter refreshes run through the SQLite-backed worker path instead of
+  running inline from request handlers.
 
 ## Phase 3: Preview Path
 
@@ -68,11 +73,16 @@ Expected pieces:
 - Return stable public Tigris preview URLs.
 - Show cached GLB with `<model-viewer>`.
 
-Remaining hardening:
+Needs live Onshape verification:
 
 - Verify GLB export request and translation response shapes against real Onshape models.
-- Add richer preview status polling instead of returning a simple refresh message while request-driven generation runs.
-- Add model-specific preview option overrides if tessellation, orientation, or grouping settings need to vary.
+
+Implemented hardening:
+
+- Preview generation pages poll deterministic JSON status endpoints until the
+  worker produces an artifact or failure.
+- Catalog `previewOptions.resolution` allows model-specific GLB tessellation
+  tuning, and preview options participate in cache identity.
 
 ## Phase 4: Download Exports
 
@@ -88,11 +98,18 @@ Expected pieces:
 - Tigris upload, content type, content disposition, and cache headers.
 - Stable public Tigris download links after completion.
 
-Remaining hardening:
+Needs live Onshape verification:
 
 - Verify STEP, STL, and 3MF export request and translation response shapes against real Onshape models.
-- Add manifest materialization if SQLite artifact records are not sufficient for operational inspection.
-- Add richer download status polling instead of returning a simple refresh message while request-driven generation runs.
+
+Implemented hardening:
+
+- Successful generation, invalidation, and manifest rewrite commands materialize
+  manifests from SQLite artifact records.
+- Download generation pages poll deterministic JSON status endpoints until the
+  worker produces an artifact or failure.
+- Catalog `downloadOptions.stepVersionString` allows model-specific STEP
+  defaults, and download options participate in cache identity.
 
 ## Phase 5: Operational Commands
 
@@ -117,6 +134,8 @@ Implemented hardening:
 
 - Add catalog-defined `parameterPresets` and CLI selectors for default, one preset, or all parameter sets during preview/export pre-generation.
 - Add structured JSON output for `failures list` and `artifacts list` operational commands.
+- Add `jobs list` with text and JSON output for recent queued, running, ready,
+  and failed jobs.
 - `artifacts invalidate` now deletes the object-store artifact before removing
   the SQLite artifact record.
 - Successful preview/export generation now rewrites a Tigris manifest for the
@@ -157,6 +176,11 @@ Implemented pieces:
 - Artifact cache identity now includes the exporter package version plus the
   preview/download option version strings, so option or code changes naturally
   generate fresh cache entries instead of reusing stale exports.
+- Catalog validation rejects unsafe slugs, duplicate download formats, invalid
+  preview resolutions, invalid parameter override precision, and unsupported
+  parameter override widgets.
+- Catalog-defined preview and download option values are included in cache
+  identity, so model-specific tuning produces fresh artifact sets.
 
 Possible additions:
 

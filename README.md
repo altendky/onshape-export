@@ -25,6 +25,7 @@ Implemented foundation:
 - CLI maintenance commands for catalog validation, parameter refresh, pre-generation, job/failure inspection and retry, and artifact inspection/invalidation.
 - CLI manifest inspection and rewrite support for cached model configurations.
 - Catalog-defined parameter presets for targeted preview/export pre-generation.
+- Catalog-defined parameter UI overrides and preview/STEP export option defaults.
 - Deploy-time `ops check` command for catalog, SQLite, storage, public URL, and credential readiness.
 - Operator-triggered SQLite backup snapshots through `ops backup <destination.db>`.
 
