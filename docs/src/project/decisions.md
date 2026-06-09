@@ -36,7 +36,7 @@ The export layer needs element-kind-specific endpoint selection.
 
 **Decision:** Support STEP, STL, and 3MF downloads.
 
-GLB is a preview format, not initially a user download format, though it is still cached like every other artifact.
+GLB is a preview format for the MVP and is not a supported user-download format; adding GLB downloads later requires a separate decision. It is still cached like every other artifact.
 
 ## Preview Format
 
