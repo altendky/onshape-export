@@ -6,7 +6,25 @@ The service is aimed at models where publishing every parameter combination ahea
 
 ## Current Status
 
-This repository currently contains planning documentation only. No application code has been added yet.
+This repository contains planning documentation and an initial Rust service skeleton.
+
+Implemented foundation:
+
+- Single-crate Rust `axum` app.
+- `GET /healthz`, `GET /`, and placeholder `GET /models/{slug}` routes.
+- Environment-based runtime configuration.
+- SQLite connection setup with migrations and MVP durability PRAGMAs.
+- Tigris/S3-compatible client construction.
+- Onshape client construction placeholder.
+- In-repo catalog JSON loading and validation.
+
+Local run:
+
+```sh
+cargo run
+```
+
+The default local database is `onshape-export.db`. Set `DATABASE_URL` for deployment, for example to a SQLite file on a Fly volume.
 
 ## Product Direction
 

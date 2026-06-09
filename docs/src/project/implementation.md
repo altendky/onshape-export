@@ -2,7 +2,7 @@
 
 ## Phase 0: Documentation And Decisions
 
-Current phase.
+Completed.
 
 Outputs:
 
@@ -16,6 +16,8 @@ Outputs:
 ## Phase 1: Project Skeleton
 
 Set up the Rust project without implementing every feature.
+
+Current phase.
 
 Expected pieces:
 
