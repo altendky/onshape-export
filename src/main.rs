@@ -1041,7 +1041,11 @@ async fn generate_preview(
     let artifact_key = preview_artifact_key(model, &config_hash);
 
     if let Some(record) = state.db.artifact(&artifact_key).await? {
-        let preview = render_preview_result(&state, &record.object_key);
+        let preview = format!(
+            "{}{}",
+            render_clean_model_url_script(model)?,
+            render_preview_result(&state, &record.object_key)
+        );
         let downloads = render_downloads_for_values(&state, model, &validated.values).await?;
         return Ok(render_model_html(
             model,
@@ -1053,15 +1057,20 @@ async fn generate_preview(
 
     enqueue_preview(&state, model, &validated.values).await?;
     let status_url = preview_status_path(model, &config_hash);
-    Ok(render_model_html(
-        model,
-        &parameter_controls,
-        &render_status_polling(
+    let preview = format!(
+        "{}{}",
+        render_clean_model_url_script(model)?,
+        render_status_polling(
             "preview",
             &config_hash,
             &status_url,
             "Preview generation is queued.",
-        )?,
+        )?
+    );
+    Ok(render_model_html(
+        model,
+        &parameter_controls,
+        &preview,
         &render_download_prompt(model),
     ))
 }
@@ -1107,7 +1116,11 @@ async fn generate_download(
     let artifact_key = download_artifact_key(model, &config_hash, format);
 
     if let Some(record) = state.db.artifact(&artifact_key).await? {
-        let preview = render_preview_for_values(&state, model, &validated.values).await?;
+        let preview = format!(
+            "{}{}",
+            render_clean_model_url_script(model)?,
+            render_preview_for_values(&state, model, &validated.values).await?
+        );
         let downloads = render_download_result(&state, format, &record.object_key);
         return Ok(render_model_html(
             model,
@@ -1118,7 +1131,11 @@ async fn generate_download(
     }
 
     enqueue_download(&state, model, &validated.values, format).await?;
-    let preview = render_preview_for_values(&state, model, &validated.values).await?;
+    let preview = format!(
+        "{}{}",
+        render_clean_model_url_script(model)?,
+        render_preview_for_values(&state, model, &validated.values).await?
+    );
     let status_url = download_status_path(model, format, &config_hash);
     Ok(render_model_html(
         model,
@@ -1997,10 +2014,18 @@ fn hex_sha256(bytes: &[u8]) -> String {
 }
 
 fn render_preview_result(state: &AppState, object_key: &str) -> String {
-    format!(
-        "Preview is ready. {}\n",
-        render_preview_viewer(state, object_key)
-    )
+    render_preview_viewer(state, object_key)
+}
+
+fn render_clean_model_url_script(model: &catalog::Model) -> anyhow::Result<String> {
+    let path = serde_json::to_string(&format!("/models/{}", model.slug))?;
+    Ok(format!(
+        r#"<script>
+if (window.location.pathname !== {path}) {{
+  window.history.replaceState(null, "", {path});
+}}
+</script>"#
+    ))
 }
 
 fn render_preview_viewer(state: &AppState, object_key: &str) -> String {
