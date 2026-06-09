@@ -2164,6 +2164,7 @@ fn render_status_polling(
 ) -> anyhow::Result<String> {
     let target_id = format!("status-{}-{}", safe_filename_stem(kind), &config_hash[..12]);
     let target_id_json = serde_json::to_string(&target_id)?;
+    let kind_json = serde_json::to_string(kind)?;
     let status_url_json = serde_json::to_string(status_url)?;
 
     Ok(format!(
@@ -2171,7 +2172,29 @@ fn render_status_polling(
 <script>
 (() => {{
   const target = document.getElementById({target_id_json});
+  const kind = {kind_json};
   const statusUrl = {status_url_json};
+  const showReadyArtifact = (status) => {{
+    if (!status.publicUrl) {{
+      target.textContent = status.message;
+      return;
+    }}
+    if (kind === "preview") {{
+      const viewer = document.createElement("model-viewer");
+      viewer.src = status.publicUrl;
+      viewer.setAttribute("camera-controls", "");
+      viewer.setAttribute("auto-rotate", "");
+      viewer.style.width = "min(100%, 720px)";
+      viewer.style.height = "480px";
+      target.replaceWith(viewer);
+      return;
+    }}
+
+    const link = document.createElement("a");
+    link.href = status.publicUrl;
+    link.textContent = `${{kind.toUpperCase()}} download is ready.`;
+    target.replaceWith(link);
+  }};
   const poll = async () => {{
     const response = await fetch(statusUrl);
     if (!response.ok) {{
@@ -2183,8 +2206,7 @@ fn render_status_polling(
       ? `${{status.message}} ${{status.errorSummary}}`
       : status.message;
     if (status.status === "ready") {{
-      target.textContent = "Artifact is ready. Updating page...";
-      window.setTimeout(() => window.location.reload(), 500);
+      showReadyArtifact(status);
     }} else if (status.status !== "failed" && status.status !== "missing") {{
       window.setTimeout(poll, 2000);
     }}
@@ -2195,6 +2217,7 @@ fn render_status_polling(
         target_id = escape_html(&target_id),
         initial_message = escape_html(initial_message),
         target_id_json = target_id_json,
+        kind_json = kind_json,
         status_url_json = status_url_json,
     ))
 }
@@ -2453,6 +2476,15 @@ mod tests {
         assert!(html.contains("new URLSearchParams(new FormData(form))"));
         assert!(html.contains("application/x-www-form-urlencoded"));
         assert!(html.contains("replaceWith(nextMain)"));
+    }
+
+    #[test]
+    fn status_polling_updates_preview_without_reloading() {
+        let html = render_status_polling("preview", "abcdef123456", "/status", "Queued").unwrap();
+
+        assert!(html.contains(r#"document.createElement("model-viewer")"#));
+        assert!(html.contains("showReadyArtifact(status)"));
+        assert!(!html.contains("location.reload"));
     }
 
     #[test]
