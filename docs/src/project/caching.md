@@ -313,7 +313,8 @@ Start conservatively:
 
 - Validation and unsupported-parameter failures are not retryable without input or catalog changes.
 - Onshape rate limits, Onshape server errors, translation timeouts, external data download failures, and Tigris upload failures are retryable.
-- Use bounded exponential backoff with a small max attempt count, such as three attempts, until real Onshape behavior is measured.
+- Use `maxAttempts = 3` total attempts for the MVP. Retry with bounded exponential backoff starting at 30 seconds and capped at 5 minutes, using full jitter by scheduling a random delay from zero to the computed delay. Honor valid Onshape `Retry-After` guidance when it is longer than the computed delay.
+- Persist the selected retry time in `nextRetryAt`; public status responses should derive `retryAfterSeconds` from that value.
 - Public status responses should expose safe `errorCode`, `userMessage`, and `retryAfterSeconds` fields, not raw internal failure details.
 
 Recommended SQLite durability settings for the MVP:
