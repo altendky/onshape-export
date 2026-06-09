@@ -61,6 +61,13 @@ enum OutputFormat {
     Json,
 }
 
+#[derive(Debug, Clone)]
+struct SelectedParameterSet {
+    slug: String,
+    label: String,
+    values: HashMap<String, String>,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
@@ -128,42 +135,53 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             }
             Ok(())
         }
-        ("previews", [subcommand, selector]) if subcommand == "generate" => {
+        ("previews", [subcommand, selector, parameter_selector @ ..])
+            if subcommand == "generate" =>
+        {
+            let parameter_selector = optional_parameter_selector(parameter_selector)?;
             let state = cli_state(config).await?;
             for model in selected_models(&state.catalog, selector)? {
-                match generate_default_preview(&state, model).await? {
-                    Some(object_key) => println!("preview ready for {}: {object_key}", model.slug),
-                    None => println!(
-                        "preview skipped for {}: default parameters are invalid",
-                        model.slug
-                    ),
+                for parameter_set in
+                    selected_parameter_sets(&state, model, parameter_selector).await?
+                {
+                    let object_key =
+                        generate_preview_for_values(&state, model, &parameter_set.values).await?;
+                    println!(
+                        "preview ready for {} [{} - {}]: {object_key}",
+                        model.slug, parameter_set.slug, parameter_set.label
+                    );
                 }
             }
             Ok(())
         }
-        ("exports", [subcommand, selector, format]) if subcommand == "generate" => {
+        ("exports", [subcommand, selector, format, parameter_selector @ ..])
+            if subcommand == "generate" =>
+        {
+            let parameter_selector = optional_parameter_selector(parameter_selector)?;
             let state = cli_state(config).await?;
             for model in selected_models(&state.catalog, selector)? {
                 let formats = selected_formats(model, format)?;
-                let Some(values) = default_parameter_values(&state, model).await? else {
-                    for format in formats {
-                        println!(
-                            "{} export skipped for {}: default parameters are invalid",
-                            format.label(),
-                            model.slug
-                        );
-                    }
-                    continue;
-                };
-
-                for format in formats {
-                    match generate_download_for_values(&state, model, &values, format).await? {
-                        Some(object_key) => println!(
-                            "{} export ready for {}: {object_key}",
-                            format.label(),
-                            model.slug
-                        ),
-                        None => unreachable!("values were already validated"),
+                for parameter_set in
+                    selected_parameter_sets(&state, model, parameter_selector).await?
+                {
+                    for format in &formats {
+                        match generate_download_for_values(
+                            &state,
+                            model,
+                            &parameter_set.values,
+                            *format,
+                        )
+                        .await?
+                        {
+                            Some(object_key) => println!(
+                                "{} export ready for {} [{} - {}]: {object_key}",
+                                format.label(),
+                                model.slug,
+                                parameter_set.slug,
+                                parameter_set.label
+                            ),
+                            None => unreachable!("values were already validated"),
+                        }
                     }
                 }
             }
@@ -267,6 +285,14 @@ fn optional_output_format(args: &[String]) -> anyhow::Result<OutputFormat> {
     }
 }
 
+fn optional_parameter_selector(args: &[String]) -> anyhow::Result<Option<&str>> {
+    match args {
+        [] => Ok(None),
+        [selector] => Ok(Some(selector.as_str())),
+        _ => anyhow::bail!("expected at most one parameter set selector"),
+    }
+}
+
 async fn cli_state(config: Config) -> anyhow::Result<AppState> {
     build_state(config).await
 }
@@ -320,23 +346,19 @@ fn selected_formats(
     Ok(vec![format])
 }
 
-async fn generate_default_preview(
+async fn generate_preview_for_values(
     state: &AppState,
     model: &catalog::Model,
-) -> anyhow::Result<Option<String>> {
-    let Some(values) = default_parameter_values(state, model).await? else {
-        return Ok(None);
-    };
-    let config_hash = configuration_hash(&values)?;
+    values: &HashMap<String, String>,
+) -> anyhow::Result<String> {
+    let config_hash = configuration_hash(values)?;
     let artifact_key = preview_artifact_key(model, &config_hash);
 
     if let Some(record) = state.db.artifact(&artifact_key).await? {
-        return Ok(Some(record.object_key));
+        return Ok(record.object_key);
     }
 
-    refresh_preview(state, model, &values, &config_hash, &artifact_key)
-        .await
-        .map(Some)
+    refresh_preview(state, model, values, &config_hash, &artifact_key).await
 }
 
 async fn enqueue_parameter_refresh(
@@ -422,27 +444,71 @@ async fn generate_download_for_values(
         .map(Some)
 }
 
-async fn default_parameter_values(
+async fn selected_parameter_sets(
     state: &AppState,
     model: &catalog::Model,
-) -> anyhow::Result<Option<HashMap<String, String>>> {
+    selector: Option<&str>,
+) -> anyhow::Result<Vec<SelectedParameterSet>> {
     let schema = refresh_parameters(state, model).await?;
-    match validate_values(
-        &schema,
-        &HashMap::new(),
-        model.parameter_policy.allow_unknown,
-    ) {
-        Ok(validated) => Ok(Some(validated.values)),
-        Err(errors) => {
-            tracing::warn!(model = %model.slug, errors = ?errors, "default parameter validation failed");
-            Ok(None)
+    let requested = selector.unwrap_or("default");
+    let mut sets = Vec::new();
+
+    if requested == "default" || requested == "--all-parameter-sets" {
+        sets.push(validated_parameter_set(
+            &schema,
+            model,
+            "default".to_owned(),
+            "Default".to_owned(),
+            &HashMap::new(),
+        )?);
+    }
+
+    for preset in &model.parameter_presets {
+        if requested == "--all-parameter-sets" || requested == preset.slug {
+            sets.push(validated_parameter_set(
+                &schema,
+                model,
+                preset.slug.clone(),
+                preset.name.clone(),
+                &preset.values,
+            )?);
         }
     }
+
+    if sets.is_empty() {
+        anyhow::bail!("unknown parameter set for {}: {requested}", model.slug);
+    }
+
+    Ok(sets)
+}
+
+fn validated_parameter_set(
+    schema: &ParameterSchema,
+    model: &catalog::Model,
+    slug: String,
+    label: String,
+    submitted: &HashMap<String, String>,
+) -> anyhow::Result<SelectedParameterSet> {
+    let validated = validate_values(schema, submitted, model.parameter_policy.allow_unknown)
+        .map_err(|errors| {
+            anyhow::anyhow!(
+                "{} [{}] parameters are invalid: {}",
+                model.slug,
+                slug,
+                errors.join(", ")
+            )
+        })?;
+
+    Ok(SelectedParameterSet {
+        slug,
+        label,
+        values: validated.values,
+    })
 }
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all>\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all>\n  onshape-export failures list [--json]\n  onshape-export failures retry\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>"
+        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export failures list [--json]\n  onshape-export failures retry\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>"
     );
 }
 
@@ -1554,5 +1620,15 @@ mod tests {
             OutputFormat::Json
         );
         assert!(optional_output_format(&["--yaml".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn parses_optional_parameter_selector() {
+        assert_eq!(optional_parameter_selector(&[]).unwrap(), None);
+        assert_eq!(
+            optional_parameter_selector(&["small".to_owned()]).unwrap(),
+            Some("small")
+        );
+        assert!(optional_parameter_selector(&["a".to_owned(), "b".to_owned()]).is_err());
     }
 }

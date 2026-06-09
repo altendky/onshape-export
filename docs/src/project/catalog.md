@@ -28,7 +28,16 @@ Each model entry should include:
   "parameterPolicy": {
     "source": "onshape",
     "allowUnknown": false
-  }
+  },
+  "parameterPresets": [
+    {
+      "slug": "small",
+      "name": "Small",
+      "values": {
+        "size": "10"
+      }
+    }
+  ]
 }
 ```
 
@@ -41,6 +50,8 @@ For Assemblies, use:
 ## Parameter Metadata
 
 Parameter metadata can be fetched from Onshape and cached in Tigris. SQLite coordinates refresh jobs so duplicate Onshape parameter fetches are not started. The repo catalog should not need to duplicate every parameter by hand unless a model needs UI-specific overrides.
+
+`parameterPresets` is optional. Each preset names a reusable parameter value set for operational pre-generation. Preset values are validated against the normalized Onshape parameter schema before previews or downloads are generated; omitted values fall back to Onshape defaults.
 
 Possible overrides:
 

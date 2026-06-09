@@ -111,11 +111,11 @@ Expected pieces:
 
 Remaining hardening:
 
-- Add richer selectors for targeted parameter sets beyond default values.
 - Add object-store deletion or tombstone handling if invalidation should remove Tigris objects, not only SQLite artifact records.
 
 Implemented hardening:
 
+- Add catalog-defined `parameterPresets` and CLI selectors for default, one preset, or all parameter sets during preview/export pre-generation.
 - Add structured JSON output for `failures list` and `artifacts list` operational commands.
 - `artifacts invalidate` now deletes the object-store artifact before removing
   the SQLite artifact record.

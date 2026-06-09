@@ -22,6 +22,7 @@ Implemented foundation:
 - Background worker loop for queued parameter refreshes, previews, and downloads.
 - Worker-only runtime mode for separate Fly process groups.
 - CLI maintenance commands for catalog validation, parameter refresh, pre-generation, failure retry, and artifact inspection/invalidation.
+- Catalog-defined parameter presets for targeted preview/export pre-generation.
 
 Local run:
 

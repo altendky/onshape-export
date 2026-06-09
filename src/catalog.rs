@@ -1,4 +1,8 @@
-use std::{collections::HashSet, fs, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::Path,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +20,16 @@ pub struct Model {
     pub onshape: OnshapeSource,
     pub exports: ExportConfig,
     pub parameter_policy: ParameterPolicy,
+    #[serde(default)]
+    pub parameter_presets: Vec<ParameterPreset>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParameterPreset {
+    pub slug: String,
+    pub name: String,
+    pub values: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -156,6 +170,36 @@ impl Catalog {
                 "element id cannot be empty for {}",
                 model.slug
             );
+            let mut preset_slugs = HashSet::new();
+            for preset in &model.parameter_presets {
+                anyhow::ensure!(
+                    !preset.slug.is_empty(),
+                    "parameter preset slug cannot be empty for {}",
+                    model.slug
+                );
+                anyhow::ensure!(
+                    preset.slug != "default",
+                    "parameter preset slug cannot be 'default' for {}",
+                    model.slug
+                );
+                anyhow::ensure!(
+                    !preset.slug.starts_with("--"),
+                    "parameter preset slug cannot start with '--' for {}",
+                    model.slug
+                );
+                anyhow::ensure!(
+                    preset_slugs.insert(&preset.slug),
+                    "duplicate parameter preset slug for {}: {}",
+                    model.slug,
+                    preset.slug
+                );
+                anyhow::ensure!(
+                    !preset.name.is_empty(),
+                    "parameter preset name cannot be empty for {}:{}",
+                    model.slug,
+                    preset.slug
+                );
+            }
         }
         Ok(())
     }
@@ -172,6 +216,25 @@ mod tests {
         };
 
         assert!(catalog.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_parameter_preset_slugs() {
+        let mut model = model("model");
+        model.parameter_presets = vec![preset("small"), preset("small")];
+        let catalog = Catalog {
+            models: vec![model],
+        };
+
+        assert!(catalog.validate().is_err());
+    }
+
+    fn preset(slug: &str) -> ParameterPreset {
+        ParameterPreset {
+            slug: slug.to_owned(),
+            name: "Name".to_owned(),
+            values: HashMap::new(),
+        }
     }
 
     fn model(slug: &str) -> Model {
@@ -197,6 +260,7 @@ mod tests {
                 source: ParameterSource::Onshape,
                 allow_unknown: false,
             },
+            parameter_presets: Vec::new(),
         }
     }
 }

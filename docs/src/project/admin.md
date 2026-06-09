@@ -21,13 +21,15 @@ Implemented CLI commands:
 ```text
 onshape-export catalog validate
 onshape-export parameters refresh <slug|--all>
-onshape-export previews generate <slug|--all>
-onshape-export exports generate <slug|--all> <step|stl|3mf|--all>
+onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]
+onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]
 onshape-export failures list
 onshape-export failures retry
 onshape-export artifacts list <slug|--all>
 onshape-export artifacts invalidate <artifact-key>
 ```
+
+`default` uses Onshape parameter defaults. A preset slug targets a model's catalog-defined `parameterPresets` entry. `--all-parameter-sets` generates the default set plus every configured preset.
 
 ## Web Admin Deferral
 
