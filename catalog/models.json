@@ -1,3 +1,23 @@
 {
-  "models": []
+  "models": [
+    {
+      "slug": "onshape-model",
+      "name": "Onshape Model",
+      "description": "Onshape model export test.",
+      "onshape": {
+        "documentId": "31d9f3436d1f6286f056967a",
+        "versionId": "ab056029bb678dc1006994c7",
+        "elementId": "2f91512e932467fe1b2c15b1",
+        "elementKind": "part_studio"
+      },
+      "exports": {
+        "downloads": ["step", "stl", "3mf"],
+        "preview": "glb"
+      },
+      "parameterPolicy": {
+        "source": "onshape",
+        "allowUnknown": false
+      }
+    }
+  ]
 }
