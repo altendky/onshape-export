@@ -2093,7 +2093,7 @@ if (window.location.pathname !== {path}) {{
 fn render_preview_viewer(state: &AppState, object_key: &str) -> String {
     match state.storage.public_url(object_key) {
         Some(url) => format!(
-            r#"<model-viewer src="{}" camera-controls auto-rotate style="width: min(100%, 720px); height: 480px;"></model-viewer>"#,
+            r#"<model-viewer src="{}" camera-controls auto-rotate environment-image="neutral" exposure="1.1" shadow-intensity="0.7" shadow-softness="1" style="width: min(100%, 720px); height: 480px; background: linear-gradient(#f8fafc, #dbe4ef);"></model-viewer>"#,
             escape_html(&url),
         ),
         None => {
@@ -2184,8 +2184,13 @@ fn render_status_polling(
       viewer.src = status.publicUrl;
       viewer.setAttribute("camera-controls", "");
       viewer.setAttribute("auto-rotate", "");
+      viewer.setAttribute("environment-image", "neutral");
+      viewer.setAttribute("exposure", "1.1");
+      viewer.setAttribute("shadow-intensity", "0.7");
+      viewer.setAttribute("shadow-softness", "1");
       viewer.style.width = "min(100%, 720px)";
       viewer.style.height = "480px";
+      viewer.style.background = "linear-gradient(#f8fafc, #dbe4ef)";
       target.replaceWith(viewer);
       return;
     }}
@@ -2483,6 +2488,9 @@ mod tests {
         let html = render_status_polling("preview", "abcdef123456", "/status", "Queued").unwrap();
 
         assert!(html.contains(r#"document.createElement("model-viewer")"#));
+        assert!(html.contains(r#"viewer.setAttribute("environment-image", "neutral")"#));
+        assert!(html.contains(r#"viewer.setAttribute("exposure", "1.1")"#));
+        assert!(html.contains(r#"viewer.setAttribute("shadow-intensity", "0.7")"#));
         assert!(html.contains("showReadyArtifact(status)"));
         assert!(!html.contains("location.reload"));
     }
