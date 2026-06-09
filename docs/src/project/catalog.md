@@ -23,7 +23,13 @@ Each model entry should include:
   },
   "exports": {
     "downloads": ["step", "stl", "3mf"],
-    "preview": "glb"
+    "preview": "glb",
+    "previewOptions": {
+      "resolution": "MEDIUM"
+    },
+    "downloadOptions": {
+      "stepVersionString": "AP242"
+    }
   },
   "parameterPolicy": {
     "source": "onshape",
@@ -60,6 +66,8 @@ For Assemblies, use:
 
 Parameter metadata can be fetched from Onshape and cached in Tigris. SQLite coordinates refresh jobs so duplicate Onshape parameter fetches are not started. The repo catalog should not need to duplicate every parameter by hand unless a model needs UI-specific overrides.
 
+`previewOptions` and `downloadOptions` are optional. The default preview resolution is `MEDIUM`; the default STEP version string is `AP242`. These options are included in artifact cache identity, so catalog tuning produces fresh artifacts.
+
 `parameterPresets` is optional. Each preset names a reusable parameter value set for operational pre-generation. Preset values are validated against the normalized Onshape parameter schema before previews or downloads are generated; omitted values fall back to Onshape defaults.
 
 Implemented UI overrides are keyed by Onshape parameter id:
@@ -73,7 +81,7 @@ Implemented UI overrides are keyed by Onshape parameter id:
 Possible future overrides:
 
 - Preview auto-generation policy.
-- Export option defaults.
+- Additional format-specific export options after live Onshape verification.
 
 ## Later Configurability
 

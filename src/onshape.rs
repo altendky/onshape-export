@@ -10,7 +10,7 @@ use reqwest::Url;
 use serde_json::{Value, json};
 use sha2::Sha256;
 
-use crate::catalog::{DownloadFormat, ElementKind, OnshapeSource};
+use crate::catalog::{DownloadFormat, DownloadOptions, ElementKind, OnshapeSource, PreviewOptions};
 use crate::config::OnshapeConfig;
 
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -80,8 +80,11 @@ impl OnshapeClient {
         &self,
         source: &OnshapeSource,
         configuration: &str,
+        options: &PreviewOptions,
     ) -> anyhow::Result<Vec<u8>> {
-        let translation_id = self.start_glb_export(source, configuration).await?;
+        let translation_id = self
+            .start_glb_export(source, configuration, options)
+            .await?;
         let external_data_id = self.poll_translation(source, &translation_id).await?;
         self.download_external_data(source, &external_data_id).await
     }
@@ -91,9 +94,13 @@ impl OnshapeClient {
         source: &OnshapeSource,
         configuration: &str,
         format: DownloadFormat,
+        options: &DownloadOptions,
     ) -> anyhow::Result<Vec<u8>> {
         let translation_id = match format {
-            DownloadFormat::Step => self.start_step_export(source, configuration).await?,
+            DownloadFormat::Step => {
+                self.start_step_export(source, configuration, options)
+                    .await?
+            }
             DownloadFormat::Stl | DownloadFormat::ThreeMf => {
                 self.start_translation_export(source, configuration, format)
                     .await?
@@ -107,6 +114,7 @@ impl OnshapeClient {
         &self,
         source: &OnshapeSource,
         configuration: &str,
+        options: &PreviewOptions,
     ) -> anyhow::Result<String> {
         anyhow::ensure!(
             self.has_credentials(),
@@ -126,7 +134,7 @@ impl OnshapeClient {
                 "configuration": configuration,
             },
             "meshParams": {
-                "resolution": "MEDIUM",
+                "resolution": options.resolution.as_deref().unwrap_or("MEDIUM"),
             },
             "storeInDocument": false,
             "notifyUser": false,
@@ -159,6 +167,7 @@ impl OnshapeClient {
         &self,
         source: &OnshapeSource,
         configuration: &str,
+        options: &DownloadOptions,
     ) -> anyhow::Result<String> {
         anyhow::ensure!(
             self.has_credentials(),
@@ -174,7 +183,7 @@ impl OnshapeClient {
             "advancedParams": {
                 "configuration": configuration,
             },
-            "stepVersionString": "AP242",
+            "stepVersionString": options.step_version_string.as_deref().unwrap_or("AP242"),
             "storeInDocument": false,
             "notifyUser": false,
             "triggerAutoDownload": false,

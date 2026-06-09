@@ -651,7 +651,7 @@ async fn generate_preview_for_values(
     model: &catalog::Model,
     values: &HashMap<String, String>,
 ) -> anyhow::Result<String> {
-    let config_hash = configuration_hash(values)?;
+    let config_hash = configuration_hash(model, values)?;
     let artifact_key = preview_artifact_key(model, &config_hash);
 
     if let Some(record) = state.db.artifact(&artifact_key).await? {
@@ -682,7 +682,7 @@ async fn enqueue_preview(
     model: &catalog::Model,
     values: &HashMap<String, String>,
 ) -> anyhow::Result<bool> {
-    let config_hash = configuration_hash(values)?;
+    let config_hash = configuration_hash(model, values)?;
     let artifact_key = preview_artifact_key(model, &config_hash);
     let payload = JobPayload::PreviewGlb {
         model_slug: model.slug.clone(),
@@ -697,7 +697,7 @@ async fn enqueue_download(
     values: &HashMap<String, String>,
     format: catalog::DownloadFormat,
 ) -> anyhow::Result<bool> {
-    let config_hash = configuration_hash(values)?;
+    let config_hash = configuration_hash(model, values)?;
     let artifact_key = download_artifact_key(model, &config_hash, format);
     let payload = JobPayload::DownloadExport {
         model_slug: model.slug.clone(),
@@ -732,7 +732,7 @@ async fn generate_download_for_values(
     values: &HashMap<String, String>,
     format: catalog::DownloadFormat,
 ) -> anyhow::Result<Option<String>> {
-    let config_hash = configuration_hash(values)?;
+    let config_hash = configuration_hash(model, values)?;
     let artifact_key = download_artifact_key(model, &config_hash, format);
 
     if let Some(record) = state.db.artifact(&artifact_key).await? {
@@ -1030,7 +1030,7 @@ async fn generate_preview(
                 ));
             }
         };
-    let config_hash = configuration_hash(&validated.values)?;
+    let config_hash = configuration_hash(model, &validated.values)?;
     let artifact_key = preview_artifact_key(model, &config_hash);
 
     if let Some(record) = state.db.artifact(&artifact_key).await? {
@@ -1096,7 +1096,7 @@ async fn generate_download(
                 ));
             }
         };
-    let config_hash = configuration_hash(&validated.values)?;
+    let config_hash = configuration_hash(model, &validated.values)?;
     let artifact_key = download_artifact_key(model, &config_hash, format);
 
     if let Some(record) = state.db.artifact(&artifact_key).await? {
@@ -1281,7 +1281,7 @@ async fn enqueue_scheduled_rebuild(state: &AppState) -> anyhow::Result<()> {
             continue;
         };
 
-        let config_hash = configuration_hash(&values)?;
+        let config_hash = configuration_hash(model, &values)?;
         let preview_artifact_key = preview_artifact_key(model, &config_hash);
         if state.db.artifact(&preview_artifact_key).await?.is_none()
             && enqueue_preview(state, model, &values).await?
@@ -1405,7 +1405,7 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                 .catalog
                 .find(&model_slug)
                 .ok_or_else(|| anyhow::anyhow!("unknown model slug: {model_slug}"))?;
-            let config_hash = configuration_hash(&values)?;
+            let config_hash = configuration_hash(model, &values)?;
             let artifact_key = preview_artifact_key(model, &config_hash);
             if state.db.artifact(&artifact_key).await?.is_none() {
                 refresh_preview(state, model, &values, &config_hash, &artifact_key).await?;
@@ -1430,7 +1430,7 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                 model.slug,
                 format.label()
             );
-            let config_hash = configuration_hash(&values)?;
+            let config_hash = configuration_hash(model, &values)?;
             let artifact_key = download_artifact_key(model, &config_hash, format);
             if state.db.artifact(&artifact_key).await?.is_none() {
                 refresh_download(state, model, &values, &config_hash, &artifact_key, format)
@@ -1486,7 +1486,7 @@ async fn render_cached_preview(
     else {
         return Ok("<p>Choose parameters and generate a preview.</p>".to_owned());
     };
-    let config_hash = configuration_hash(&validated.values)?;
+    let config_hash = configuration_hash(model, &validated.values)?;
     render_preview_for_hash(state, model, &config_hash, "default parameters").await
 }
 
@@ -1495,7 +1495,7 @@ async fn render_preview_for_values(
     model: &catalog::Model,
     values: &HashMap<String, String>,
 ) -> Result<String, AppError> {
-    let config_hash = configuration_hash(values)?;
+    let config_hash = configuration_hash(model, values)?;
     render_preview_for_hash(state, model, &config_hash, "these parameters").await
 }
 
@@ -1533,7 +1533,7 @@ async fn render_downloads_for_values(
     model: &catalog::Model,
     values: &HashMap<String, String>,
 ) -> Result<String, AppError> {
-    let config_hash = configuration_hash(values)?;
+    let config_hash = configuration_hash(model, values)?;
     let mut items = String::new();
     for format in &model.exports.downloads {
         let artifact_key = download_artifact_key(model, &config_hash, *format);
@@ -1562,7 +1562,11 @@ async fn refresh_preview(
     let configuration = onshape_configuration_string(values);
     let bytes = state
         .onshape
-        .export_glb(&model.onshape, &configuration)
+        .export_glb(
+            &model.onshape,
+            &configuration,
+            &model.exports.preview_options,
+        )
         .await?;
     let object_key = preview_object_key(model, config_hash);
     state
@@ -1596,7 +1600,12 @@ async fn refresh_download(
     let configuration = onshape_configuration_string(values);
     let bytes = state
         .onshape
-        .export_download(&model.onshape, &configuration, format)
+        .export_download(
+            &model.onshape,
+            &configuration,
+            format,
+            &model.exports.download_options,
+        )
         .await?;
     let object_key = download_object_key(model, config_hash, format);
     let filename = download_filename(model, format);
@@ -1820,7 +1829,10 @@ fn element_kind_key(kind: &catalog::ElementKind) -> &'static str {
     }
 }
 
-fn configuration_hash(values: &HashMap<String, String>) -> anyhow::Result<String> {
+fn configuration_hash(
+    model: &catalog::Model,
+    values: &HashMap<String, String>,
+) -> anyhow::Result<String> {
     let mut object = Map::new();
     object.insert(
         "exporterVersion".to_owned(),
@@ -1833,6 +1845,14 @@ fn configuration_hash(values: &HashMap<String, String>) -> anyhow::Result<String
     object.insert(
         "downloadOptionsVersion".to_owned(),
         Value::String(DOWNLOAD_OPTIONS_VERSION.to_owned()),
+    );
+    object.insert(
+        "previewOptions".to_owned(),
+        serde_json::to_value(&model.exports.preview_options)?,
+    );
+    object.insert(
+        "downloadOptions".to_owned(),
+        serde_json::to_value(&model.exports.download_options)?,
     );
     let mut values_object = Map::new();
     for key in canonical_values(values).keys() {
@@ -2190,10 +2210,24 @@ mod tests {
             ("a".to_owned(), "1".to_owned()),
             ("b".to_owned(), "2".to_owned()),
         ]);
+        let model = test_model();
 
         assert_eq!(
-            configuration_hash(&first).unwrap(),
-            configuration_hash(&second).unwrap()
+            configuration_hash(&model, &first).unwrap(),
+            configuration_hash(&model, &second).unwrap()
+        );
+    }
+
+    #[test]
+    fn hashes_catalog_export_options() {
+        let values = HashMap::new();
+        let first = test_model();
+        let mut second = test_model();
+        second.exports.preview_options.resolution = Some("FINE".to_owned());
+
+        assert_ne!(
+            configuration_hash(&first, &values).unwrap(),
+            configuration_hash(&second, &values).unwrap()
         );
     }
 
@@ -2341,6 +2375,8 @@ mod tests {
             exports: catalog::ExportConfig {
                 downloads: vec![catalog::DownloadFormat::Step],
                 preview: catalog::PreviewFormat::Glb,
+                preview_options: catalog::PreviewOptions::default(),
+                download_options: catalog::DownloadOptions::default(),
             },
             parameter_policy: catalog::ParameterPolicy {
                 source: catalog::ParameterSource::Onshape,

@@ -66,6 +66,22 @@ pub enum ElementKind {
 pub struct ExportConfig {
     pub downloads: Vec<DownloadFormat>,
     pub preview: PreviewFormat,
+    #[serde(default)]
+    pub preview_options: PreviewOptions,
+    #[serde(default)]
+    pub download_options: DownloadOptions,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewOptions {
+    pub resolution: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadOptions {
+    pub step_version_string: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -202,6 +218,20 @@ impl Catalog {
             ensure_unique(&model.exports.downloads, || {
                 format!("duplicate download format for {}", model.slug)
             })?;
+            if let Some(resolution) = &model.exports.preview_options.resolution {
+                anyhow::ensure!(
+                    matches!(resolution.as_str(), "COARSE" | "MEDIUM" | "FINE"),
+                    "preview resolution for {} must be COARSE, MEDIUM, or FINE",
+                    model.slug
+                );
+            }
+            if let Some(step_version_string) = &model.exports.download_options.step_version_string {
+                anyhow::ensure!(
+                    !step_version_string.is_empty(),
+                    "STEP version string cannot be empty for {}",
+                    model.slug
+                );
+            }
             let mut preset_slugs = HashSet::new();
             for preset in &model.parameter_presets {
                 anyhow::ensure!(
@@ -342,6 +372,17 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_preview_options() {
+        let mut model = model("model");
+        model.exports.preview_options.resolution = Some("ULTRA".to_owned());
+        let catalog = Catalog {
+            models: vec![model],
+        };
+
+        assert!(catalog.validate().is_err());
+    }
+
+    #[test]
     fn rejects_invalid_parameter_overrides() {
         let mut model = model("model");
         model.parameter_overrides.insert(
@@ -384,6 +425,8 @@ mod tests {
                     DownloadFormat::ThreeMf,
                 ],
                 preview: PreviewFormat::Glb,
+                preview_options: PreviewOptions::default(),
+                download_options: DownloadOptions::default(),
             },
             parameter_policy: ParameterPolicy {
                 source: ParameterSource::Onshape,
