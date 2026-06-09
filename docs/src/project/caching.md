@@ -244,6 +244,8 @@ Valid transitions:
 - `failed -> queued` only through explicit retry or retry cooldown policy.
 - `ready -> superseded` when newer artifact identity replaces it in normal invalidation.
 
+These are the normal MVP job transitions. Validation should happen before enqueue, so terminal validation failures that are discovered later happen after a worker claim and use `running -> failed`. Active work should not move directly from `running -> superseded`; it should finish, fail, or return to `queued` on lease expiry. Workers must re-check artifact and index state before expensive Onshape work so obsolete queued or running work can exit without producing duplicate public artifacts. The unique `workKey` constraint means retries reuse the existing job row; rebuilds that need distinct work must change the deterministic identity inputs or use explicit invalidation/retry flows.
+
 Use a unique constraint on the deterministic work key so only one job exists for each parameter refresh or export. Workers must claim jobs in short SQLite transactions and must not hold write transactions while calling Onshape.
 
 Workers should still re-check artifact existence before starting expensive Onshape work and before writing final results. This protects recovery paths and manual rebuild workflows, but it is not the primary deduplication mechanism.
