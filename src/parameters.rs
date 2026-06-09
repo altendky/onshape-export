@@ -174,16 +174,27 @@ pub fn validate_values(
 
 fn normalize_parameter(value: &Value) -> Option<Parameter> {
     let object = value.as_object()?;
-    let id = first_string(object, &["parameterId", "id", "messageId"])?;
+    let message = object
+        .get("message")
+        .and_then(Value::as_object)
+        .unwrap_or(object);
+    let id = first_string(message, &["parameterId", "id", "messageId"])?;
     let label =
-        first_string(object, &["parameterName", "name", "label"]).unwrap_or_else(|| id.clone());
+        first_string(message, &["parameterName", "name", "label"]).unwrap_or_else(|| id.clone());
     let options = extract_options(value);
-    let default_value = object
+    let default_value = message
         .get("defaultValue")
-        .or_else(|| object.get("default"))
-        .or_else(|| object.get("value"))
+        .or_else(|| message.get("default"))
+        .or_else(|| message.get("value"))
+        .or_else(|| {
+            message
+                .get("rangeAndDefault")
+                .and_then(|value| value.get("message"))
+                .and_then(|value| value.get("defaultValue"))
+        })
         .and_then(value_to_string);
-    let type_hint = first_string(object, &["type", "parameterType"])
+    let type_hint = first_string(object, &["type", "typeName"])
+        .or_else(|| first_string(message, &["type", "parameterType", "quantityType"]))
         .unwrap_or_default()
         .to_ascii_lowercase();
     let kind = if !options.is_empty() {
@@ -208,9 +219,9 @@ fn normalize_parameter(value: &Value) -> Option<Parameter> {
     Some(Parameter {
         id,
         label,
-        description: first_string(object, &["description", "helpText"]),
+        description: first_string(message, &["description", "helpText"]),
         kind,
-        required: object
+        required: message
             .get("required")
             .and_then(Value::as_bool)
             .unwrap_or(false),
@@ -236,14 +247,19 @@ fn find_parameter_array(value: &Value) -> Option<&Vec<Value>> {
 }
 
 fn extract_options(value: &Value) -> Vec<ParameterOption> {
-    let arrays = value
-        .as_object()
-        .into_iter()
-        .flat_map(|object| [object.get("options"), object.get("items")])
-        .flatten()
-        .filter_map(Value::as_array);
+    let arrays = value.as_object().into_iter().flat_map(|object| {
+        let message = object.get("message").and_then(Value::as_object);
+        [
+            object.get("options"),
+            object.get("items"),
+            message.and_then(|message| message.get("options")),
+            message.and_then(|message| message.get("items")),
+        ]
+    });
 
     arrays
+        .flatten()
+        .filter_map(Value::as_array)
         .flatten()
         .filter_map(|item| {
             if let Some(text) = value_to_string(item) {
@@ -254,8 +270,12 @@ fn extract_options(value: &Value) -> Vec<ParameterOption> {
             }
 
             let object = item.as_object()?;
-            let value = first_string(object, &["option", "value", "id", "message"])?;
-            let label = first_string(object, &["label", "name", "displayName"])
+            let message = object
+                .get("message")
+                .and_then(Value::as_object)
+                .unwrap_or(object);
+            let value = first_string(message, &["option", "value", "id", "message"])?;
+            let label = first_string(message, &["optionName", "label", "name", "displayName"])
                 .unwrap_or_else(|| value.clone());
             Some(ParameterOption { value, label })
         })
@@ -310,6 +330,59 @@ mod tests {
         assert_eq!(schema.parameters[0].kind, ParameterKind::Number);
         assert_eq!(schema.parameters[1].kind, ParameterKind::Enum);
         assert_eq!(schema.parameters[2].kind, ParameterKind::Boolean);
+    }
+
+    #[test]
+    fn normalizes_onshape_message_wrapped_parameters() {
+        let schema = normalize_configuration(
+            &source(),
+            &json!({
+                "configurationParameters": [
+                    {
+                        "message": {
+                            "parameterId": "wallThickness",
+                            "parameterName": "wallThickness",
+                            "quantityType": "LENGTH",
+                            "rangeAndDefault": {
+                                "message": {
+                                    "defaultValue": 1.5,
+                                    "units": "millimeter"
+                                }
+                            }
+                        },
+                        "typeName": "BTMConfigurationParameterQuantity"
+                    },
+                    {
+                        "message": {
+                            "defaultValue": true,
+                            "parameterId": "rimColor",
+                            "parameterName": "rimColor"
+                        },
+                        "typeName": "BTMConfigurationParameterBoolean"
+                    },
+                    {
+                        "message": {
+                            "defaultValue": "Default",
+                            "options": [
+                                {"message": {"option": "Default", "optionName": "None"}},
+                                {"message": {"option": "Full", "optionName": "Recessed"}}
+                            ],
+                            "parameterId": "fillType",
+                            "parameterName": "fillType"
+                        },
+                        "typeName": "BTMConfigurationParameterEnum"
+                    }
+                ]
+            }),
+        );
+
+        assert_eq!(schema.parameters.len(), 3);
+        assert_eq!(schema.parameters[0].id, "wallThickness");
+        assert_eq!(schema.parameters[0].default_value.as_deref(), Some("1.5"));
+        assert_eq!(schema.parameters[0].kind, ParameterKind::Number);
+        assert_eq!(schema.parameters[1].kind, ParameterKind::Boolean);
+        assert_eq!(schema.parameters[2].kind, ParameterKind::Enum);
+        assert_eq!(schema.parameters[2].options[0].label, "None");
     }
 
     #[test]
