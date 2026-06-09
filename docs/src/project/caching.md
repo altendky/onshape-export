@@ -158,7 +158,12 @@ A completed configuration should have a manifest that points to every generated 
     },
     "step": {
       "objectKey": "artifacts/.../model.step",
-      "status": "ready"
+      "publicUrl": "https://...",
+      "status": "ready",
+      "contentType": "model/step",
+      "sizeBytes": 456,
+      "sha256": "...",
+      "jobId": "..."
     },
     "stl": {
       "objectKey": "artifacts/.../model.stl",
