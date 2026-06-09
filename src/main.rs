@@ -14,7 +14,7 @@ use std::{
 
 use anyhow::Context;
 use axum::{
-    Form, Router,
+    Form, Json, Router,
     extract::{Path, State},
     http::{StatusCode, header::CONTENT_TYPE},
     response::{Html, IntoResponse, Response},
@@ -109,6 +109,17 @@ struct ManifestOutput {
     content_type: String,
     byte_len: Option<i64>,
     created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ArtifactStatusResponse {
+    artifact_key: String,
+    status: String,
+    message: String,
+    public_url: Option<String>,
+    error_summary: Option<String>,
+    updated_at: Option<String>,
 }
 
 #[tokio::main]
@@ -568,7 +579,15 @@ fn app(state: AppState) -> Router {
             get(model_page).post(validate_model_config),
         )
         .route("/models/{slug}/preview", post(generate_preview))
+        .route(
+            "/models/{slug}/preview/{config_hash}/status",
+            get(preview_status),
+        )
         .route("/models/{slug}/exports/{format}", post(generate_download))
+        .route(
+            "/models/{slug}/exports/{format}/{config_hash}/status",
+            get(download_status),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -783,10 +802,16 @@ async fn generate_preview(
     }
 
     enqueue_preview(&state, model, &validated.values).await?;
+    let status_url = preview_status_path(model, &config_hash);
     Ok(render_model_html(
         model,
         &parameter_controls,
-        "<p>Preview generation is queued. Reload this page shortly.</p>",
+        &render_status_polling(
+            "preview",
+            &config_hash,
+            &status_url,
+            "Preview generation is queued.",
+        )?,
         &render_download_prompt(model),
     ))
 }
@@ -844,15 +869,86 @@ async fn generate_download(
 
     enqueue_download(&state, model, &validated.values, format).await?;
     let preview = render_preview_for_values(&state, model, &validated.values).await?;
+    let status_url = download_status_path(model, format, &config_hash);
     Ok(render_model_html(
         model,
         &parameter_controls,
         &preview,
-        &format!(
-            "<p>{} export generation is queued. Reload this page shortly.</p>",
-            format.label()
-        ),
+        &render_status_polling(
+            format.slug(),
+            &config_hash,
+            &status_url,
+            &format!("{} export generation is queued.", format.label()),
+        )?,
     ))
+}
+
+async fn preview_status(
+    State(state): State<AppState>,
+    Path((slug, config_hash)): Path<(String, String)>,
+) -> Result<Json<ArtifactStatusResponse>, AppError> {
+    let model = state.catalog.find(&slug).ok_or(AppError::NotFound)?;
+    let artifact_key = preview_artifact_key(model, &config_hash);
+
+    Ok(Json(artifact_status(&state, &artifact_key).await?))
+}
+
+async fn download_status(
+    State(state): State<AppState>,
+    Path((slug, format_slug, config_hash)): Path<(String, String, String)>,
+) -> Result<Json<ArtifactStatusResponse>, AppError> {
+    let model = state.catalog.find(&slug).ok_or(AppError::NotFound)?;
+    let format = catalog::DownloadFormat::from_slug(&format_slug).ok_or(AppError::NotFound)?;
+    if !model.exports.downloads.contains(&format) {
+        return Err(AppError::NotFound);
+    }
+    let artifact_key = download_artifact_key(model, &config_hash, format);
+
+    Ok(Json(artifact_status(&state, &artifact_key).await?))
+}
+
+async fn artifact_status(
+    state: &AppState,
+    artifact_key: &str,
+) -> Result<ArtifactStatusResponse, AppError> {
+    if let Some(record) = state.db.artifact(artifact_key).await? {
+        return Ok(ArtifactStatusResponse {
+            artifact_key: artifact_key.to_owned(),
+            status: "ready".to_owned(),
+            message: "Artifact is ready.".to_owned(),
+            public_url: state.storage.public_url(&record.object_key),
+            error_summary: None,
+            updated_at: Some(record.created_at),
+        });
+    }
+
+    if let Some(job) = state.db.job(artifact_key).await? {
+        let message = match job.status.as_str() {
+            "queued" => "Generation is queued.",
+            "running" => "Generation is running.",
+            "failed" => "Generation failed.",
+            "expired" => "Generation lease expired and will be retried.",
+            "ready" => "Generation completed; artifact is not visible yet.",
+            _ => "Generation status is unknown.",
+        };
+        return Ok(ArtifactStatusResponse {
+            artifact_key: artifact_key.to_owned(),
+            status: job.status,
+            message: message.to_owned(),
+            public_url: None,
+            error_summary: job.error_summary,
+            updated_at: Some(job.updated_at),
+        });
+    }
+
+    Ok(ArtifactStatusResponse {
+        artifact_key: artifact_key.to_owned(),
+        status: "missing".to_owned(),
+        message: "No cached artifact or queued generation was found.".to_owned(),
+        public_url: None,
+        error_summary: None,
+        updated_at: None,
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1395,6 +1491,22 @@ fn download_filename(model: &catalog::Model, format: catalog::DownloadFormat) ->
     )
 }
 
+fn preview_status_path(model: &catalog::Model, config_hash: &str) -> String {
+    format!("/models/{}/preview/{config_hash}/status", model.slug)
+}
+
+fn download_status_path(
+    model: &catalog::Model,
+    format: catalog::DownloadFormat,
+    config_hash: &str,
+) -> String {
+    format!(
+        "/models/{}/exports/{}/{config_hash}/status",
+        model.slug,
+        format.slug()
+    )
+}
+
 fn safe_filename_stem(value: &str) -> String {
     value
         .chars()
@@ -1525,6 +1637,49 @@ fn render_download_link(
             format.label()
         ),
     }
+}
+
+fn render_status_polling(
+    kind: &str,
+    config_hash: &str,
+    status_url: &str,
+    initial_message: &str,
+) -> anyhow::Result<String> {
+    let target_id = format!("status-{}-{}", safe_filename_stem(kind), &config_hash[..12]);
+    let target_id_json = serde_json::to_string(&target_id)?;
+    let status_url_json = serde_json::to_string(status_url)?;
+
+    Ok(format!(
+        r#"<p id="{target_id}">{initial_message} Status will update automatically.</p>
+<script>
+(() => {{
+  const target = document.getElementById({target_id_json});
+  const statusUrl = {status_url_json};
+  const poll = async () => {{
+    const response = await fetch(statusUrl);
+    if (!response.ok) {{
+      target.textContent = `Status check failed: ${{response.status}}`;
+      return;
+    }}
+    const status = await response.json();
+    target.textContent = status.errorSummary
+      ? `${{status.message}} ${{status.errorSummary}}`
+      : status.message;
+    if (status.status === "ready") {{
+      target.textContent = "Artifact is ready. Updating page...";
+      window.setTimeout(() => window.location.reload(), 500);
+    }} else if (status.status !== "failed" && status.status !== "missing") {{
+      window.setTimeout(poll, 2000);
+    }}
+  }};
+  window.setTimeout(poll, 1000);
+}})();
+</script>"#,
+        target_id = escape_html(&target_id),
+        initial_message = escape_html(initial_message),
+        target_id_json = target_id_json,
+        status_url_json = status_url_json,
+    ))
 }
 
 fn render_parameter_controls(schema: &ParameterSchema) -> String {

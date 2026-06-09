@@ -317,6 +317,20 @@ impl Database {
         .map(|rows| rows.into_iter().map(job_record_from_row).collect())
     }
 
+    pub async fn job(&self, work_key: &str) -> sqlx::Result<Option<JobRecord>> {
+        sqlx::query(
+            r#"
+            SELECT work_key, job_kind, status, error_summary, attempt, created_at, updated_at
+            FROM jobs
+            WHERE work_key = ?
+            "#,
+        )
+        .bind(work_key)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(job_record_from_row))
+    }
+
     pub async fn job_metrics(&self) -> sqlx::Result<Vec<JobMetric>> {
         sqlx::query(
             r#"
@@ -440,6 +454,21 @@ mod tests {
         );
         let job = db.claim_next_job(60).await.unwrap().unwrap();
         assert_eq!(job.work_key, "work");
+    }
+
+    #[tokio::test]
+    async fn jobs_can_be_looked_up_by_work_key() {
+        let db = test_database().await;
+        let payload = r#"{"kind":"parameter_refresh","model_slug":"demo"}"#;
+
+        assert!(db.job("work").await.unwrap().is_none());
+        db.enqueue_job("work", "parameter_refresh", payload)
+            .await
+            .unwrap();
+
+        let job = db.job("work").await.unwrap().unwrap();
+        assert_eq!(job.work_key, "work");
+        assert_eq!(job.status, "queued");
     }
 
     #[tokio::test]

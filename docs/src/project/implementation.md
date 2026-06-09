@@ -137,6 +137,7 @@ Implemented pieces:
 - Expired running job leases are reclaimable, and job completion is fenced by claim attempt to avoid stale worker status updates.
 - Worker-only runtime mode through `onshape-export worker`, plus `WORKER_ENABLED=false` for web-only `serve` processes.
 - Opt-in scheduled rebuilds through `REBUILD_INTERVAL_SECONDS` enqueue catalog parameter refreshes and missing default artifacts from the worker runtime.
+- Preview and download generation pages expose deterministic JSON status endpoints and poll queued jobs until the artifact is ready or failed.
 
 Possible additions:
 
