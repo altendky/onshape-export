@@ -26,6 +26,7 @@ Implemented foundation:
 - CLI manifest inspection and rewrite support for cached model configurations.
 - Catalog-defined parameter presets for targeted preview/export pre-generation.
 - Deploy-time `ops check` command for catalog, SQLite, storage, public URL, and credential readiness.
+- Operator-triggered SQLite backup snapshots through `ops backup <destination.db>`.
 
 Local run:
 

@@ -11,6 +11,7 @@ Initial admin operations:
 - Generate missing GLB previews.
 - Generate missing STEP, STL, and 3MF exports.
 - Inspect job status and failures.
+- Create a consistent SQLite backup snapshot for Fly volume recovery.
 - Retry all failed jobs, one failed job by work key, or failed jobs by kind.
 - Invalidate artifacts after exporter option changes, deleting the object-store
   object before removing the SQLite artifact record.
@@ -22,6 +23,8 @@ Implemented CLI commands:
 
 ```text
 onshape-export catalog validate
+onshape-export ops check
+onshape-export ops backup <destination.db>
 onshape-export parameters refresh <slug|--all>
 onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]
 onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]
@@ -34,6 +37,8 @@ onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]
 ```
 
 `default` uses Onshape parameter defaults. A preset slug targets a model's catalog-defined `parameterPresets` entry. `--all-parameter-sets` generates the default set plus every configured preset.
+
+`ops backup` writes a consistent SQLite snapshot to a new local database file using SQLite's native online backup path. On Fly, run it through `fly ssh console` to a path on the mounted volume or a temporary path that can be copied out separately. The command refuses to overwrite an existing destination.
 
 `failures retry` without arguments preserves the broad all-failures behavior.
 Use a listed work key or `--kind <job-kind>` when only one failed operation class

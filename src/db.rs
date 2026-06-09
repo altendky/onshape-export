@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use serde::Serialize;
 use sqlx::{Executor, Row, SqlitePool, sqlite::SqlitePoolOptions};
 
@@ -82,6 +84,30 @@ impl Database {
 
     pub async fn ping(&self) -> sqlx::Result<()> {
         sqlx::query("SELECT 1").execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn backup_to_path(&self, path: &Path) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !path.exists(),
+            "backup destination already exists: {}",
+            path.display()
+        );
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            anyhow::ensure!(
+                parent.exists(),
+                "backup destination parent does not exist: {}",
+                parent.display()
+            );
+        }
+
+        sqlx::query("VACUUM main INTO ?")
+            .bind(path.to_string_lossy().as_ref())
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -641,6 +667,39 @@ mod tests {
         );
 
         assert!(db.claim_next_job(0).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn database_can_be_backed_up_to_new_file() {
+        let db = test_database().await;
+        db.enqueue_job(
+            "work",
+            "parameter_refresh",
+            r#"{"kind":"parameter_refresh","model_slug":"demo"}"#,
+        )
+        .await
+        .unwrap();
+        let backup_directory = tempfile::tempdir().unwrap();
+        let backup_path = backup_directory.path().join("backup.db");
+
+        db.backup_to_path(&backup_path).await.unwrap();
+
+        let backup_url = format!("sqlite://{}?mode=rw", backup_path.display());
+        let backup = Database::connect(&backup_url).await.unwrap();
+        let job = backup.job("work").await.unwrap().unwrap();
+        assert_eq!(job.status, "queued");
+    }
+
+    #[tokio::test]
+    async fn database_backup_refuses_existing_file() {
+        let db = test_database().await;
+        let backup_directory = tempfile::tempdir().unwrap();
+        let backup_path = backup_directory.path().join("backup.db");
+
+        db.backup_to_path(&backup_path).await.unwrap();
+        let error = db.backup_to_path(&backup_path).await.unwrap_err();
+
+        assert!(error.to_string().contains("already exists"));
     }
 
     async fn test_database() -> Database {

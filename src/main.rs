@@ -206,6 +206,15 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             Ok(())
         }
         ("ops", [subcommand]) if subcommand == "check" => run_ops_check(config).await,
+        ("ops", [subcommand, destination]) if subcommand == "backup" => {
+            let db = Database::connect(&config.database_url)
+                .await
+                .context("connecting to database")?;
+            let destination = std::path::Path::new(destination);
+            db.backup_to_path(destination).await?;
+            println!("database backup written to {}", destination.display());
+            Ok(())
+        }
         ("parameters", [subcommand, selector]) if subcommand == "refresh" => {
             let state = cli_state(config).await?;
             for model in selected_models(&state.catalog, selector)? {
@@ -777,7 +786,7 @@ fn validated_parameter_set(
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export ops check\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts manifest <slug> <config-hash> [--rewrite]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
+        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export ops check\n  onshape-export ops backup <destination.db>\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts manifest <slug> <config-hash> [--rewrite]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
     );
 }
 

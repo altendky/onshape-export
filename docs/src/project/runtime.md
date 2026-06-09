@@ -120,3 +120,13 @@ fly ssh console -C "/app/onshape-export ops check"
 ```
 
 The check validates catalog loading, SQLite connectivity, storage client construction, Tigris public URL configuration, and required Onshape/Tigris credential presence without issuing Onshape or object-store API calls.
+
+## SQLite Backups
+
+The MVP backup policy is an explicit operator-triggered SQLite snapshot before deployments or cache maintenance that could affect job/artifact state:
+
+```sh
+fly ssh console -C "/app/onshape-export ops backup /data/backups/onshape-export-$(date +%Y%m%d%H%M%S).db"
+```
+
+The command uses SQLite `VACUUM INTO` through the live database connection, so the result is a consistent standalone database file. Create the destination directory first and copy completed backups off the volume according to operational needs. If backups need to become automatic or point-in-time, move this concern to platform snapshots or Postgres.

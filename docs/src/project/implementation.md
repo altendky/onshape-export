@@ -145,6 +145,7 @@ Implemented pieces:
 - Preview and download generation pages expose deterministic JSON status endpoints and poll queued jobs until the artifact is ready or failed.
 - Age-based cache eviction is available through `artifacts prune`, deleting
   matching object-store artifacts and rewriting affected manifests.
+- Operator-triggered SQLite snapshots are available through `ops backup <destination.db>`.
 - Fly deployment scaffolding is available through `Dockerfile`, `.dockerignore`,
   and `fly.toml`, using a single machine with the in-process worker enabled so
   SQLite coordination stays on one mounted volume.
