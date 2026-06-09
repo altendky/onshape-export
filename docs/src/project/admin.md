@@ -15,6 +15,19 @@ Initial admin operations:
 - Invalidate artifacts after exporter option changes.
 - List cached outputs for a model.
 
+Implemented CLI commands:
+
+```text
+onshape-export catalog validate
+onshape-export parameters refresh <slug|--all>
+onshape-export previews generate <slug|--all>
+onshape-export exports generate <slug|--all> <step|stl|3mf|--all>
+onshape-export failures list
+onshape-export failures retry
+onshape-export artifacts list <slug|--all>
+onshape-export artifacts invalidate <artifact-key>
+```
+
 ## Web Admin Deferral
 
 Do not add `/admin` routes in the MVP.

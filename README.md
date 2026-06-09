@@ -19,6 +19,7 @@ Implemented foundation:
 - In-repo catalog JSON loading and validation.
 - Onshape parameter metadata refresh, normalization, Tigris caching, and SQLite deduplication.
 - Server-rendered model parameter controls and submitted-value validation.
+- CLI maintenance commands for catalog validation, parameter refresh, pre-generation, failure retry, and artifact inspection/invalidation.
 
 Local run:
 

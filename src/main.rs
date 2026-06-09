@@ -5,7 +5,7 @@ mod onshape;
 mod parameters;
 mod storage;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, env, sync::Arc};
 
 use anyhow::Context;
 use axum::{
@@ -42,6 +42,16 @@ async fn main() -> anyhow::Result<()> {
     init_tracing();
 
     let config = Config::from_env()?;
+    let args = env::args().skip(1).collect::<Vec<_>>();
+
+    if let Some(command) = args.first().filter(|command| command.as_str() != "serve") {
+        return run_cli(config, command, &args[1..]).await;
+    }
+
+    serve(config).await
+}
+
+async fn serve(config: Config) -> anyhow::Result<()> {
     let catalog = Arc::new(Catalog::load(&config.catalog_path).context("loading catalog")?);
     let db = Database::connect(&config.database_url)
         .await
@@ -65,6 +75,239 @@ async fn main() -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("serving app")
+}
+
+async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Result<()> {
+    match (command, args) {
+        ("catalog", [subcommand]) if subcommand == "validate" => {
+            let catalog = Catalog::load(&config.catalog_path).context("loading catalog")?;
+            println!("catalog ok: {} models", catalog.models().len());
+            Ok(())
+        }
+        ("parameters", [subcommand, selector]) if subcommand == "refresh" => {
+            let state = cli_state(config).await?;
+            for model in selected_models(&state.catalog, selector)? {
+                refresh_parameters(&state, model).await?;
+                println!("refreshed parameters for {}", model.slug);
+            }
+            Ok(())
+        }
+        ("previews", [subcommand, selector]) if subcommand == "generate" => {
+            let state = cli_state(config).await?;
+            for model in selected_models(&state.catalog, selector)? {
+                match generate_default_preview(&state, model).await? {
+                    Some(object_key) => println!("preview ready for {}: {object_key}", model.slug),
+                    None => println!(
+                        "preview skipped for {}: default parameters are invalid",
+                        model.slug
+                    ),
+                }
+            }
+            Ok(())
+        }
+        ("exports", [subcommand, selector, format]) if subcommand == "generate" => {
+            let state = cli_state(config).await?;
+            for model in selected_models(&state.catalog, selector)? {
+                let formats = selected_formats(model, format)?;
+                let Some(values) = default_parameter_values(&state, model).await? else {
+                    for format in formats {
+                        println!(
+                            "{} export skipped for {}: default parameters are invalid",
+                            format.label(),
+                            model.slug
+                        );
+                    }
+                    continue;
+                };
+
+                for format in formats {
+                    match generate_download_for_values(&state, model, &values, format).await? {
+                        Some(object_key) => println!(
+                            "{} export ready for {}: {object_key}",
+                            format.label(),
+                            model.slug
+                        ),
+                        None => unreachable!("values were already validated"),
+                    }
+                }
+            }
+            Ok(())
+        }
+        ("failures", [subcommand]) if subcommand == "list" => {
+            let state = cli_state(config).await?;
+            let jobs = state.db.failed_jobs(100).await?;
+            if jobs.is_empty() {
+                println!("no failed jobs");
+            } else {
+                for job in jobs {
+                    println!(
+                        "{}\t{}\t{}\tattempt={}\tcreated={}\tupdated={}\t{}",
+                        job.work_key,
+                        job.job_kind,
+                        job.status,
+                        job.attempt,
+                        job.created_at,
+                        job.updated_at,
+                        job.error_summary.unwrap_or_default()
+                    );
+                }
+            }
+            Ok(())
+        }
+        ("failures", [subcommand]) if subcommand == "retry" => {
+            let state = cli_state(config).await?;
+            let count = state.db.retry_failed_jobs().await?;
+            println!("marked {count} failed jobs for retry");
+            Ok(())
+        }
+        ("artifacts", [subcommand, selector]) if subcommand == "list" => {
+            let state = cli_state(config).await?;
+            for model in selected_models(&state.catalog, selector)? {
+                let artifacts = state.db.artifacts_for_model(&model.slug).await?;
+                if artifacts.is_empty() {
+                    println!("no artifacts for {}", model.slug);
+                } else {
+                    for artifact in artifacts {
+                        println!(
+                            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                            artifact.artifact_key,
+                            artifact.model_slug,
+                            artifact.config_hash,
+                            artifact.output_kind,
+                            artifact.content_type,
+                            artifact.byte_len.unwrap_or_default(),
+                            artifact.created_at,
+                            artifact.object_key
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
+        ("artifacts", [subcommand, artifact_key]) if subcommand == "invalidate" => {
+            let state = cli_state(config).await?;
+            if state.db.delete_artifact(artifact_key).await? {
+                println!("invalidated artifact {artifact_key}");
+            } else {
+                println!("artifact not found: {artifact_key}");
+            }
+            Ok(())
+        }
+        _ => {
+            print_usage();
+            anyhow::bail!("unknown command")
+        }
+    }
+}
+
+async fn cli_state(config: Config) -> anyhow::Result<AppState> {
+    let catalog = Arc::new(Catalog::load(&config.catalog_path).context("loading catalog")?);
+    let db = Database::connect(&config.database_url)
+        .await
+        .context("connecting to database")?;
+    let storage = StorageClient::new(config.storage.clone()).await?;
+    let onshape = OnshapeClient::new(config.onshape.clone())?;
+
+    Ok(AppState {
+        catalog,
+        db,
+        onshape,
+        storage,
+    })
+}
+
+fn selected_models<'a>(
+    catalog: &'a Catalog,
+    selector: &str,
+) -> anyhow::Result<Vec<&'a catalog::Model>> {
+    if selector == "--all" {
+        return Ok(catalog.models().iter().collect());
+    }
+
+    catalog
+        .find(selector)
+        .map(|model| vec![model])
+        .ok_or_else(|| anyhow::anyhow!("unknown model slug: {selector}"))
+}
+
+fn selected_formats(
+    model: &catalog::Model,
+    selector: &str,
+) -> anyhow::Result<Vec<catalog::DownloadFormat>> {
+    if selector == "--all" {
+        return Ok(model.exports.downloads.clone());
+    }
+
+    let format = catalog::DownloadFormat::from_slug(selector)
+        .ok_or_else(|| anyhow::anyhow!("unknown export format: {selector}"))?;
+    anyhow::ensure!(
+        model.exports.downloads.contains(&format),
+        "{} does not expose {} downloads",
+        model.slug,
+        format.label()
+    );
+    Ok(vec![format])
+}
+
+async fn generate_default_preview(
+    state: &AppState,
+    model: &catalog::Model,
+) -> anyhow::Result<Option<String>> {
+    let Some(values) = default_parameter_values(state, model).await? else {
+        return Ok(None);
+    };
+    let config_hash = configuration_hash(&values)?;
+    let artifact_key = preview_artifact_key(model, &config_hash);
+
+    if let Some(record) = state.db.artifact(&artifact_key).await? {
+        return Ok(Some(record.object_key));
+    }
+
+    refresh_preview(state, model, &values, &config_hash, &artifact_key)
+        .await
+        .map(Some)
+}
+
+async fn generate_download_for_values(
+    state: &AppState,
+    model: &catalog::Model,
+    values: &HashMap<String, String>,
+    format: catalog::DownloadFormat,
+) -> anyhow::Result<Option<String>> {
+    let config_hash = configuration_hash(values)?;
+    let artifact_key = download_artifact_key(model, &config_hash, format);
+
+    if let Some(record) = state.db.artifact(&artifact_key).await? {
+        return Ok(Some(record.object_key));
+    }
+
+    refresh_download(state, model, &values, &config_hash, &artifact_key, format)
+        .await
+        .map(Some)
+}
+
+async fn default_parameter_values(
+    state: &AppState,
+    model: &catalog::Model,
+) -> anyhow::Result<Option<HashMap<String, String>>> {
+    let schema = refresh_parameters(state, model).await?;
+    match validate_values(
+        &schema,
+        &HashMap::new(),
+        model.parameter_policy.allow_unknown,
+    ) {
+        Ok(validated) => Ok(Some(validated.values)),
+        Err(errors) => {
+            tracing::warn!(model = %model.slug, errors = ?errors, "default parameter validation failed");
+            Ok(None)
+        }
+    }
+}
+
+fn print_usage() {
+    eprintln!(
+        "usage:\n  onshape-export [serve]\n  onshape-export catalog validate\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all>\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all>\n  onshape-export failures list\n  onshape-export failures retry\n  onshape-export artifacts list <slug|--all>\n  onshape-export artifacts invalidate <artifact-key>"
+    );
 }
 
 fn app(state: AppState) -> Router {

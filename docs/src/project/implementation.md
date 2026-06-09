@@ -98,6 +98,8 @@ Remaining hardening:
 
 Add CLI or Fly-run maintenance controls. Do not add a web admin UI until browser-based admin workflows are needed.
 
+Current phase foundation implemented.
+
 Expected pieces:
 
 - Catalog validation.
@@ -106,6 +108,12 @@ Expected pieces:
 - Failure inspection.
 - Retry and invalidate actions.
 - Operational access through local CLI credentials or Fly access.
+
+Remaining hardening:
+
+- Add richer selectors for targeted parameter sets beyond default values.
+- Add object-store deletion or tombstone handling if invalidation should remove Tigris objects, not only SQLite artifact records.
+- Add structured output formats if operational automation needs JSON instead of tab-delimited text.
 
 ## Phase 6: Runtime Hardening
 
