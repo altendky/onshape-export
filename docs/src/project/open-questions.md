@@ -2,7 +2,6 @@
 
 ## Runtime
 
-- Should the web server and worker loop run in one process or separate Fly process groups on the same machine?
 - What initial Onshape export concurrency limit is safe?
 - What backup or snapshot policy is enough for the SQLite Fly volume?
 - What Tigris public URL shape should be used for stable artifact links?
@@ -10,8 +9,7 @@
 
 ## Onshape Auth
 
-- Should the service use Onshape API keys, OAuth client credentials, or another server-owned auth flow?
-- Which scopes are required for versioned configuration reads and exports?
+- Which API key permissions are required for versioned configuration reads and exports?
 - Should the existing `onshape-mcp` auth/client crates be extracted or reused directly?
 
 ## Onshape Export Details
@@ -39,5 +37,9 @@
 
 - How long should failed jobs suppress retries?
 - Should admin rebuilds generate all formats or only missing artifacts?
-- How should exporter version changes invalidate old artifacts?
+- What exact manifest/index fields should mark superseded artifacts after exporter version changes?
 - What CLI maintenance commands are needed before a web admin UI exists?
+
+## Resolved Working Decisions
+
+Resolved or working MVP decisions are tracked in [Decisions](decisions.md).

@@ -11,6 +11,18 @@ version id: vid
 
 Workspaces are intentionally out of scope for the first version.
 
+## Authentication
+
+The MVP assumes server-owned Onshape API keys configured as deployment secrets. The Rust service signs requests server-side, and credentials are never exposed to browsers.
+
+This assumption must be verified with real calls before the export vertical slice depends on it:
+
+- Fetch versioned configuration metadata for a Part Studio.
+- Fetch versioned configuration metadata for an Assembly.
+- Create, poll, and download a GLB export.
+- Create, poll, and download STEP, STL, and 3MF exports.
+- Confirm required access for linked-document assembly contexts.
+
 ## Parameter Discovery
 
 Fetch configuration parameters for a Part Studio or Assembly:
@@ -54,7 +66,7 @@ Encoded configuration results should be cached by source identity and `config_ha
 
 ## Preview Export
 
-Preview is a GLB/glTF export for the selected configuration. It is separate from the user's final download format.
+Preview is a GLB export for the selected configuration. It is separate from the user's final download format.
 
 Part Studio options:
 
@@ -176,9 +188,9 @@ Expected outputs:
 
 | Format | Browser Use | Storage Extension |
 | --- | --- | --- |
-| GLB/glTF | Preview | `.glb` or `.gltf` |
+| GLB | Preview | `.glb` |
 | STEP | Download | `.step` |
-| STL | Download and fallback preview | `.stl` |
+| STL | Download | `.stl` |
 | 3MF | Download | `.3mf` |
 
 Prefer GLB for browser preview even when the user downloads STL or 3MF.

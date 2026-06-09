@@ -16,6 +16,7 @@
 
 - [Catalog](project/catalog.md)
 - [Admin Operations](project/admin.md)
+- [CI And Local Tooling](project/ci.md)
 - [Library Reuse](project/library-reuse.md)
 
 # Project Management

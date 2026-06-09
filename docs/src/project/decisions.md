@@ -20,6 +20,12 @@ Workspaces are mutable and complicate cache correctness. Versions give stable so
 
 The service uses server-owned Onshape credentials for approved models. Onshape credentials never reach the browser.
 
+## Onshape Auth
+
+**Decision:** Use server-owned Onshape API keys for the MVP, pending verification with real Onshape calls.
+
+The Rust service signs Onshape API requests server-side. API keys are configured as deployment secrets and are never exposed to browsers. OAuth or user-delegated authorization is deferred unless API keys cannot access the required versioned configuration metadata, translation creation, polling, or external data download endpoints.
+
 ## Supported Model Types
 
 **Decision:** Support both Part Studios and Assemblies.
@@ -30,13 +36,13 @@ The export layer needs element-kind-specific endpoint selection.
 
 **Decision:** Support STEP, STL, and 3MF downloads.
 
-GLB/glTF is a preview format, not initially a user download format, though it is still cached like every other artifact.
+GLB is a preview format for the MVP and is not a supported user-download format; adding GLB downloads later requires a separate decision. It is still cached like every other artifact.
 
 ## Preview Format
 
-**Decision:** Use GLB/glTF as the browser preview format.
+**Decision:** Use GLB as the MVP browser preview artifact.
 
-GLB is generated as a separate Onshape export for the same selected configuration. It is not derived locally from STEP, STL, or 3MF in the MVP.
+GLB is generated as a separate Onshape export for the same selected configuration. It is not derived locally from STEP, STL, or 3MF in the MVP. Documentation may mention glTF only as the broader format family or Onshape translation terminology; cache keys, manifests, public URLs, and viewer behavior should treat preview output as one `.glb` artifact.
 
 ## Public API
 
@@ -72,11 +78,23 @@ Move to Tigris JSON or a relational database only when admin-editable catalog re
 
 The initial service is a Rust `axum` app on Fly.io, served at `https://onshape-export.fly.dev` if that app name is available. It handles public pages, parameter validation, queue submission, status routes, Onshape orchestration, and Tigris object writes.
 
+## Worker Topology
+
+**Decision:** Run the MVP web server and worker loop in one Rust process.
+
+The initial Fly deployment uses one Rust service process with the public `axum` server and a bounded embedded background worker loop. SQLite lives on the same Fly volume and provides transactional job coordination for that process. Separate Fly worker process groups are deferred because they require verified shared storage semantics or a move to Postgres or another shared coordination backend.
+
 ## Public Artifact Delivery
 
 **Decision:** Completed artifacts are public.
 
 The product is a public anonymous catalog, so completed GLB, STEP, STL, and 3MF outputs do not need signed or expiring URLs. Keep internal operational state out of public object prefixes and do not expose object listing.
+
+## Artifact Invalidation
+
+**Decision:** Normal MVP cache invalidation uses supersession, not overwrite or deletion.
+
+Public artifact objects are immutable in normal operation. Exporter, schema, catalog, option, or parameter changes produce new artifact keys and update manifests or index state to point at the newer outputs. Older public URLs may remain addressable and can be marked superseded for operational visibility. Deletion is reserved for explicit operator cleanup, legal or IP concerns, or storage-cost management.
 
 ## Admin Surface
 
