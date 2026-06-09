@@ -11,7 +11,7 @@ Initial admin operations:
 - Generate missing GLB previews.
 - Generate missing STEP, STL, and 3MF exports.
 - Inspect job status and failures.
-- Retry failed jobs.
+- Retry all failed jobs, one failed job by work key, or failed jobs by kind.
 - Invalidate artifacts after exporter option changes, deleting the object-store
   object before removing the SQLite artifact record.
 - Prune artifacts older than an explicit age threshold, with dry-run support.
@@ -25,13 +25,17 @@ onshape-export parameters refresh <slug|--all>
 onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]
 onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]
 onshape-export failures list
-onshape-export failures retry
+onshape-export failures retry [--all|<work-key>|--kind <job-kind>]
 onshape-export artifacts list <slug|--all>
 onshape-export artifacts invalidate <artifact-key>
 onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]
 ```
 
 `default` uses Onshape parameter defaults. A preset slug targets a model's catalog-defined `parameterPresets` entry. `--all-parameter-sets` generates the default set plus every configured preset.
+
+`failures retry` without arguments preserves the broad all-failures behavior.
+Use a listed work key or `--kind <job-kind>` when only one failed operation class
+should be retried.
 
 `artifacts prune` uses SQLite artifact records as the source of truth, deletes
 each matching object-store object, removes the artifact record, and rewrites the

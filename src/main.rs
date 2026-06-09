@@ -79,6 +79,13 @@ struct PruneOptions {
     dry_run: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FailureRetrySelector<'a> {
+    All,
+    Kind(&'a str),
+    WorkKey(&'a str),
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ArtifactManifest {
@@ -271,10 +278,26 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             }
             Ok(())
         }
-        ("failures", [subcommand]) if subcommand == "retry" => {
+        ("failures", [subcommand, retry_args @ ..]) if subcommand == "retry" => {
+            let selector = optional_failure_retry_selector(retry_args)?;
             let state = cli_state(config).await?;
-            let count = state.db.retry_failed_jobs().await?;
-            println!("marked {count} failed jobs for retry");
+            match selector {
+                FailureRetrySelector::All => {
+                    let count = state.db.retry_failed_jobs().await?;
+                    println!("marked {count} failed jobs for retry");
+                }
+                FailureRetrySelector::Kind(job_kind) => {
+                    let count = state.db.retry_failed_jobs_by_kind(job_kind).await?;
+                    println!("marked {count} {job_kind} failed job(s) for retry");
+                }
+                FailureRetrySelector::WorkKey(work_key) => {
+                    if state.db.retry_failed_job(work_key).await? {
+                        println!("marked failed job {work_key} for retry");
+                    } else {
+                        println!("failed job not found or not retryable: {work_key}");
+                    }
+                }
+            }
             Ok(())
         }
         ("artifacts", [subcommand, selector, output_args @ ..]) if subcommand == "list" => {
@@ -382,6 +405,19 @@ fn optional_output_format(args: &[String]) -> anyhow::Result<OutputFormat> {
         [flag] if flag == "--json" => Ok(OutputFormat::Json),
         [flag] => anyhow::bail!("unknown output option: {flag}"),
         _ => anyhow::bail!("expected at most one output option"),
+    }
+}
+
+fn optional_failure_retry_selector(args: &[String]) -> anyhow::Result<FailureRetrySelector<'_>> {
+    match args {
+        [] => Ok(FailureRetrySelector::All),
+        [flag] if flag == "--all" => Ok(FailureRetrySelector::All),
+        [flag, job_kind] if flag == "--kind" => Ok(FailureRetrySelector::Kind(job_kind)),
+        [work_key] if work_key.starts_with("--") => {
+            anyhow::bail!("unknown failures retry option: {work_key}")
+        }
+        [work_key] => Ok(FailureRetrySelector::WorkKey(work_key)),
+        _ => anyhow::bail!("expected at most one failure retry selector, or --kind <job-kind>"),
     }
 }
 
@@ -637,7 +673,7 @@ fn validated_parameter_set(
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export failures list [--json]\n  onshape-export failures retry\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
+        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
     );
 }
 
@@ -2018,6 +2054,29 @@ mod tests {
             OutputFormat::Json
         );
         assert!(optional_output_format(&["--yaml".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn parses_optional_failure_retry_selector() {
+        assert_eq!(
+            optional_failure_retry_selector(&[]).unwrap(),
+            FailureRetrySelector::All
+        );
+        assert_eq!(
+            optional_failure_retry_selector(&["--all".to_owned()]).unwrap(),
+            FailureRetrySelector::All
+        );
+        assert_eq!(
+            optional_failure_retry_selector(&["preview_glb:demo:abc".to_owned()]).unwrap(),
+            FailureRetrySelector::WorkKey("preview_glb:demo:abc")
+        );
+        assert_eq!(
+            optional_failure_retry_selector(&["--kind".to_owned(), "preview_glb".to_owned()])
+                .unwrap(),
+            FailureRetrySelector::Kind("preview_glb")
+        );
+        assert!(optional_failure_retry_selector(&["--missing".to_owned()]).is_err());
+        assert!(optional_failure_retry_selector(&["one".to_owned(), "two".to_owned()]).is_err());
     }
 
     #[test]

@@ -397,6 +397,40 @@ impl Database {
         Ok(result.rows_affected())
     }
 
+    pub async fn retry_failed_job(&self, work_key: &str) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE jobs
+            SET status = 'queued',
+                error_summary = NULL,
+                lease_until = NULL,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE work_key = ? AND status = 'failed' AND payload_json <> '{}'
+            "#,
+        )
+        .bind(work_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn retry_failed_jobs_by_kind(&self, job_kind: &str) -> sqlx::Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE jobs
+            SET status = 'queued',
+                error_summary = NULL,
+                lease_until = NULL,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE job_kind = ? AND status = 'failed' AND payload_json <> '{}'
+            "#,
+        )
+        .bind(job_kind)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     async fn apply_pragmas(pool: &SqlitePool) -> sqlx::Result<()> {
         pool.execute("PRAGMA journal_mode = WAL").await?;
         pool.execute("PRAGMA synchronous = FULL").await?;
@@ -529,6 +563,53 @@ mod tests {
 
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].artifact_key, "old");
+    }
+
+    #[tokio::test]
+    async fn failed_jobs_can_be_retried_by_work_key() {
+        let db = test_database().await;
+        let payload = r#"{"kind":"parameter_refresh","model_slug":"demo"}"#;
+
+        db.enqueue_job("work", "parameter_refresh", payload)
+            .await
+            .unwrap();
+        let job = db.claim_next_job(60).await.unwrap().unwrap();
+        db.finish_job("work", job.attempt, "failed", Some("boom"))
+            .await
+            .unwrap();
+
+        assert!(db.retry_failed_job("work").await.unwrap());
+        let job = db.job("work").await.unwrap().unwrap();
+        assert_eq!(job.status, "queued");
+        assert_eq!(job.error_summary, None);
+        assert!(!db.retry_failed_job("missing").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn failed_jobs_can_be_retried_by_kind() {
+        let db = test_database().await;
+        let payload = r#"{"kind":"parameter_refresh","model_slug":"demo"}"#;
+        for (work_key, job_kind) in [
+            ("parameters", "parameter_refresh"),
+            ("preview", "preview_glb"),
+            ("download", "download_export"),
+        ] {
+            db.enqueue_job(work_key, job_kind, payload).await.unwrap();
+            let job = db.claim_next_job(60).await.unwrap().unwrap();
+            db.finish_job(work_key, job.attempt, "failed", Some("boom"))
+                .await
+                .unwrap();
+        }
+
+        let count = db.retry_failed_jobs_by_kind("preview_glb").await.unwrap();
+
+        assert_eq!(count, 1);
+        assert_eq!(db.job("preview").await.unwrap().unwrap().status, "queued");
+        assert_eq!(
+            db.job("parameters").await.unwrap().unwrap().status,
+            "failed"
+        );
+        assert_eq!(db.job("download").await.unwrap().unwrap().status, "failed");
     }
 
     #[tokio::test]

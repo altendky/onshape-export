@@ -122,6 +122,8 @@ Implemented hardening:
 - Successful preview/export generation now rewrites a Tigris manifest for the
   selected model configuration from SQLite artifact records; invalidation
   rewrites the same manifest after deleting the artifact record.
+- `failures retry` supports targeted retries by work key or job kind, while
+  preserving all-failures retry as the default.
 
 ## Phase 6: Runtime Hardening
 
