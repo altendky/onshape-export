@@ -32,6 +32,8 @@ pub struct Parameter {
     pub precision: Option<u32>,
     #[serde(default)]
     pub widget: Option<String>,
+    #[serde(default)]
+    pub units: Option<String>,
     pub raw: Value,
 }
 
@@ -137,7 +139,7 @@ pub fn validate_values(
                 }
                 ParameterKind::Number => {
                     if value.parse::<f64>().is_ok() {
-                        values.insert(parameter.id.clone(), value.clone());
+                        values.insert(parameter.id.clone(), parameter.configuration_value(value));
                     } else {
                         errors.push(format!("{} must be a number", parameter.label));
                     }
@@ -186,13 +188,12 @@ fn normalize_parameter(value: &Value) -> Option<Parameter> {
         .get("defaultValue")
         .or_else(|| message.get("default"))
         .or_else(|| message.get("value"))
-        .or_else(|| {
-            message
-                .get("rangeAndDefault")
-                .and_then(|value| value.get("message"))
-                .and_then(|value| value.get("defaultValue"))
-        })
+        .or_else(|| range_and_default_message(message).and_then(|value| value.get("defaultValue")))
         .and_then(value_to_string);
+    let units = range_and_default_message(message)
+        .and_then(|value| value.get("units"))
+        .and_then(value_to_string)
+        .filter(|units| !units.is_empty());
     let type_hint = first_string(object, &["type", "typeName"])
         .or_else(|| first_string(message, &["type", "parameterType", "quantityType"]))
         .unwrap_or_default()
@@ -230,8 +231,37 @@ fn normalize_parameter(value: &Value) -> Option<Parameter> {
         hidden: false,
         precision: None,
         widget: None,
+        units,
         raw: value.clone(),
     })
+}
+
+impl Parameter {
+    fn configuration_value(&self, value: &str) -> String {
+        match self.units.as_deref().and_then(onshape_unit_suffix) {
+            Some(unit) => format!("{value} {unit}"),
+            None => value.to_owned(),
+        }
+    }
+}
+
+fn range_and_default_message(message: &serde_json::Map<String, Value>) -> Option<&Value> {
+    message
+        .get("rangeAndDefault")
+        .and_then(|value| value.get("message"))
+}
+
+fn onshape_unit_suffix(units: &str) -> Option<&'static str> {
+    match units {
+        "millimeter" => Some("mm"),
+        "centimeter" => Some("cm"),
+        "meter" => Some("m"),
+        "inch" => Some("in"),
+        "foot" => Some("ft"),
+        "degree" => Some("deg"),
+        "radian" => Some("rad"),
+        _ => None,
+    }
 }
 
 fn find_parameter_array(value: &Value) -> Option<&Vec<Value>> {
@@ -379,10 +409,38 @@ mod tests {
         assert_eq!(schema.parameters.len(), 3);
         assert_eq!(schema.parameters[0].id, "wallThickness");
         assert_eq!(schema.parameters[0].default_value.as_deref(), Some("1.5"));
+        assert_eq!(schema.parameters[0].units.as_deref(), Some("millimeter"));
         assert_eq!(schema.parameters[0].kind, ParameterKind::Number);
         assert_eq!(schema.parameters[1].kind, ParameterKind::Boolean);
         assert_eq!(schema.parameters[2].kind, ParameterKind::Enum);
         assert_eq!(schema.parameters[2].options[0].label, "None");
+    }
+
+    #[test]
+    fn validates_quantity_values_with_units_for_configuration() {
+        let schema = ParameterSchema {
+            schema_version: SCHEMA_VERSION,
+            source: source(),
+            parameters: vec![Parameter {
+                id: "wallThickness".to_owned(),
+                label: "Wall Thickness".to_owned(),
+                description: None,
+                kind: ParameterKind::Number,
+                required: true,
+                default_value: None,
+                options: Vec::new(),
+                hidden: false,
+                precision: None,
+                widget: None,
+                units: Some("millimeter".to_owned()),
+                raw: Value::Null,
+            }],
+        };
+        let submitted = HashMap::from([("wallThickness".to_owned(), "1.5".to_owned())]);
+
+        let validated = validate_values(&schema, &submitted, false).unwrap();
+
+        assert_eq!(validated.values["wallThickness"], "1.5 mm");
     }
 
     #[test]
@@ -436,6 +494,7 @@ mod tests {
                 hidden: false,
                 precision: None,
                 widget: None,
+                units: None,
                 raw: Value::Null,
             }],
         };
