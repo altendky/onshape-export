@@ -44,7 +44,7 @@ Hashing rules:
 - Use SHA-256 encoded as lowercase hex.
 - Do not truncate hashes in the MVP.
 - Prefix hashable payloads with a domain/version such as `source-v1`, `config-v1`, `options-v1`, or `work-v1`.
-- Use canonical JSON for hash preimages. Prefer RFC 8785 JSON Canonicalization Scheme unless implementation friction makes a smaller documented equivalent necessary.
+- Use RFC 8785 JSON Canonicalization Scheme for JSON hash preimages in the MVP. Any non-RFC-8785 canonicalization must be introduced as a separate versioned algorithm with documented rules and golden test vectors before use.
 - Hash typed, validated parameter values after defaults and catalog overrides are applied.
 - Include units where they affect the Onshape configuration string.
 - Do not rely on `slug` for immutable identity. Slugs are useful for URLs and display, but source IDs and hashes own uniqueness.
