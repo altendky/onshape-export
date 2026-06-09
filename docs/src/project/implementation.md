@@ -129,6 +129,7 @@ Implemented pieces:
 - Prometheus-style `/metrics` route with catalog, job, artifact, and artifact-byte gauges.
 - Request handlers enqueue parameter, preview, and download jobs for a background worker instead of running Onshape calls inline.
 - SQLite job leases allow queued or expired work to be claimed without starting duplicate work.
+- Expired running job leases are reclaimable, and job completion is fenced by claim attempt to avoid stale worker status updates.
 - Worker-only runtime mode through `onshape-export worker`, plus `WORKER_ENABLED=false` for web-only `serve` processes.
 
 Possible additions:

@@ -405,7 +405,7 @@ async fn generate_download_for_values(
         return Ok(Some(record.object_key));
     }
 
-    refresh_download(state, model, &values, &config_hash, &artifact_key, format)
+    refresh_download(state, model, values, &config_hash, &artifact_key, format)
         .await
         .map(Some)
 }
@@ -797,13 +797,24 @@ async fn process_next_job(state: &AppState) -> anyhow::Result<bool> {
 
     let result = execute_job(state, &job).await;
     match result {
-        Ok(()) => state.db.finish_job(&job.work_key, "ready", None).await?,
+        Ok(()) => {
+            if !state
+                .db
+                .finish_job(&job.work_key, job.attempt, "ready", None)
+                .await?
+            {
+                tracing::warn!(work_key = %job.work_key, attempt = job.attempt, "job lease was already reclaimed before completion");
+            }
+        }
         Err(error) => {
             let summary = error.to_string();
-            state
+            if !state
                 .db
-                .finish_job(&job.work_key, "failed", Some(&summary))
-                .await?;
+                .finish_job(&job.work_key, job.attempt, "failed", Some(&summary))
+                .await?
+            {
+                tracing::warn!(work_key = %job.work_key, attempt = job.attempt, "job lease was already reclaimed before failure was recorded");
+            }
             return Err(error);
         }
     }

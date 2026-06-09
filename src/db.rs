@@ -34,6 +34,7 @@ pub struct JobLease {
     pub work_key: String,
     pub job_kind: String,
     pub payload_json: String,
+    pub attempt: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -163,10 +164,11 @@ impl Database {
                 SELECT id
                 FROM jobs
                 WHERE status IN ('queued', 'expired')
-                ORDER BY created_at
+                   OR (status = 'running' AND lease_until <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                ORDER BY CASE WHEN status = 'queued' THEN 0 ELSE 1 END, created_at
                 LIMIT 1
             )
-            RETURNING work_key, job_kind, payload_json
+            RETURNING work_key, job_kind, payload_json, attempt
             "#,
         )
         .bind(lease_seconds)
@@ -177,6 +179,7 @@ impl Database {
                 work_key: row.get("work_key"),
                 job_kind: row.get("job_kind"),
                 payload_json: row.get("payload_json"),
+                attempt: row.get("attempt"),
             })
         })
     }
@@ -184,22 +187,27 @@ impl Database {
     pub async fn finish_job(
         &self,
         work_key: &str,
+        attempt: i64,
         status: &str,
         error_summary: Option<&str>,
-    ) -> sqlx::Result<()> {
-        sqlx::query(
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
             r#"
             UPDATE jobs
-            SET status = ?, error_summary = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE work_key = ?
+            SET status = ?,
+                error_summary = ?,
+                lease_until = NULL,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE work_key = ? AND attempt = ? AND status = 'running'
             "#,
         )
         .bind(status)
         .bind(error_summary)
         .bind(work_key)
+        .bind(attempt)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(result.rows_affected() == 1)
     }
 
     pub async fn artifact(&self, artifact_key: &str) -> sqlx::Result<Option<ArtifactRecord>> {
@@ -398,7 +406,11 @@ mod tests {
         );
         let job = db.claim_next_job(60).await.unwrap().unwrap();
         assert_eq!(job.work_key, "work");
-        db.finish_job("work", "ready", None).await.unwrap();
+        assert!(
+            db.finish_job("work", job.attempt, "ready", None)
+                .await
+                .unwrap()
+        );
 
         assert!(
             db.enqueue_job("work", "parameter_refresh", payload)
@@ -410,7 +422,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn running_jobs_are_not_reclaimed_without_retry() {
+    async fn running_jobs_are_reclaimed_after_lease_expiry() {
         let db = test_database().await;
         let payload = r#"{"kind":"parameter_refresh","model_slug":"demo"}"#;
 
@@ -419,8 +431,23 @@ mod tests {
                 .await
                 .unwrap()
         );
-        let job = db.claim_next_job(0).await.unwrap().unwrap();
-        assert_eq!(job.work_key, "work");
+        let first_lease = db.claim_next_job(0).await.unwrap().unwrap();
+        assert_eq!(first_lease.work_key, "work");
+
+        let second_lease = db.claim_next_job(60).await.unwrap().unwrap();
+        assert_eq!(second_lease.work_key, "work");
+        assert_eq!(second_lease.attempt, first_lease.attempt + 1);
+
+        assert!(
+            !db.finish_job("work", first_lease.attempt, "ready", None)
+                .await
+                .unwrap()
+        );
+        assert!(
+            db.finish_job("work", second_lease.attempt, "ready", None)
+                .await
+                .unwrap()
+        );
 
         assert!(db.claim_next_job(0).await.unwrap().is_none());
     }
