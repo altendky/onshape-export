@@ -188,17 +188,6 @@ fn normalize_parameter(value: &Value) -> Option<Parameter> {
     let id = first_string(message, &["parameterId", "id", "messageId"])?;
     let label =
         first_string(message, &["parameterName", "name", "label"]).unwrap_or_else(|| id.clone());
-    let options = extract_options(value);
-    let default_value = message
-        .get("defaultValue")
-        .or_else(|| message.get("default"))
-        .or_else(|| message.get("value"))
-        .or_else(|| range_and_default_message(message).and_then(|value| value.get("defaultValue")))
-        .and_then(value_to_string);
-    let units = range_and_default_message(message)
-        .and_then(|value| value.get("units"))
-        .and_then(value_to_string)
-        .filter(|units| !units.is_empty());
     let type_hint = first_text(object, &["typeName", "parameterType", "type"])
         .or_else(|| {
             first_text(
@@ -208,6 +197,24 @@ fn normalize_parameter(value: &Value) -> Option<Parameter> {
         })
         .unwrap_or_default()
         .to_ascii_lowercase();
+    let is_integer = type_hint.contains("integer")
+        || first_text(message, &["quantityType"])
+            .is_some_and(|quantity_type| quantity_type == "INTEGER");
+    let options = extract_options(value);
+    let default_value = normalize_default_value(
+        message
+            .get("defaultValue")
+            .or_else(|| message.get("default"))
+            .or_else(|| message.get("value"))
+            .or_else(|| {
+                range_and_default_message(message).and_then(|value| value.get("defaultValue"))
+            }),
+        is_integer,
+    );
+    let units = range_and_default_message(message)
+        .and_then(|value| value.get("units"))
+        .and_then(value_to_string)
+        .filter(|units| !units.is_empty());
     let kind = if !options.is_empty() {
         ParameterKind::Enum
     } else if type_hint.contains("bool") || object.values().any(Value::is_boolean) {
@@ -239,7 +246,7 @@ fn normalize_parameter(value: &Value) -> Option<Parameter> {
         default_value,
         options,
         hidden: false,
-        precision: None,
+        precision: is_integer.then_some(0),
         widget: None,
         units,
         raw: value.clone(),
@@ -346,6 +353,17 @@ fn first_text(object: &serde_json::Map<String, Value>, names: &[&str]) -> Option
         .find_map(|value| value.as_str().map(ToOwned::to_owned))
 }
 
+fn normalize_default_value(value: Option<&Value>, is_integer: bool) -> Option<String> {
+    if is_integer
+        && let Some(number) = value.and_then(Value::as_f64)
+        && number.fract() == 0.0
+    {
+        return Some((number as i64).to_string());
+    }
+
+    value.and_then(value_to_string)
+}
+
 fn value_to_string(value: &Value) -> Option<String> {
     match value {
         Value::String(value) => Some(value.clone()),
@@ -397,6 +415,20 @@ mod tests {
                 "configurationParameters": [
                     {
                         "message": {
+                            "parameterId": "xn",
+                            "parameterName": "xn",
+                            "quantityType": "INTEGER",
+                            "rangeAndDefault": {
+                                "message": {
+                                    "defaultValue": 2.0,
+                                    "units": ""
+                                }
+                            }
+                        },
+                        "typeName": "BTMConfigurationParameterQuantity"
+                    },
+                    {
+                        "message": {
                             "parameterId": "wallThickness",
                             "parameterName": "wallThickness",
                             "quantityType": "LENGTH",
@@ -433,15 +465,18 @@ mod tests {
             }),
         );
 
-        assert_eq!(schema.parameters.len(), 3);
-        assert_eq!(schema.parameters[0].id, "wallThickness");
-        assert_eq!(schema.parameters[0].default_value.as_deref(), Some("1.5"));
-        assert_eq!(schema.parameters[0].units.as_deref(), Some("millimeter"));
-        assert_eq!(schema.parameters[0].kind, ParameterKind::Number);
-        assert_eq!(schema.parameters[1].default_value.as_deref(), Some("true"));
-        assert_eq!(schema.parameters[1].kind, ParameterKind::Boolean);
-        assert_eq!(schema.parameters[2].kind, ParameterKind::Enum);
-        assert_eq!(schema.parameters[2].options[0].label, "None");
+        assert_eq!(schema.parameters.len(), 4);
+        assert_eq!(schema.parameters[0].id, "xn");
+        assert_eq!(schema.parameters[0].default_value.as_deref(), Some("2"));
+        assert_eq!(schema.parameters[0].precision, Some(0));
+        assert_eq!(schema.parameters[1].id, "wallThickness");
+        assert_eq!(schema.parameters[1].default_value.as_deref(), Some("1.5"));
+        assert_eq!(schema.parameters[1].units.as_deref(), Some("millimeter"));
+        assert_eq!(schema.parameters[1].kind, ParameterKind::Number);
+        assert_eq!(schema.parameters[2].default_value.as_deref(), Some("true"));
+        assert_eq!(schema.parameters[2].kind, ParameterKind::Boolean);
+        assert_eq!(schema.parameters[3].kind, ParameterKind::Enum);
+        assert_eq!(schema.parameters[3].options[0].label, "None");
     }
 
     #[test]
