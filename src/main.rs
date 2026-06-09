@@ -995,8 +995,11 @@ fn render_model_html(
     try {{
       const response = await fetch(submitter.formAction, {{
         method: "POST",
-        body: new FormData(form),
-        headers: {{ "Accept": "text/html" }},
+        body: new URLSearchParams(new FormData(form)),
+        headers: {{
+          "Accept": "text/html",
+          "Content-Type": "application/x-www-form-urlencoded",
+        }},
       }});
       if (!response.ok) {{
         throw new Error(`Request failed: ${{response.status}}`);
@@ -2447,6 +2450,8 @@ mod tests {
 
         assert!(html.contains("document.addEventListener(\"submit\""));
         assert!(html.contains("fetch(submitter.formAction"));
+        assert!(html.contains("new URLSearchParams(new FormData(form))"));
+        assert!(html.contains("application/x-www-form-urlencoded"));
         assert!(html.contains("replaceWith(nextMain)"));
     }
 
