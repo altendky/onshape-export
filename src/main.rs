@@ -2021,7 +2021,7 @@ fn render_parameter_controls(schema: &ParameterSchema) -> String {
         .map(|parameter| {
             let id = escape_html(&parameter.id);
             let label = escape_html(&parameter.label);
-            let default_value = parameter.default_value.as_deref().unwrap_or_default();
+            let default_value = parameter.display_value().unwrap_or_default();
             let required = if parameter.required { " required" } else { "" };
             let help = parameter
                 .description
@@ -2031,26 +2031,32 @@ fn render_parameter_controls(schema: &ParameterSchema) -> String {
             let input = match parameter.kind {
                 ParameterKind::Text if parameter.widget.as_deref() == Some("textarea") => format!(
                     r#"<textarea id="{id}" name="{id}"{required}>{value}</textarea>"#,
-                    value = escape_html(default_value),
+                    value = escape_html(&default_value),
                 ),
                 ParameterKind::Text => {
                     format!(
                         r#"<input id="{id}" name="{id}" value="{value}"{required}>"#,
-                        value = escape_html(default_value),
+                        value = escape_html(&default_value),
                     )
                 }
-                ParameterKind::Number => format!(
-                    r#"<input id="{id}" name="{id}" type="{input_type}" step="{step}" value="{value}"{required}>"#,
-                    input_type = if parameter.widget.as_deref() == Some("range") {
-                        "range"
-                    } else {
-                        "number"
-                    },
-                    step = number_step(parameter.precision),
-                    value = escape_html(default_value),
+                ParameterKind::Number if parameter.units.is_some() => format!(
+                    r#"<input id="{id}" name="{id}" value="{value}" inputmode="decimal"{required}>"#,
+                    value = escape_html(&default_value),
                 ),
+                ParameterKind::Number => {
+                    format!(
+                        r#"<input id="{id}" name="{id}" type="{input_type}" step="{step}" value="{value}"{required}>"#,
+                        input_type = if parameter.widget.as_deref() == Some("range") {
+                            "range"
+                        } else {
+                            "number"
+                        },
+                        step = number_step(parameter.precision),
+                        value = escape_html(&default_value),
+                    )
+                }
                 ParameterKind::Boolean => {
-                    let checked = matches!(default_value, "true" | "on" | "1")
+                    let checked = matches!(default_value.as_str(), "true" | "on" | "1")
                         .then_some(" checked")
                         .unwrap_or("");
                     format!(

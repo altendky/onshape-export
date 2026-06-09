@@ -138,7 +138,12 @@ pub fn validate_values(
                     values.insert(parameter.id.clone(), value.clone());
                 }
                 ParameterKind::Number => {
-                    if value.parse::<f64>().is_ok() {
+                    let valid = if parameter.units.is_some() {
+                        !value.trim().is_empty()
+                    } else {
+                        value.parse::<f64>().is_ok()
+                    };
+                    if valid {
                         values.insert(parameter.id.clone(), parameter.configuration_value(value));
                     } else {
                         errors.push(format!("{} must be a number", parameter.label));
@@ -242,7 +247,17 @@ fn normalize_parameter(value: &Value) -> Option<Parameter> {
 }
 
 impl Parameter {
+    pub fn display_value(&self) -> Option<String> {
+        self.default_value
+            .as_deref()
+            .map(|value| self.configuration_value(value))
+    }
+
     fn configuration_value(&self, value: &str) -> String {
+        if value.parse::<f64>().is_err() {
+            return value.to_owned();
+        }
+
         match self.units.as_deref().and_then(onshape_unit_suffix) {
             Some(unit) => format!("{value} {unit}"),
             None => value.to_owned(),
@@ -454,6 +469,37 @@ mod tests {
         let validated = validate_values(&schema, &submitted, false).unwrap();
 
         assert_eq!(validated.values["wallThickness"], "1.5 mm");
+    }
+
+    #[test]
+    fn preserves_user_entered_quantity_units() {
+        let schema = ParameterSchema {
+            schema_version: SCHEMA_VERSION,
+            source: source(),
+            parameters: vec![Parameter {
+                id: "wallThickness".to_owned(),
+                label: "Wall Thickness".to_owned(),
+                description: None,
+                kind: ParameterKind::Number,
+                required: true,
+                default_value: Some("1.5".to_owned()),
+                options: Vec::new(),
+                hidden: false,
+                precision: None,
+                widget: None,
+                units: Some("millimeter".to_owned()),
+                raw: Value::Null,
+            }],
+        };
+        let submitted = HashMap::from([("wallThickness".to_owned(), "0.125 in".to_owned())]);
+
+        let validated = validate_values(&schema, &submitted, false).unwrap();
+
+        assert_eq!(
+            schema.parameters[0].display_value().as_deref(),
+            Some("1.5 mm")
+        );
+        assert_eq!(validated.values["wallThickness"], "0.125 in");
     }
 
     #[test]
