@@ -11,7 +11,7 @@ use anyhow::Context;
 use axum::{
     Form, Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::{StatusCode, header::CONTENT_TYPE},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
@@ -314,6 +314,7 @@ fn app(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/healthz", get(healthz))
+        .route("/metrics", get(metrics))
         .route(
             "/models/{slug}",
             get(model_page).post(validate_model_config),
@@ -333,6 +334,18 @@ async fn healthz(State(state): State<AppState>) -> Result<&'static str, AppError
     let _ = state.onshape.has_credentials();
     let _ = state.onshape.client();
     Ok("ok\n")
+}
+
+async fn metrics(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+    let job_metrics = state.db.job_metrics().await?;
+    let artifact_metrics = state.db.artifact_metrics().await?;
+    let body = render_metrics(
+        state.catalog.models().len(),
+        &job_metrics,
+        &artifact_metrics,
+    );
+
+    Ok(([(CONTENT_TYPE, "text/plain; version=0.0.4")], body))
 }
 
 async fn index(State(state): State<AppState>) -> Html<String> {
@@ -1147,6 +1160,67 @@ fn render_parameter_controls(schema: &ParameterSchema) -> String {
         .collect()
 }
 
+fn render_metrics(
+    catalog_models: usize,
+    job_metrics: &[db::JobMetric],
+    artifact_metrics: &[db::ArtifactMetric],
+) -> String {
+    let mut output = String::from(
+        "# HELP onshape_export_catalog_models Configured catalog models.\n\
+# TYPE onshape_export_catalog_models gauge\n",
+    );
+    output.push_str(&format!(
+        "onshape_export_catalog_models {}\n",
+        catalog_models
+    ));
+
+    output.push_str(
+        "# HELP onshape_export_jobs SQLite job rows by kind and status.\n\
+# TYPE onshape_export_jobs gauge\n",
+    );
+    for metric in job_metrics {
+        output.push_str(&format!(
+            "onshape_export_jobs{{job_kind=\"{}\",status=\"{}\"}} {}\n",
+            escape_metric_label(&metric.job_kind),
+            escape_metric_label(&metric.status),
+            metric.count
+        ));
+    }
+
+    output.push_str(
+        "# HELP onshape_export_artifacts SQLite artifact rows by output kind.\n\
+# TYPE onshape_export_artifacts gauge\n",
+    );
+    for metric in artifact_metrics {
+        output.push_str(&format!(
+            "onshape_export_artifacts{{output_kind=\"{}\"}} {}\n",
+            escape_metric_label(&metric.output_kind),
+            metric.count
+        ));
+    }
+
+    output.push_str(
+        "# HELP onshape_export_artifact_bytes SQLite artifact bytes by output kind.\n\
+# TYPE onshape_export_artifact_bytes gauge\n",
+    );
+    for metric in artifact_metrics {
+        output.push_str(&format!(
+            "onshape_export_artifact_bytes{{output_kind=\"{}\"}} {}\n",
+            escape_metric_label(&metric.output_kind),
+            metric.byte_len
+        ));
+    }
+
+    output
+}
+
+fn escape_metric_label(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('"', "\\\"")
+}
+
 fn init_tracing() {
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
@@ -1211,5 +1285,33 @@ mod tests {
             configuration_hash(&first).unwrap(),
             configuration_hash(&second).unwrap()
         );
+    }
+
+    #[test]
+    fn renders_prometheus_metrics() {
+        let body = render_metrics(
+            2,
+            &[db::JobMetric {
+                job_kind: "export_step".to_owned(),
+                status: "ready".to_owned(),
+                count: 3,
+            }],
+            &[db::ArtifactMetric {
+                output_kind: "step".to_owned(),
+                count: 3,
+                byte_len: 42,
+            }],
+        );
+
+        assert!(body.contains("onshape_export_catalog_models 2\n"));
+        assert!(
+            body.contains("onshape_export_jobs{job_kind=\"export_step\",status=\"ready\"} 3\n")
+        );
+        assert!(body.contains("onshape_export_artifact_bytes{output_kind=\"step\"} 42\n"));
+    }
+
+    #[test]
+    fn escapes_metric_labels() {
+        assert_eq!(escape_metric_label("a\\b\nc\"d"), "a\\\\b\\nc\\\"d");
     }
 }

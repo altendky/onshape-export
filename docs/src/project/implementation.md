@@ -119,11 +119,16 @@ Remaining hardening:
 
 Add robustness only as needed.
 
+Current phase foundation implemented.
+
+Implemented pieces:
+
+- Prometheus-style `/metrics` route with catalog, job, artifact, and artifact-byte gauges.
+
 Possible additions:
 
 - Separate Fly worker process group.
 - Postgres if SQLite-on-volume limits become painful.
 - Web admin UI and authentication if CLI operations become insufficient.
 - Scheduled rebuilds.
-- Metrics and tracing.
 - Cache eviction policies.

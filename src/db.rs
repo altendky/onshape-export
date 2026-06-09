@@ -28,6 +28,20 @@ pub struct JobRecord {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct JobMetric {
+    pub job_kind: String,
+    pub status: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArtifactMetric {
+    pub output_kind: String,
+    pub count: i64,
+    pub byte_len: i64,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ArtifactUpsert<'a> {
     pub artifact_key: &'a str,
@@ -228,6 +242,34 @@ impl Database {
         .map(|rows| rows.into_iter().map(job_record_from_row).collect())
     }
 
+    pub async fn job_metrics(&self) -> sqlx::Result<Vec<JobMetric>> {
+        sqlx::query(
+            r#"
+            SELECT job_kind, status, COUNT(*) AS count
+            FROM jobs
+            GROUP BY job_kind, status
+            ORDER BY job_kind, status
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| rows.into_iter().map(job_metric_from_row).collect())
+    }
+
+    pub async fn artifact_metrics(&self) -> sqlx::Result<Vec<ArtifactMetric>> {
+        sqlx::query(
+            r#"
+            SELECT output_kind, COUNT(*) AS count, COALESCE(SUM(byte_len), 0) AS byte_len
+            FROM artifacts
+            GROUP BY output_kind
+            ORDER BY output_kind
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| rows.into_iter().map(artifact_metric_from_row).collect())
+    }
+
     pub async fn retry_failed_jobs(&self) -> sqlx::Result<u64> {
         let result = sqlx::query(
             r#"
@@ -275,5 +317,21 @@ fn job_record_from_row(row: sqlx::sqlite::SqliteRow) -> JobRecord {
         attempt: row.get("attempt"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+    }
+}
+
+fn job_metric_from_row(row: sqlx::sqlite::SqliteRow) -> JobMetric {
+    JobMetric {
+        job_kind: row.get("job_kind"),
+        status: row.get("status"),
+        count: row.get("count"),
+    }
+}
+
+fn artifact_metric_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactMetric {
+    ArtifactMetric {
+        output_kind: row.get("output_kind"),
+        count: row.get("count"),
+        byte_len: row.get("byte_len"),
     }
 }
