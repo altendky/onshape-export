@@ -1,3 +1,4 @@
+use serde::Serialize;
 use sqlx::{Executor, Row, SqlitePool, sqlite::SqlitePoolOptions};
 
 #[derive(Debug, Clone)]
@@ -5,7 +6,7 @@ pub struct ParameterMetadataRecord {
     pub normalized_object_key: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ArtifactRecord {
     pub artifact_key: String,
     pub model_slug: String,
@@ -17,7 +18,7 @@ pub struct ArtifactRecord {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct JobRecord {
     pub work_key: String,
     pub job_kind: String,

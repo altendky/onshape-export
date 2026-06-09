@@ -113,7 +113,10 @@ Remaining hardening:
 
 - Add richer selectors for targeted parameter sets beyond default values.
 - Add object-store deletion or tombstone handling if invalidation should remove Tigris objects, not only SQLite artifact records.
-- Add structured output formats if operational automation needs JSON instead of tab-delimited text.
+
+Implemented hardening:
+
+- Add structured JSON output for `failures list` and `artifacts list` operational commands.
 
 ## Phase 6: Runtime Hardening
 
