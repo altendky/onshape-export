@@ -23,6 +23,7 @@ tokio = { version = "1.45.1", features = ["macros", "net", "rt-multi-thread", "s
 tower-http = { version = "0.6.6", features = ["trace"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3.20.0"

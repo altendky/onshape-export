@@ -8,6 +8,7 @@ mod storage;
 use std::{
     collections::{BTreeMap, HashMap},
     env,
+    io::{Cursor, Read},
     sync::Arc,
     time::Duration,
 };
@@ -144,6 +145,12 @@ struct ArtifactStatusResponse {
     public_url: Option<String>,
     error_summary: Option<String>,
     updated_at: Option<String>,
+}
+
+struct PreviewArtifact {
+    object_key: String,
+    content_type: &'static str,
+    bytes: Vec<u8>,
 }
 
 #[tokio::main]
@@ -1575,10 +1582,14 @@ async fn refresh_preview(
             &model.exports.preview_options,
         )
         .await?;
-    let object_key = preview_object_key(model, config_hash);
+    let preview_artifact = preview_artifact_from_onshape_bytes(model, config_hash, bytes)?;
     state
         .storage
-        .put_bytes(&object_key, bytes.clone(), "model/gltf-binary")
+        .put_bytes(
+            &preview_artifact.object_key,
+            preview_artifact.bytes.clone(),
+            preview_artifact.content_type,
+        )
         .await?;
     state
         .db
@@ -1587,13 +1598,94 @@ async fn refresh_preview(
             model_slug: &model.slug,
             config_hash,
             output_kind: "preview_glb",
-            object_key: &object_key,
-            content_type: "model/gltf-binary",
-            byte_len: bytes.len() as i64,
+            object_key: &preview_artifact.object_key,
+            content_type: preview_artifact.content_type,
+            byte_len: preview_artifact.bytes.len() as i64,
         })
         .await?;
     rewrite_manifest(state, model, config_hash, Some(values)).await?;
-    Ok(object_key)
+    Ok(preview_artifact.object_key)
+}
+
+fn preview_artifact_from_onshape_bytes(
+    model: &catalog::Model,
+    config_hash: &str,
+    bytes: Vec<u8>,
+) -> anyhow::Result<PreviewArtifact> {
+    if bytes.starts_with(b"glTF") {
+        return Ok(PreviewArtifact {
+            object_key: preview_glb_object_key(model, config_hash),
+            content_type: "model/gltf-binary",
+            bytes,
+        });
+    }
+
+    if bytes.starts_with(b"PK\x03\x04") {
+        return preview_artifact_from_zip(model, config_hash, bytes);
+    }
+
+    anyhow::bail!("Onshape preview export was neither GLB nor ZIP")
+}
+
+fn preview_artifact_from_zip(
+    model: &catalog::Model,
+    config_hash: &str,
+    bytes: Vec<u8>,
+) -> anyhow::Result<PreviewArtifact> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
+    if let Some((index, _)) = largest_zip_entry_with_extension(&mut archive, "glb")? {
+        let bytes = read_zip_entry(&mut archive, index)?;
+        return Ok(PreviewArtifact {
+            object_key: preview_glb_object_key(model, config_hash),
+            content_type: "model/gltf-binary",
+            bytes,
+        });
+    }
+
+    if let Some((index, _)) = largest_zip_entry_with_extension(&mut archive, "gltf")? {
+        let bytes = read_zip_entry(&mut archive, index)?;
+        return Ok(PreviewArtifact {
+            object_key: preview_gltf_object_key(model, config_hash),
+            content_type: "model/gltf+json",
+            bytes,
+        });
+    }
+
+    anyhow::bail!("Onshape preview ZIP did not contain a GLB or glTF file")
+}
+
+fn largest_zip_entry_with_extension(
+    archive: &mut zip::ZipArchive<Cursor<Vec<u8>>>,
+    extension: &str,
+) -> anyhow::Result<Option<(usize, u64)>> {
+    let mut selected = None;
+    for index in 0..archive.len() {
+        let file = archive.by_index(index)?;
+        if file.is_dir() {
+            continue;
+        }
+        let name = file.name().to_ascii_lowercase();
+        if name.ends_with(&format!(".{extension}")) {
+            let size = file.size();
+            if selected
+                .map(|(_, selected_size)| size > selected_size)
+                .unwrap_or(true)
+            {
+                selected = Some((index, size));
+            }
+        }
+    }
+    Ok(selected)
+}
+
+fn read_zip_entry(
+    archive: &mut zip::ZipArchive<Cursor<Vec<u8>>>,
+    index: usize,
+) -> anyhow::Result<Vec<u8>> {
+    let mut file = archive.by_index(index)?;
+    let mut bytes = Vec::with_capacity(file.size() as usize);
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 async fn refresh_download(
@@ -1741,9 +1833,20 @@ fn preview_artifact_key(model: &catalog::Model, config_hash: &str) -> String {
     )
 }
 
-fn preview_object_key(model: &catalog::Model, config_hash: &str) -> String {
+fn preview_glb_object_key(model: &catalog::Model, config_hash: &str) -> String {
     format!(
         "previews/{}/{}/{}/{}/{}/preview.glb",
+        model.slug,
+        model.onshape.version_id,
+        model.onshape.element_id,
+        config_hash,
+        PREVIEW_OPTIONS_VERSION,
+    )
+}
+
+fn preview_gltf_object_key(model: &catalog::Model, config_hash: &str) -> String {
+    format!(
+        "previews/{}/{}/{}/{}/{}/preview.gltf",
         model.slug,
         model.onshape.version_id,
         model.onshape.element_id,
@@ -2207,6 +2310,7 @@ fn escape_html(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn escapes_html() {
@@ -2250,7 +2354,8 @@ mod tests {
         let config_hash = "abc";
 
         assert!(preview_artifact_key(&model, config_hash).ends_with(PREVIEW_OPTIONS_VERSION));
-        assert!(preview_object_key(&model, config_hash).contains(PREVIEW_OPTIONS_VERSION));
+        assert!(preview_glb_object_key(&model, config_hash).contains(PREVIEW_OPTIONS_VERSION));
+        assert!(preview_gltf_object_key(&model, config_hash).contains(PREVIEW_OPTIONS_VERSION));
         assert!(
             download_artifact_key(&model, config_hash, catalog::DownloadFormat::Step)
                 .ends_with(DOWNLOAD_OPTIONS_VERSION)
@@ -2258,6 +2363,39 @@ mod tests {
         assert!(
             download_object_key(&model, config_hash, catalog::DownloadFormat::Step)
                 .contains(DOWNLOAD_OPTIONS_VERSION)
+        );
+    }
+
+    #[test]
+    fn preserves_direct_glb_preview_exports() {
+        let model = test_model();
+        let artifact =
+            preview_artifact_from_onshape_bytes(&model, "abc", b"glTFbytes".to_vec()).unwrap();
+
+        assert!(artifact.object_key.ends_with("preview.glb"));
+        assert_eq!(artifact.content_type, "model/gltf-binary");
+        assert_eq!(artifact.bytes, b"glTFbytes");
+    }
+
+    #[test]
+    fn extracts_largest_gltf_from_zipped_preview_exports() {
+        let model = test_model();
+        let bytes = test_zip(&[
+            ("small.gltf", br#"{"asset":{"version":"2.0"}}"#.as_slice()),
+            (
+                "large.gltf",
+                br#"{"asset":{"version":"2.0"},"meshes":[{}]}"#.as_slice(),
+            ),
+        ]);
+
+        let artifact = preview_artifact_from_onshape_bytes(&model, "abc", bytes).unwrap();
+
+        assert!(artifact.object_key.ends_with("preview.gltf"));
+        assert_eq!(artifact.content_type, "model/gltf+json");
+        assert!(
+            String::from_utf8(artifact.bytes)
+                .unwrap()
+                .contains("meshes")
         );
     }
 
@@ -2398,5 +2536,19 @@ mod tests {
             parameter_presets: Vec::new(),
             parameter_overrides: HashMap::new(),
         }
+    }
+
+    fn test_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut bytes = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut bytes);
+            let options = zip::write::SimpleFileOptions::default();
+            for (name, contents) in entries {
+                writer.start_file(name, options).unwrap();
+                writer.write_all(contents).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        bytes.into_inner()
     }
 }
