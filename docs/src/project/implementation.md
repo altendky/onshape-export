@@ -117,6 +117,8 @@ Remaining hardening:
 Implemented hardening:
 
 - Add structured JSON output for `failures list` and `artifacts list` operational commands.
+- `artifacts invalidate` now deletes the object-store artifact before removing
+  the SQLite artifact record.
 
 ## Phase 6: Runtime Hardening
 

@@ -12,7 +12,8 @@ Initial admin operations:
 - Generate missing STEP, STL, and 3MF exports.
 - Inspect job status and failures.
 - Retry failed jobs.
-- Invalidate artifacts after exporter option changes.
+- Invalidate artifacts after exporter option changes, deleting the object-store
+  object before removing the SQLite artifact record.
 - List cached outputs for a model.
 
 Implemented CLI commands:

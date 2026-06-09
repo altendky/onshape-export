@@ -234,11 +234,21 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
         }
         ("artifacts", [subcommand, artifact_key]) if subcommand == "invalidate" => {
             let state = cli_state(config).await?;
-            if state.db.delete_artifact(artifact_key).await? {
-                println!("invalidated artifact {artifact_key}");
-            } else {
+            let Some(artifact) = state.db.artifact(artifact_key).await? else {
                 println!("artifact not found: {artifact_key}");
-            }
+                return Ok(());
+            };
+
+            state
+                .storage
+                .delete_object(&artifact.object_key)
+                .await
+                .with_context(|| format!("deleting object {}", artifact.object_key))?;
+            state.db.delete_artifact(artifact_key).await?;
+            println!(
+                "invalidated artifact {artifact_key} and deleted {}",
+                artifact.object_key
+            );
             Ok(())
         }
         _ => {
