@@ -1016,7 +1016,7 @@ async fn generate_preview(
             "Parameter metadata is still refreshing. Try again shortly.\n".to_owned(),
         ));
     };
-    let parameter_controls = render_parameter_controls(&parameters);
+    let parameter_controls = render_parameter_controls_with_values(&parameters, &values);
     let validated =
         match validate_values(&parameters, &values, model.parameter_policy.allow_unknown) {
             Ok(validated) => validated,
@@ -1091,7 +1091,7 @@ async fn generate_download(
             "Parameter metadata is still refreshing. Try again shortly.\n".to_owned(),
         ));
     };
-    let parameter_controls = render_parameter_controls(&parameters);
+    let parameter_controls = render_parameter_controls_with_values(&parameters, &values);
     let validated =
         match validate_values(&parameters, &values, model.parameter_policy.allow_unknown) {
             Ok(validated) => validated,
@@ -2138,6 +2138,13 @@ fn render_status_polling(
 }
 
 fn render_parameter_controls(schema: &ParameterSchema) -> String {
+    render_parameter_controls_with_values(schema, &HashMap::new())
+}
+
+fn render_parameter_controls_with_values(
+    schema: &ParameterSchema,
+    values: &HashMap<String, String>,
+) -> String {
     if schema.parameters.is_empty() {
         return "<p>This model does not expose configurable parameters.</p>".to_owned();
     }
@@ -2149,7 +2156,11 @@ fn render_parameter_controls(schema: &ParameterSchema) -> String {
         .map(|parameter| {
             let id = escape_html(&parameter.id);
             let label = escape_html(&parameter.label);
-            let default_value = parameter.display_value().unwrap_or_default();
+            let display_value = values
+                .get(&parameter.id)
+                .cloned()
+                .or_else(|| parameter.display_value())
+                .unwrap_or_default();
             let required = if parameter.required { " required" } else { "" };
             let help = parameter
                 .description
@@ -2159,17 +2170,17 @@ fn render_parameter_controls(schema: &ParameterSchema) -> String {
             let input = match parameter.kind {
                 ParameterKind::Text if parameter.widget.as_deref() == Some("textarea") => format!(
                     r#"<textarea id="{id}" name="{id}"{required}>{value}</textarea>"#,
-                    value = escape_html(&default_value),
+                    value = escape_html(&display_value),
                 ),
                 ParameterKind::Text => {
                     format!(
                         r#"<input id="{id}" name="{id}" value="{value}"{required}>"#,
-                        value = escape_html(&default_value),
+                        value = escape_html(&display_value),
                     )
                 }
                 ParameterKind::Number if parameter.units.is_some() => format!(
                     r#"<input id="{id}" name="{id}" value="{value}" inputmode="decimal"{required}>"#,
-                    value = escape_html(&default_value),
+                    value = escape_html(&display_value),
                 ),
                 ParameterKind::Number => {
                     format!(
@@ -2180,11 +2191,11 @@ fn render_parameter_controls(schema: &ParameterSchema) -> String {
                             "number"
                         },
                         step = number_step(parameter.precision),
-                        value = escape_html(&default_value),
+                        value = escape_html(&display_value),
                     )
                 }
                 ParameterKind::Boolean => {
-                    let checked = matches!(default_value.as_str(), "true" | "on" | "1")
+                    let checked = matches!(display_value.as_str(), "true" | "on" | "1")
                         .then_some(" checked")
                         .unwrap_or("");
                     format!(
@@ -2196,7 +2207,7 @@ fn render_parameter_controls(schema: &ParameterSchema) -> String {
                         .options
                         .iter()
                         .map(|option| {
-                            let selected = if option.value == default_value {
+                            let selected = if option.value == display_value {
                                 " selected"
                             } else {
                                 ""
@@ -2340,6 +2351,34 @@ mod tests {
     #[test]
     fn escapes_html() {
         assert_eq!(escape_html("<&>\"'"), "&lt;&amp;&gt;&quot;&#39;");
+    }
+
+    #[test]
+    fn parameter_controls_preserve_submitted_values() {
+        let schema = ParameterSchema {
+            schema_version: parameters::SCHEMA_VERSION,
+            source: test_model().onshape,
+            parameters: vec![parameters::Parameter {
+                id: "width".to_owned(),
+                label: "Width".to_owned(),
+                description: None,
+                kind: ParameterKind::Number,
+                required: false,
+                default_value: Some("42".to_owned()),
+                options: Vec::new(),
+                hidden: false,
+                precision: None,
+                widget: None,
+                units: Some("millimeter".to_owned()),
+                raw: Value::Null,
+            }],
+        };
+        let values = HashMap::from([("width".to_owned(), "2 in".to_owned())]);
+
+        let controls = render_parameter_controls_with_values(&schema, &values);
+
+        assert!(controls.contains(r#"value="2 in""#));
+        assert!(!controls.contains(r#"value="42 mm""#));
     }
 
     #[test]
