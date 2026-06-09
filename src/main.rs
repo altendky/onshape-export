@@ -62,31 +62,25 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     let args = env::args().skip(1).collect::<Vec<_>>();
 
-    if let Some(command) = args.first().filter(|command| command.as_str() != "serve") {
-        return run_cli(config, command, &args[1..]).await;
+    match args.first().map(String::as_str) {
+        None | Some("serve") => serve(config).await,
+        Some("worker") => run_worker(config).await,
+        Some(command) => run_cli(config, command, &args[1..]).await,
     }
-
-    serve(config).await
 }
 
 async fn serve(config: Config) -> anyhow::Result<()> {
-    let catalog = Arc::new(Catalog::load(&config.catalog_path).context("loading catalog")?);
-    let db = Database::connect(&config.database_url)
-        .await
-        .context("connecting to database")?;
-    let storage = StorageClient::new(config.storage.clone()).await?;
-    let onshape = OnshapeClient::new(config.onshape.clone())?;
+    let worker_enabled = config.worker_enabled;
+    let bind_addr = config.bind_addr;
+    let state = build_state(config).await?;
 
-    let state = AppState {
-        catalog,
-        db,
-        onshape,
-        storage,
-    };
+    if worker_enabled {
+        tokio::spawn(worker_loop(state.clone()));
+    } else {
+        tracing::info!("background worker disabled for serve process");
+    }
 
-    tokio::spawn(worker_loop(state.clone()));
-
-    let listener = tokio::net::TcpListener::bind(config.bind_addr)
+    let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
         .context("binding listener")?;
     tracing::info!(address = %listener.local_addr()?, "listening");
@@ -95,6 +89,20 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("serving app")
+}
+
+async fn run_worker(config: Config) -> anyhow::Result<()> {
+    let state = build_state(config).await?;
+    tracing::info!("starting worker-only runtime");
+
+    tokio::select! {
+        () = worker_loop(state) => {},
+        () = shutdown_signal() => {
+            tracing::info!("worker shutdown requested");
+        },
+    }
+
+    Ok(())
 }
 
 async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Result<()> {
@@ -221,6 +229,10 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
 }
 
 async fn cli_state(config: Config) -> anyhow::Result<AppState> {
+    build_state(config).await
+}
+
+async fn build_state(config: Config) -> anyhow::Result<AppState> {
     let catalog = Arc::new(Catalog::load(&config.catalog_path).context("loading catalog")?);
     let db = Database::connect(&config.database_url)
         .await
@@ -391,7 +403,7 @@ async fn default_parameter_values(
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  onshape-export [serve]\n  onshape-export catalog validate\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all>\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all>\n  onshape-export failures list\n  onshape-export failures retry\n  onshape-export artifacts list <slug|--all>\n  onshape-export artifacts invalidate <artifact-key>"
+        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all>\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all>\n  onshape-export failures list\n  onshape-export failures retry\n  onshape-export artifacts list <slug|--all>\n  onshape-export artifacts invalidate <artifact-key>"
     );
 }
 

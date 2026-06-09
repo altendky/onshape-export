@@ -20,6 +20,7 @@ Implemented foundation:
 - Onshape parameter metadata refresh, normalization, Tigris caching, and SQLite deduplication.
 - Server-rendered model parameter controls and submitted-value validation.
 - Background worker loop for queued parameter refreshes, previews, and downloads.
+- Worker-only runtime mode for separate Fly process groups.
 - CLI maintenance commands for catalog validation, parameter refresh, pre-generation, failure retry, and artifact inspection/invalidation.
 
 Local run:
@@ -27,6 +28,14 @@ Local run:
 ```sh
 cargo run
 ```
+
+Worker-only run:
+
+```sh
+cargo run -- worker
+```
+
+Set `WORKER_ENABLED=false` when running a web process that should not also claim queued work.
 
 The default local database is `onshape-export.db`. Set `DATABASE_URL` for deployment, for example to a SQLite file on a Fly volume.
 

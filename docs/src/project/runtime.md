@@ -88,3 +88,11 @@ Best use:
 - What Tigris public hostname or URL shape is used for stable artifact URLs.
 - What backup/snapshot policy is enough for the SQLite volume.
 - When, if ever, SQLite should be replaced with Postgres.
+
+## Worker Runtime
+
+The default `serve` process starts the public web app and an in-process background worker. For separate Fly process groups, run the web process with `WORKER_ENABLED=false` and run a worker process with:
+
+```sh
+onshape-export worker
+```

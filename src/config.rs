@@ -5,6 +5,7 @@ pub struct Config {
     pub bind_addr: SocketAddr,
     pub catalog_path: PathBuf,
     pub database_url: String,
+    pub worker_enabled: bool,
     pub storage: StorageConfig,
     pub onshape: OnshapeConfig,
 }
@@ -31,11 +32,13 @@ impl Config {
         let bind_addr = env_or("BIND_ADDR", "0.0.0.0:3000").parse()?;
         let catalog_path = PathBuf::from(env_or("CATALOG_PATH", "catalog/models.json"));
         let database_url = env_or("DATABASE_URL", "sqlite://onshape-export.db?mode=rwc");
+        let worker_enabled = env_bool("WORKER_ENABLED", true)?;
 
         Ok(Self {
             bind_addr,
             catalog_path,
             database_url,
+            worker_enabled,
             storage: StorageConfig {
                 bucket: env_or("TIGRIS_BUCKET", "onshape-export"),
                 endpoint_url: env::var("TIGRIS_ENDPOINT_URL").ok(),
@@ -55,4 +58,16 @@ impl Config {
 
 fn env_or(name: &str, default: &str) -> String {
     env::var(name).unwrap_or_else(|_| default.to_owned())
+}
+
+fn env_bool(name: &str, default: bool) -> anyhow::Result<bool> {
+    let Ok(value) = env::var(name) else {
+        return Ok(default);
+    };
+
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => anyhow::bail!("{name} must be a boolean value"),
+    }
 }
