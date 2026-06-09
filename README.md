@@ -35,6 +35,29 @@ Local run:
 cargo run
 ```
 
+Local run with MinIO S3-compatible storage:
+
+```sh
+mise run local-s3
+mise run local-run
+```
+
+If you are not using mise, run the same scripts directly:
+
+```sh
+scripts/local-s3.sh
+scripts/run-local.sh
+```
+
+`scripts/run-local.sh` loads optional `.env.local` first. Put Onshape credentials there for local export testing:
+
+```sh
+ONSHAPE_ACCESS_KEY=...
+ONSHAPE_SECRET_KEY=...
+```
+
+MinIO runs at `http://localhost:9000`; its console is at `http://localhost:9001` with `minioadmin` / `minioadmin` by default.
+
 Worker-only run:
 
 ```sh

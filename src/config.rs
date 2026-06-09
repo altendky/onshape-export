@@ -20,6 +20,7 @@ pub struct StorageConfig {
     pub access_key_id: Option<String>,
     pub secret_access_key: Option<String>,
     pub public_base_url: Option<String>,
+    pub force_path_style: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +53,7 @@ impl Config {
                 access_key_id: env::var("AWS_ACCESS_KEY_ID").ok(),
                 secret_access_key: env::var("AWS_SECRET_ACCESS_KEY").ok(),
                 public_base_url: env::var("TIGRIS_PUBLIC_BASE_URL").ok(),
+                force_path_style: env_bool("TIGRIS_FORCE_PATH_STYLE", false)?,
             },
             onshape: OnshapeConfig {
                 base_url: env_or("ONSHAPE_BASE_URL", "https://cad.onshape.com"),

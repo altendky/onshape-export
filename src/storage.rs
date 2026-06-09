@@ -21,6 +21,9 @@ impl StorageClient {
         if let Some(endpoint_url) = &config.endpoint_url {
             builder = builder.endpoint_url(endpoint_url);
         }
+        if config.force_path_style {
+            builder = builder.force_path_style(true);
+        }
 
         if let (Some(access_key_id), Some(secret_access_key)) =
             (&config.access_key_id, &config.secret_access_key)

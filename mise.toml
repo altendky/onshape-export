@@ -1,0 +1,14 @@
+[tools]
+rust = "stable"
+
+[tasks.local-s3]
+description = "Start local MinIO S3-compatible storage"
+run = "scripts/local-s3.sh"
+
+[tasks.local-run]
+description = "Run the app against local MinIO storage"
+run = "scripts/run-local.sh"
+
+[tasks.check]
+description = "Run local verification"
+run = "cargo fmt --check && cargo test && cargo clippy --all-targets --all-features -- -D warnings"
