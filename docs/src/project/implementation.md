@@ -78,6 +78,8 @@ Remaining hardening:
 
 Implement STEP, STL, and 3MF downloads.
 
+Current phase foundation implemented.
+
 Expected pieces:
 
 - Format-specific export option defaults.
@@ -85,6 +87,12 @@ Expected pieces:
 - Onshape export and polling for each format.
 - Tigris upload, content type, content disposition, and cache headers.
 - Stable public Tigris download links after completion.
+
+Remaining hardening:
+
+- Verify STEP, STL, and 3MF export request and translation response shapes against real Onshape models.
+- Add manifest materialization if SQLite artifact records are not sufficient for operational inspection.
+- Add richer download status polling instead of returning a simple refresh message while request-driven generation runs.
 
 ## Phase 5: Operational Commands
 

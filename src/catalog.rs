@@ -40,13 +40,56 @@ pub struct ExportConfig {
     pub preview: PreviewFormat,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DownloadFormat {
     Step,
     Stl,
     #[serde(rename = "3mf")]
     ThreeMf,
+}
+
+impl DownloadFormat {
+    pub fn from_slug(value: &str) -> Option<Self> {
+        match value {
+            "step" => Some(Self::Step),
+            "stl" => Some(Self::Stl),
+            "3mf" => Some(Self::ThreeMf),
+            _ => None,
+        }
+    }
+
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Step => "step",
+            Self::Stl => "stl",
+            Self::ThreeMf => "3mf",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Step => "STEP",
+            Self::Stl => "STL",
+            Self::ThreeMf => "3MF",
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Step => "step",
+            Self::Stl => "stl",
+            Self::ThreeMf => "3mf",
+        }
+    }
+
+    pub fn content_type(self) -> &'static str {
+        match self {
+            Self::Step => "model/step",
+            Self::Stl => "model/stl",
+            Self::ThreeMf => "model/3mf",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -62,14 +62,34 @@ impl StorageClient {
         body: Vec<u8>,
         content_type: &str,
     ) -> anyhow::Result<()> {
-        self.client
+        self.put_bytes_with_headers(key, body, content_type, None, None)
+            .await
+    }
+
+    pub async fn put_bytes_with_headers(
+        &self,
+        key: &str,
+        body: Vec<u8>,
+        content_type: &str,
+        content_disposition: Option<&str>,
+        cache_control: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let mut request = self
+            .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
             .content_type(content_type)
-            .body(ByteStream::from(body))
-            .send()
-            .await?;
+            .body(ByteStream::from(body));
+
+        if let Some(content_disposition) = content_disposition {
+            request = request.content_disposition(content_disposition);
+        }
+        if let Some(cache_control) = cache_control {
+            request = request.cache_control(cache_control);
+        }
+
+        request.send().await?;
         Ok(())
     }
 

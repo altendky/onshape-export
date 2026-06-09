@@ -10,7 +10,7 @@ use reqwest::Url;
 use serde_json::{Value, json};
 use sha2::Sha256;
 
-use crate::catalog::{ElementKind, OnshapeSource};
+use crate::catalog::{DownloadFormat, ElementKind, OnshapeSource};
 use crate::config::OnshapeConfig;
 
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -86,6 +86,23 @@ impl OnshapeClient {
         self.download_external_data(source, &external_data_id).await
     }
 
+    pub async fn export_download(
+        &self,
+        source: &OnshapeSource,
+        configuration: &str,
+        format: DownloadFormat,
+    ) -> anyhow::Result<Vec<u8>> {
+        let translation_id = match format {
+            DownloadFormat::Step => self.start_step_export(source, configuration).await?,
+            DownloadFormat::Stl | DownloadFormat::ThreeMf => {
+                self.start_translation_export(source, configuration, format)
+                    .await?
+            }
+        };
+        let external_data_id = self.poll_translation(source, &translation_id).await?;
+        self.download_external_data(source, &external_data_id).await
+    }
+
     async fn start_glb_export(
         &self,
         source: &OnshapeSource,
@@ -135,6 +152,89 @@ impl OnshapeClient {
 
         first_string(&response, &["id", "translationId"]).ok_or_else(|| {
             anyhow::anyhow!("Onshape GLB export response did not include a translation id")
+        })
+    }
+
+    async fn start_step_export(
+        &self,
+        source: &OnshapeSource,
+        configuration: &str,
+    ) -> anyhow::Result<String> {
+        anyhow::ensure!(
+            self.has_credentials(),
+            "Onshape credentials are not configured"
+        );
+
+        let collection = element_collection(source);
+        let path = format!(
+            "/api/{collection}/d/{}/v/{}/e/{}/export/step",
+            source.document_id, source.version_id, source.element_id
+        );
+        let body = json!({
+            "advancedParams": {
+                "configuration": configuration,
+            },
+            "stepVersionString": "AP242",
+            "storeInDocument": false,
+            "notifyUser": false,
+            "triggerAutoDownload": false,
+        });
+        self.start_json_translation(&path, body, "STEP").await
+    }
+
+    async fn start_translation_export(
+        &self,
+        source: &OnshapeSource,
+        configuration: &str,
+        format: DownloadFormat,
+    ) -> anyhow::Result<String> {
+        anyhow::ensure!(
+            self.has_credentials(),
+            "Onshape credentials are not configured"
+        );
+
+        let collection = element_collection(source);
+        let path = format!(
+            "/api/{collection}/d/{}/v/{}/e/{}/translations",
+            source.document_id, source.version_id, source.element_id
+        );
+        let body = json!({
+            "formatName": format.label(),
+            "storeInDocument": false,
+            "notifyUser": false,
+            "triggerAutoDownload": false,
+            "configuration": configuration,
+        });
+        self.start_json_translation(&path, body, format.label())
+            .await
+    }
+
+    async fn start_json_translation(
+        &self,
+        path: &str,
+        body: Value,
+        label: &str,
+    ) -> anyhow::Result<String> {
+        let mut url = self.base_url.clone();
+        url.set_path(path);
+        url.set_query(None);
+
+        let mut headers =
+            self.signed_json_headers(Method::POST, url.path(), url.query().unwrap_or_default())?;
+        headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+        let response: Value = self
+            .client
+            .post(url)
+            .headers(headers)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        first_string(&response, &["id", "translationId"]).ok_or_else(|| {
+            anyhow::anyhow!("Onshape {label} export response did not include a translation id")
         })
     }
 
@@ -219,6 +319,13 @@ impl OnshapeClient {
             self.access_key.as_deref().expect("checked credentials"),
             self.secret_key.as_deref().expect("checked credentials"),
         )
+    }
+}
+
+fn element_collection(source: &OnshapeSource) -> &'static str {
+    match source.element_kind {
+        ElementKind::PartStudio => "partstudios",
+        ElementKind::Assembly => "assemblies",
     }
 }
 

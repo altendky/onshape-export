@@ -76,6 +76,7 @@ fn app(state: AppState) -> Router {
             get(model_page).post(validate_model_config),
         )
         .route("/models/{slug}/preview", post(generate_preview))
+        .route("/models/{slug}/exports/{format}", post(generate_download))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -142,14 +143,24 @@ async fn model_page(
         Some(parameters) => render_cached_preview(&state, model, parameters).await?,
         None => "<p>Preview unavailable until parameter metadata is ready.</p>".to_owned(),
     };
+    let downloads = match parameters.as_ref() {
+        Some(parameters) => render_cached_downloads(&state, model, parameters).await?,
+        None => "<p>Downloads unavailable until parameter metadata is ready.</p>".to_owned(),
+    };
 
-    Ok(render_model_html(model, &parameter_controls, &preview))
+    Ok(render_model_html(
+        model,
+        &parameter_controls,
+        &preview,
+        &downloads,
+    ))
 }
 
 fn render_model_html(
     model: &catalog::Model,
     parameter_controls: &str,
     preview: &str,
+    downloads: &str,
 ) -> Html<String> {
     Html(format!(
         r#"<!doctype html>
@@ -169,10 +180,15 @@ fn render_model_html(
       {parameter_controls}
       <button type="submit">Validate Parameters</button>
       <button type="submit" formaction="/models/{slug}/preview">Generate Preview</button>
+      {download_buttons}
     </form>
     <section>
       <h2>Preview</h2>
       {preview}
+    </section>
+    <section>
+      <h2>Downloads</h2>
+      {downloads}
     </section>
   </main>
 </body>
@@ -182,6 +198,8 @@ fn render_model_html(
         description = escape_html(&model.description),
         parameter_controls = parameter_controls,
         preview = preview,
+        downloads = downloads,
+        download_buttons = render_download_buttons(model),
     ))
 }
 
@@ -237,7 +255,13 @@ async fn generate_preview(
                         .map(|error| format!("<li>{}</li>", escape_html(error)))
                         .collect::<String>()
                 );
-                return Ok(render_model_html(model, &parameter_controls, &preview));
+                let downloads = render_download_prompt(model);
+                return Ok(render_model_html(
+                    model,
+                    &parameter_controls,
+                    &preview,
+                    &downloads,
+                ));
             }
         };
     let config_hash = configuration_hash(&validated.values)?;
@@ -245,7 +269,13 @@ async fn generate_preview(
 
     if let Some(record) = state.db.artifact(&artifact_key).await? {
         let preview = render_preview_result(&state, &record.object_key);
-        return Ok(render_model_html(model, &parameter_controls, &preview));
+        let downloads = render_downloads_for_values(&state, model, &validated.values).await?;
+        return Ok(render_model_html(
+            model,
+            &parameter_controls,
+            &preview,
+            &downloads,
+        ));
     }
 
     let work_key = artifact_key.clone();
@@ -254,6 +284,7 @@ async fn generate_preview(
             model,
             &parameter_controls,
             "<p>Preview generation is already running. Reload this page shortly.</p>",
+            &render_download_prompt(model),
         ));
     }
 
@@ -269,7 +300,114 @@ async fn generate_preview(
         Ok(object_key) => {
             state.db.finish_job(&work_key, "ready", None).await?;
             let preview = render_preview_result(&state, &object_key);
-            Ok(render_model_html(model, &parameter_controls, &preview))
+            let downloads = render_downloads_for_values(&state, model, &validated.values).await?;
+            Ok(render_model_html(
+                model,
+                &parameter_controls,
+                &preview,
+                &downloads,
+            ))
+        }
+        Err(error) => {
+            let summary = error.to_string();
+            state
+                .db
+                .finish_job(&work_key, "failed", Some(&summary))
+                .await?;
+            Err(error.into())
+        }
+    }
+}
+
+async fn generate_download(
+    State(state): State<AppState>,
+    Path((slug, format_slug)): Path<(String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Html<String>, AppError> {
+    let model = state.catalog.find(&slug).ok_or(AppError::NotFound)?;
+    let format = catalog::DownloadFormat::from_slug(&format_slug).ok_or(AppError::NotFound)?;
+    if !model.exports.downloads.contains(&format) {
+        return Err(AppError::NotFound);
+    }
+
+    let Some(parameters) = load_or_refresh_parameters(&state, model).await? else {
+        return Ok(Html(
+            "Parameter metadata is still refreshing. Try again shortly.\n".to_owned(),
+        ));
+    };
+    let parameter_controls = render_parameter_controls(&parameters);
+    let validated =
+        match validate_values(&parameters, &values, model.parameter_policy.allow_unknown) {
+            Ok(validated) => validated,
+            Err(errors) => {
+                let downloads = format!(
+                    "Parameter errors:<ul>{}</ul>\n",
+                    errors
+                        .iter()
+                        .map(|error| format!("<li>{}</li>", escape_html(error)))
+                        .collect::<String>()
+                );
+                let preview = render_cached_preview(&state, model, &parameters).await?;
+                return Ok(render_model_html(
+                    model,
+                    &parameter_controls,
+                    &preview,
+                    &downloads,
+                ));
+            }
+        };
+    let config_hash = configuration_hash(&validated.values)?;
+    let artifact_key = download_artifact_key(model, &config_hash, format);
+
+    if let Some(record) = state.db.artifact(&artifact_key).await? {
+        let preview = render_preview_for_values(&state, model, &validated.values).await?;
+        let downloads = render_download_result(&state, format, &record.object_key);
+        return Ok(render_model_html(
+            model,
+            &parameter_controls,
+            &preview,
+            &downloads,
+        ));
+    }
+
+    let work_key = artifact_key.clone();
+    if !state
+        .db
+        .try_start_job(&work_key, &format!("export_{}", format.slug()))
+        .await?
+    {
+        let preview = render_preview_for_values(&state, model, &validated.values).await?;
+        return Ok(render_model_html(
+            model,
+            &parameter_controls,
+            &preview,
+            &format!(
+                "<p>{} export is already running. Reload this page shortly.</p>",
+                format.label()
+            ),
+        ));
+    }
+
+    let result = refresh_download(
+        &state,
+        model,
+        &validated.values,
+        &config_hash,
+        &artifact_key,
+        format,
+    )
+    .await;
+    match result {
+        Ok(object_key) => {
+            state.db.finish_job(&work_key, "ready", None).await?;
+            let preview = render_preview_for_values(&state, model, &validated.values).await?;
+            let downloads = render_download_result(&state, format, &object_key);
+            Ok(render_model_html(
+                model,
+                &parameter_controls,
+                &preview,
+                &downloads,
+            ))
         }
         Err(error) => {
             let summary = error.to_string();
@@ -391,11 +529,68 @@ async fn render_cached_preview(
         return Ok("<p>Choose parameters and generate a preview.</p>".to_owned());
     };
     let config_hash = configuration_hash(&validated.values)?;
-    let artifact_key = preview_artifact_key(model, &config_hash);
+    render_preview_for_hash(state, model, &config_hash, "default parameters").await
+}
+
+async fn render_preview_for_values(
+    state: &AppState,
+    model: &catalog::Model,
+    values: &HashMap<String, String>,
+) -> Result<String, AppError> {
+    let config_hash = configuration_hash(values)?;
+    render_preview_for_hash(state, model, &config_hash, "these parameters").await
+}
+
+async fn render_preview_for_hash(
+    state: &AppState,
+    model: &catalog::Model,
+    config_hash: &str,
+    label: &str,
+) -> Result<String, AppError> {
+    let artifact_key = preview_artifact_key(model, config_hash);
 
     match state.db.artifact(&artifact_key).await? {
         Some(record) => Ok(render_preview_viewer(state, &record.object_key)),
-        None => Ok("<p>No cached preview for the default parameters yet.</p>".to_owned()),
+        None => Ok(format!("<p>No cached preview for {label} yet.</p>")),
+    }
+}
+
+async fn render_cached_downloads(
+    state: &AppState,
+    model: &catalog::Model,
+    parameters: &ParameterSchema,
+) -> Result<String, AppError> {
+    let submitted = HashMap::new();
+    let Ok(validated) =
+        validate_values(parameters, &submitted, model.parameter_policy.allow_unknown)
+    else {
+        return Ok(render_download_prompt(model));
+    };
+
+    render_downloads_for_values(state, model, &validated.values).await
+}
+
+async fn render_downloads_for_values(
+    state: &AppState,
+    model: &catalog::Model,
+    values: &HashMap<String, String>,
+) -> Result<String, AppError> {
+    let config_hash = configuration_hash(values)?;
+    let mut items = String::new();
+    for format in &model.exports.downloads {
+        let artifact_key = download_artifact_key(model, &config_hash, *format);
+        if let Some(record) = state.db.artifact(&artifact_key).await? {
+            items.push_str(&format!(
+                "<li>{}</li>",
+                render_download_link(state, *format, &record.object_key)
+            ));
+        }
+    }
+
+    if items.is_empty() {
+        Ok(render_download_prompt(model))
+    } else {
+        Ok(format!("<ul>{items}</ul>"))
     }
 }
 
@@ -431,6 +626,47 @@ async fn refresh_preview(
     Ok(object_key)
 }
 
+async fn refresh_download(
+    state: &AppState,
+    model: &catalog::Model,
+    values: &HashMap<String, String>,
+    config_hash: &str,
+    artifact_key: &str,
+    format: catalog::DownloadFormat,
+) -> anyhow::Result<String> {
+    let configuration = onshape_configuration_string(values);
+    let bytes = state
+        .onshape
+        .export_download(&model.onshape, &configuration, format)
+        .await?;
+    let object_key = download_object_key(model, config_hash, format);
+    let filename = download_filename(model, format);
+    let content_disposition = format!("attachment; filename=\"{filename}\"");
+    state
+        .storage
+        .put_bytes_with_headers(
+            &object_key,
+            bytes.clone(),
+            format.content_type(),
+            Some(&content_disposition),
+            Some("public, max-age=31536000, immutable"),
+        )
+        .await?;
+    state
+        .db
+        .upsert_artifact(ArtifactUpsert {
+            artifact_key,
+            model_slug: &model.slug,
+            config_hash,
+            output_kind: format.slug(),
+            object_key: &object_key,
+            content_type: format.content_type(),
+            byte_len: bytes.len() as i64,
+        })
+        .await?;
+    Ok(object_key)
+}
+
 fn preview_artifact_key(model: &catalog::Model, config_hash: &str) -> String {
     format!(
         "preview-glb:{}:{}:{config_hash}:mesh-medium-v1",
@@ -444,6 +680,55 @@ fn preview_object_key(model: &catalog::Model, config_hash: &str) -> String {
         "previews/{}/{}/{}/{}/mesh-medium-v1/preview.glb",
         model.slug, model.onshape.version_id, model.onshape.element_id, config_hash
     )
+}
+
+fn download_artifact_key(
+    model: &catalog::Model,
+    config_hash: &str,
+    format: catalog::DownloadFormat,
+) -> String {
+    format!(
+        "download-{}:{}:{}:{config_hash}:default-v1",
+        format.slug(),
+        model.slug,
+        source_identity(&model.onshape)
+    )
+}
+
+fn download_object_key(
+    model: &catalog::Model,
+    config_hash: &str,
+    format: catalog::DownloadFormat,
+) -> String {
+    format!(
+        "artifacts/{}/{}/{}/{}/{}/{}.{}",
+        model.slug,
+        model.onshape.version_id,
+        model.onshape.element_id,
+        config_hash,
+        format.slug(),
+        safe_filename_stem(&model.slug),
+        format.extension()
+    )
+}
+
+fn download_filename(model: &catalog::Model, format: catalog::DownloadFormat) -> String {
+    format!(
+        "{}-{}.{}",
+        safe_filename_stem(&model.slug),
+        format.slug(),
+        format.extension()
+    )
+}
+
+fn safe_filename_stem(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| match character {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => character,
+            _ => '-',
+        })
+        .collect()
 }
 
 fn source_identity(source: &catalog::OnshapeSource) -> String {
@@ -506,6 +791,60 @@ fn render_preview_viewer(state: &AppState, object_key: &str) -> String {
         None => {
             "<p>Preview is cached, but TIGRIS_PUBLIC_BASE_URL is not configured.</p>".to_owned()
         }
+    }
+}
+
+fn render_download_buttons(model: &catalog::Model) -> String {
+    model
+        .exports
+        .downloads
+        .iter()
+        .map(|format| {
+            format!(
+                r#"<button type="submit" formaction="/models/{slug}/exports/{format_slug}">Generate {label}</button>"#,
+                slug = escape_html(&model.slug),
+                format_slug = format.slug(),
+                label = format.label(),
+            )
+        })
+        .collect::<String>()
+}
+
+fn render_download_prompt(model: &catalog::Model) -> String {
+    if model.exports.downloads.is_empty() {
+        "<p>This model does not expose downloadable formats.</p>".to_owned()
+    } else {
+        "<p>No cached downloads for these parameters yet.</p>".to_owned()
+    }
+}
+
+fn render_download_result(
+    state: &AppState,
+    format: catalog::DownloadFormat,
+    object_key: &str,
+) -> String {
+    format!(
+        "{} export is ready. {}\n",
+        format.label(),
+        render_download_link(state, format, object_key)
+    )
+}
+
+fn render_download_link(
+    state: &AppState,
+    format: catalog::DownloadFormat,
+    object_key: &str,
+) -> String {
+    match state.storage.public_url(object_key) {
+        Some(url) => format!(
+            r#"<a href="{}">Download {}</a>"#,
+            escape_html(&url),
+            format.label()
+        ),
+        None => format!(
+            "<span>{} export is cached, but TIGRIS_PUBLIC_BASE_URL is not configured.</span>",
+            format.label()
+        ),
     }
 }
 
