@@ -53,11 +53,20 @@ impl StorageClient {
 
     pub async fn put_json<T: Serialize>(&self, key: &str, value: &T) -> anyhow::Result<()> {
         let body = serde_json::to_vec(value)?;
+        self.put_bytes(key, body, "application/json").await
+    }
+
+    pub async fn put_bytes(
+        &self,
+        key: &str,
+        body: Vec<u8>,
+        content_type: &str,
+    ) -> anyhow::Result<()> {
         self.client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
-            .content_type("application/json")
+            .content_type(content_type)
             .body(ByteStream::from(body))
             .send()
             .await?;
@@ -74,5 +83,40 @@ impl StorageClient {
             .await?;
         let bytes = output.body.collect().await?.into_bytes();
         Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    pub fn public_url(&self, key: &str) -> Option<String> {
+        self.public_base_url.as_ref().map(|base| {
+            format!(
+                "{}/{}",
+                base.trim_end_matches('/'),
+                key.split('/')
+                    .map(url_path_segment)
+                    .collect::<Vec<_>>()
+                    .join("/")
+            )
+        })
+    }
+}
+
+fn url_path_segment(value: &str) -> String {
+    value
+        .bytes()
+        .flat_map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                vec![byte as char]
+            }
+            byte => format!("%{byte:02X}").chars().collect(),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encodes_public_url_segments() {
+        assert_eq!(url_path_segment("a b.glb"), "a%20b.glb");
     }
 }

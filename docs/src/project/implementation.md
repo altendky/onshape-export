@@ -56,6 +56,8 @@ Remaining hardening:
 
 Implement GLB preview generation and display.
 
+Current phase foundation implemented.
+
 Expected pieces:
 
 - Compute canonical `config_hash`.
@@ -65,6 +67,12 @@ Expected pieces:
 - Store GLB in Tigris.
 - Return stable public Tigris preview URLs.
 - Show cached GLB with `<model-viewer>`.
+
+Remaining hardening:
+
+- Verify GLB export request and translation response shapes against real Onshape models.
+- Add richer preview status polling instead of returning a simple refresh message while request-driven generation runs.
+- Add model-specific preview option overrides if tessellation, orientation, or grouping settings need to vary.
 
 ## Phase 4: Download Exports
 

@@ -6,6 +6,22 @@ pub struct ParameterMetadataRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct ArtifactRecord {
+    pub object_key: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ArtifactUpsert<'a> {
+    pub artifact_key: &'a str,
+    pub model_slug: &'a str,
+    pub config_hash: &'a str,
+    pub output_kind: &'a str,
+    pub object_key: &'a str,
+    pub content_type: &'a str,
+    pub byte_len: i64,
+}
+
+#[derive(Debug, Clone)]
 pub struct Database {
     pool: SqlitePool,
 }
@@ -103,6 +119,49 @@ impl Database {
         .bind(status)
         .bind(error_summary)
         .bind(work_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn artifact(&self, artifact_key: &str) -> sqlx::Result<Option<ArtifactRecord>> {
+        sqlx::query("SELECT object_key FROM artifacts WHERE artifact_key = ?")
+            .bind(artifact_key)
+            .fetch_optional(&self.pool)
+            .await
+            .map(|row| {
+                row.map(|row| ArtifactRecord {
+                    object_key: row.get("object_key"),
+                })
+            })
+    }
+
+    pub async fn upsert_artifact(&self, artifact: ArtifactUpsert<'_>) -> sqlx::Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO artifacts (
+                artifact_key,
+                model_slug,
+                config_hash,
+                output_kind,
+                object_key,
+                content_type,
+                byte_len
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(artifact_key) DO UPDATE SET
+                object_key = excluded.object_key,
+                content_type = excluded.content_type,
+                byte_len = excluded.byte_len
+            "#,
+        )
+        .bind(artifact.artifact_key)
+        .bind(artifact.model_slug)
+        .bind(artifact.config_hash)
+        .bind(artifact.output_kind)
+        .bind(artifact.object_key)
+        .bind(artifact.content_type)
+        .bind(artifact.byte_len)
         .execute(&self.pool)
         .await?;
         Ok(())
