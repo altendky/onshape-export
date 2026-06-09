@@ -13,6 +13,19 @@ This keeps the MVP on Fly/Tigris, avoids the fixed cost of Fly Managed Postgres,
 
 The MVP assumes one Fly machine running one Rust service process. The public web server and worker loop share the same local SQLite database on the attached Fly volume. A separate worker process group is deferred until shared coordination is introduced or Fly volume sharing semantics are explicitly verified.
 
+## Critical Runtime Constraints
+
+- Keep SQLite transactions short and never hold a database write transaction while calling Onshape.
+- Treat this as a mandatory implementation and test requirement for code paths that both update SQLite coordination state and call Onshape.
+
+Rationale:
+
+- Slow Onshape calls under a SQLite write transaction would block other workers and request handlers that need queue state.
+- SQLite's single-writer locking model makes long write transactions harmful to queue progress and duplicate-work prevention.
+- Network timeouts during Onshape calls must not extend database write locks until the timeout completes.
+
+Implementation tests should verify mocked slow Onshape calls do not hold SQLite write locks and that duplicate requests still deduplicate through short job-row transactions.
+
 Initial public hostname:
 
 ```text
@@ -50,7 +63,6 @@ Initial worker policy:
 
 - Run a bounded worker loop inside the Rust service process.
 - Start with conservative Onshape concurrency and increase only after real API behavior is measured.
-- Keep SQLite transactions short and never hold a database write transaction while calling Onshape.
 - Replace SQLite with Postgres or another shared coordination backend before adding multi-machine workers.
 
 ## Option: Fly Managed Postgres
