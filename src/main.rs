@@ -5,7 +5,12 @@ mod onshape;
 mod parameters;
 mod storage;
 
-use std::{collections::HashMap, env, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    env,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::Context;
 use axum::{
@@ -66,6 +71,44 @@ struct SelectedParameterSet {
     slug: String,
     label: String,
     values: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ArtifactManifest {
+    group_id: String,
+    model_slug: String,
+    element_kind: String,
+    onshape: ManifestOnshapeSource,
+    configuration: ManifestConfiguration,
+    outputs: BTreeMap<String, ManifestOutput>,
+    created_at: Option<String>,
+    exporter_version: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestOnshapeSource {
+    document_id: String,
+    version_id: String,
+    element_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestConfiguration {
+    hash: String,
+    values: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManifestOutput {
+    artifact_key: String,
+    object_key: String,
+    content_type: String,
+    byte_len: Option<i64>,
+    created_at: String,
 }
 
 #[tokio::main]
@@ -263,6 +306,9 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
                 .await
                 .with_context(|| format!("deleting object {}", artifact.object_key))?;
             state.db.delete_artifact(artifact_key).await?;
+            if let Some(model) = state.catalog.find(&artifact.model_slug) {
+                rewrite_manifest(&state, model, &artifact.config_hash, None).await?;
+            }
             println!(
                 "invalidated artifact {artifact_key} and deleted {}",
                 artifact.object_key
@@ -1176,6 +1222,7 @@ async fn refresh_preview(
             byte_len: bytes.len() as i64,
         })
         .await?;
+    rewrite_manifest(state, model, config_hash, Some(values)).await?;
     Ok(object_key)
 }
 
@@ -1217,7 +1264,81 @@ async fn refresh_download(
             byte_len: bytes.len() as i64,
         })
         .await?;
+    rewrite_manifest(state, model, config_hash, Some(values)).await?;
     Ok(object_key)
+}
+
+async fn rewrite_manifest(
+    state: &AppState,
+    model: &catalog::Model,
+    config_hash: &str,
+    values: Option<&HashMap<String, String>>,
+) -> anyhow::Result<String> {
+    let artifacts = state
+        .db
+        .artifacts_for_configuration(&model.slug, config_hash)
+        .await?;
+    let manifest = build_manifest(model, config_hash, values, &artifacts);
+    let object_key = manifest_object_key(model, config_hash);
+    state.storage.put_json(&object_key, &manifest).await?;
+    Ok(object_key)
+}
+
+fn build_manifest(
+    model: &catalog::Model,
+    config_hash: &str,
+    values: Option<&HashMap<String, String>>,
+    artifacts: &[db::ArtifactRecord],
+) -> ArtifactManifest {
+    let outputs = artifacts
+        .iter()
+        .map(|artifact| {
+            (
+                artifact.output_kind.clone(),
+                ManifestOutput {
+                    artifact_key: artifact.artifact_key.clone(),
+                    object_key: artifact.object_key.clone(),
+                    content_type: artifact.content_type.clone(),
+                    byte_len: artifact.byte_len,
+                    created_at: artifact.created_at.clone(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let created_at = artifacts
+        .iter()
+        .map(|artifact| artifact.created_at.as_str())
+        .min()
+        .map(str::to_owned);
+
+    ArtifactManifest {
+        group_id: manifest_group_id(model, config_hash),
+        model_slug: model.slug.clone(),
+        element_kind: element_kind_key(&model.onshape.element_kind).to_owned(),
+        onshape: ManifestOnshapeSource {
+            document_id: model.onshape.document_id.clone(),
+            version_id: model.onshape.version_id.clone(),
+            element_id: model.onshape.element_id.clone(),
+        },
+        configuration: ManifestConfiguration {
+            hash: config_hash.to_owned(),
+            values: values.map(canonical_values).unwrap_or_default(),
+        },
+        outputs,
+        created_at,
+        exporter_version: env!("CARGO_PKG_VERSION"),
+    }
+}
+
+fn manifest_group_id(model: &catalog::Model, config_hash: &str) -> String {
+    format!("{}:{}", source_identity(&model.onshape), config_hash)
+}
+
+fn manifest_object_key(model: &catalog::Model, config_hash: &str) -> String {
+    format!(
+        "manifests/{}/{}/{}/{}.json",
+        model.slug, model.onshape.version_id, model.onshape.element_id, config_hash
+    )
 }
 
 fn preview_artifact_key(model: &catalog::Model, config_hash: &str) -> String {
@@ -1303,13 +1424,18 @@ fn element_kind_key(kind: &catalog::ElementKind) -> &'static str {
 
 fn configuration_hash(values: &HashMap<String, String>) -> anyhow::Result<String> {
     let mut object = Map::new();
-    let mut keys = values.keys().collect::<Vec<_>>();
-    keys.sort();
-    for key in keys {
+    for key in canonical_values(values).keys() {
         object.insert(key.clone(), Value::String(values[key].clone()));
     }
     let canonical = serde_json::to_vec(&Value::Object(object))?;
     Ok(hex_sha256(&canonical))
+}
+
+fn canonical_values(values: &HashMap<String, String>) -> BTreeMap<String, String> {
+    values
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
 }
 
 fn onshape_configuration_string(values: &HashMap<String, String>) -> String {
@@ -1608,6 +1734,35 @@ mod tests {
     }
 
     #[test]
+    fn builds_manifest_with_outputs_by_kind() {
+        let model = test_model();
+        let values = HashMap::from([("width".to_owned(), "10".to_owned())]);
+        let artifacts = vec![db::ArtifactRecord {
+            artifact_key: "download-step:model:key".to_owned(),
+            model_slug: model.slug.clone(),
+            config_hash: "abc".to_owned(),
+            output_kind: "step".to_owned(),
+            object_key: "artifacts/demo/file.step".to_owned(),
+            content_type: "model/step".to_owned(),
+            byte_len: Some(42),
+            created_at: "2026-06-09T00:00:00.000Z".to_owned(),
+        }];
+
+        let manifest = build_manifest(&model, "abc", Some(&values), &artifacts);
+
+        assert_eq!(manifest.model_slug, "demo");
+        assert_eq!(manifest.configuration.values["width"], "10");
+        assert_eq!(
+            manifest.outputs["step"].object_key,
+            "artifacts/demo/file.step"
+        );
+        assert_eq!(
+            manifest.created_at.as_deref(),
+            Some("2026-06-09T00:00:00.000Z")
+        );
+    }
+
+    #[test]
     fn escapes_metric_labels() {
         assert_eq!(escape_metric_label("a\\b\nc\"d"), "a\\\\b\\nc\\\"d");
     }
@@ -1630,5 +1785,28 @@ mod tests {
             Some("small")
         );
         assert!(optional_parameter_selector(&["a".to_owned(), "b".to_owned()]).is_err());
+    }
+
+    fn test_model() -> catalog::Model {
+        catalog::Model {
+            slug: "demo".to_owned(),
+            name: "Demo".to_owned(),
+            description: "Demo model".to_owned(),
+            onshape: catalog::OnshapeSource {
+                document_id: "did".to_owned(),
+                version_id: "vid".to_owned(),
+                element_id: "eid".to_owned(),
+                element_kind: catalog::ElementKind::PartStudio,
+            },
+            exports: catalog::ExportConfig {
+                downloads: vec![catalog::DownloadFormat::Step],
+                preview: catalog::PreviewFormat::Glb,
+            },
+            parameter_policy: catalog::ParameterPolicy {
+                source: catalog::ParameterSource::Onshape,
+                allow_unknown: false,
+            },
+            parameter_presets: Vec::new(),
+        }
     }
 }

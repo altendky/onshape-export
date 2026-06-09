@@ -241,6 +241,27 @@ impl Database {
         .map(|rows| rows.into_iter().map(artifact_record_from_row).collect())
     }
 
+    pub async fn artifacts_for_configuration(
+        &self,
+        model_slug: &str,
+        config_hash: &str,
+    ) -> sqlx::Result<Vec<ArtifactRecord>> {
+        sqlx::query(
+            r#"
+            SELECT artifact_key, model_slug, config_hash, output_kind, object_key,
+                   content_type, byte_len, created_at
+            FROM artifacts
+            WHERE model_slug = ? AND config_hash = ?
+            ORDER BY output_kind
+            "#,
+        )
+        .bind(model_slug)
+        .bind(config_hash)
+        .fetch_all(&self.pool)
+        .await
+        .map(|rows| rows.into_iter().map(artifact_record_from_row).collect())
+    }
+
     pub async fn delete_artifact(&self, artifact_key: &str) -> sqlx::Result<bool> {
         let result = sqlx::query("DELETE FROM artifacts WHERE artifact_key = ?")
             .bind(artifact_key)

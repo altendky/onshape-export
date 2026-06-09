@@ -105,6 +105,16 @@ A completed configuration should have a manifest that points to every generated 
 
 The manifest is application state. Tigris object metadata is useful but should not be the only source of truth.
 
+The current implementation materializes manifests in object storage at:
+
+```text
+manifests/{slug}/{vid}/{eid}/{config_hash}.json
+```
+
+Each successful preview or download upload rewrites the manifest from the
+SQLite artifact records for that model/configuration. Artifact invalidation
+also rewrites the manifest after removing the deleted artifact row.
+
 ## Job Records
 
 SQLite job records are the coordination source of truth.

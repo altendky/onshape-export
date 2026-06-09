@@ -119,6 +119,9 @@ Implemented hardening:
 - Add structured JSON output for `failures list` and `artifacts list` operational commands.
 - `artifacts invalidate` now deletes the object-store artifact before removing
   the SQLite artifact record.
+- Successful preview/export generation now rewrites a Tigris manifest for the
+  selected model configuration from SQLite artifact records; invalidation
+  rewrites the same manifest after deleting the artifact record.
 
 ## Phase 6: Runtime Hardening
 
