@@ -15,13 +15,15 @@ Workspaces are intentionally out of scope for the first version.
 
 The MVP assumes server-owned Onshape API keys configured as deployment secrets. The Rust service signs requests server-side, and credentials are never exposed to browsers.
 
-This assumption must be verified with real calls before the export vertical slice depends on it:
+This assumption must be verified with real calls before the export vertical slice is considered complete:
 
 - Fetch versioned configuration metadata for a Part Studio.
 - Fetch versioned configuration metadata for an Assembly.
 - Create, poll, and download a GLB export.
 - Create, poll, and download STEP, STL, and 3MF exports.
 - Confirm required access for linked-document assembly contexts.
+
+Current branch status: API-key signing is implemented, but the docs do not record successful real Onshape smoke-test results yet.
 
 ## Parameter Discovery
 
@@ -83,6 +85,10 @@ POST /api/assemblies/d/{did}/v/{vid}/e/{eid}/export/gltf
 
 The async GLB path is more consistent across Part Studios and Assemblies. The synchronous Part Studio endpoint may be useful later if it proves faster and reliable.
 
+Preferred preview requirement: even if Onshape endpoint names use `gltf`, request grouped output and cache GLB when Onshape provides it. If Onshape returns direct glTF JSON, publish it as the viewer artifact. If Onshape returns a ZIP with exactly one glTF viewer asset instead, extract and publish the `.gltf` plus sidecars under the same preview identity and retain the original ZIP as an operational sidecar.
+
+Current branch status: zipped Onshape preview responses use exactly one valid `.glb` when present. Otherwise, the largest `.gltf` entry becomes the viewer object and safe sidecar files are uploaded beside it.
+
 Async GLB body shape should include the configuration under `advancedParams.configuration`:
 
 ```json
@@ -93,13 +99,14 @@ Async GLB body shape should include the configuration under `advancedParams.conf
   "meshParams": {
     "resolution": "MEDIUM"
   },
+  "grouping": true,
   "storeInDocument": false,
   "notifyUser": false,
   "triggerAutoDownload": false
 }
 ```
 
-Preview cache identity must include all preview-affecting options, including mesh settings, orientation flags such as `isYAxisUp`, grouping behavior, and exporter version.
+Preview cache identity must include all preview-affecting options, including mesh settings, orientation flags such as `isYAxisUp`, grouping behavior, fallback/merge policy, and exporter version.
 
 ## Download Exports
 

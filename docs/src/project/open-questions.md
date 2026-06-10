@@ -2,8 +2,8 @@
 
 ## Runtime
 
-- What initial Onshape export concurrency limit is safe?
-- What backup or snapshot policy is enough for the SQLite Fly volume?
+- What initial Onshape export concurrency limit is safe beyond the current default of `1`?
+- Is the current explicit `ops backup` SQLite snapshot enough, or are platform snapshots or Postgres needed before production use?
 - What Tigris public URL shape should be used for stable artifact links?
 - When should SQLite be replaced with Postgres?
 
@@ -16,7 +16,7 @@
 
 - Which exact `formatName` values should be used for STL, 3MF, and GLB on generic translation endpoints?
 - Are format-specific endpoints better than generic translation endpoints for STEP and GLB in practice?
-- Does synchronous Part Studio glTF export produce suitable GLB previews faster than async export?
+- Does synchronous Part Studio glTF/GLB export produce suitable single-file GLB previews faster than async export?
 - Do Assemblies and Part Studios need different default export options?
 - How should multiple `resultExternalDataIds` be represented and served?
 
@@ -26,6 +26,7 @@
 - Can all parameter types be encoded safely without calling `configurationencodings`?
 - What numeric precision or step rules should each model expose?
 - How should hidden or conditionally visible parameters be handled?
+- Which unsupported Onshape parameter types need explicit `unsupportedReason` metadata?
 
 ## Preview UX
 
@@ -38,7 +39,13 @@
 - How long should failed jobs suppress retries?
 - Should admin rebuilds generate all formats or only missing artifacts?
 - What exact manifest/index fields should mark superseded artifacts after exporter version changes?
-- What CLI maintenance commands are needed before a web admin UI exists?
+- Which current deletion-based cleanup commands should remain after normal invalidation moves to supersession?
+
+## Plan Gaps
+
+- How should RFC 8785 canonical JSON be introduced without breaking existing cache keys?
+- Should existing `catalog/models.json` data migrate directly to `catalog/v1/`, or should source changes land first?
+- What public status route shape should expose `jobId`, `groupId`, ready outputs, retry hints, and safe failure messages?
 
 ## Resolved Working Decisions
 

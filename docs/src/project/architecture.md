@@ -41,7 +41,7 @@ The public site should be able to serve cached content even when no export job i
 | Tigris Object Storage | Durable public artifacts, previews, manifests, raw Onshape responses, normalized parameter metadata. |
 | Onshape API | Configuration discovery and export generation. |
 
-Internal Rust boundaries should stay boring and explicit:
+Current Rust boundaries are still mostly in one crate and several responsibilities remain in `main.rs`. The intended internal boundaries are:
 
 - `config`: environment, secrets, deployment settings.
 - `catalog`: in-repo catalog loading and validation.
@@ -73,28 +73,29 @@ The browser may submit parameter values, but the server owns validation, canonic
 
 ## Product Routes
 
-These routes are product/UI behavior, not a stable public API commitment:
+These routes are product/UI behavior, not stable public API commitments.
+
+Implemented routes on this branch:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/` | Catalog landing page. |
 | `GET` | `/models/{slug}` | Model page with parameter controls. |
-| `GET` | `/models/{slug}/parameters` | Normalized parameter metadata status or ready payload. |
-| `POST` | `/models/{slug}/preview/status` | Validate submitted parameters and return cached GLB status. |
-| `POST` | `/models/{slug}/preview` | Create or find a GLB preview job. |
-| `POST` | `/models/{slug}/exports/{format}` | Create or find a STEP, STL, or 3MF export job. |
-| `GET` | `/jobs/{job_id}` | Poll public-safe job status. |
+| `POST` | `/models/{slug}` | Validate submitted parameters and render normalized values or errors. |
+| `POST` | `/models/{slug}/preview` | Validate submitted parameters and create or find a GLB preview job. |
+| `GET` | `/models/{slug}/preview/{config_hash}/status` | Poll preview status by server-computed hash. |
+| `POST` | `/models/{slug}/exports/{format}` | Validate submitted parameters and create or find a STEP, STL, or 3MF export job. |
+| `GET` | `/models/{slug}/exports/{format}/{config_hash}/status` | Poll download export status by server-computed hash. |
 | `GET` | `/healthz` | Process health check. |
+| `GET` | `/metrics` | Prometheus-style operational metrics. |
 
-Status responses should include:
+Planned route and response gaps from the updated main plan:
 
-- `status`: `missing`, `queued`, `running`, `ready`, `failed`, or `superseded`.
-- `jobId` and `groupId` when work exists.
-- `readyOutputs` with public artifact URLs when ready.
-- `retryAfterSeconds` when polling should slow down.
-- `errorCode` and `userMessage` for public-safe failures.
-
-The `preview/status`, `preview`, and export routes should all validate parameters through the same server path so status checks and job creation cannot disagree about `configHash`.
+- Add a normalized parameter metadata/status route such as `GET /models/{slug}/parameters` if the UI needs JSON parameter data.
+- Ensure status checks and enqueue routes validate parameters through the same server path so status and job creation cannot disagree about `configHash`.
+- Add public-safe status fields such as `jobId`, `groupId`, `readyOutputs`, `retryAfterSeconds`, `errorCode`, and `userMessage`.
+- Add a stable job polling route such as `GET /jobs/{job_id}` only if product/UI polling needs an ID-based route.
+- Add `superseded` status handling once invalidation stops deleting artifacts.
 
 ## Operational Flow
 

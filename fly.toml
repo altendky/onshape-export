@@ -1,0 +1,32 @@
+app = "onshape-export"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  BIND_ADDR = "0.0.0.0:8080"
+  CATALOG_PATH = "catalog/models.json"
+  DATABASE_URL = "sqlite:///data/onshape-export.db?mode=rwc"
+  RUST_LOG = "info,onshape_export=debug,tower_http=info"
+  WORKER_ENABLED = "true"
+  WORKER_CONCURRENCY = "1"
+
+[[mounts]]
+  source = "onshape_export_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/healthz"

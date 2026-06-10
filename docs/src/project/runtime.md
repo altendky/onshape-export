@@ -5,18 +5,22 @@
 Use a single-provider Fly-oriented MVP:
 
 - Rust `axum` service on Fly.io for public pages, cache checks, queue submission, status routes, and Onshape orchestration.
-- A bounded embedded worker loop in the same Rust process for MVP export and metadata jobs.
+- A bounded embedded worker loop in the same Rust process for the safest MVP deployment.
 - Tigris Object Storage via Fly for completed artifacts, manifests, and cached Onshape metadata.
 - SQLite on a Fly volume for queue coordination, job uniqueness, artifact index state, and failure summaries.
 
 This keeps the MVP on Fly/Tigris, avoids the fixed cost of Fly Managed Postgres, and still provides transactional coordination so duplicate Onshape parameter fetches and exports are prevented.
 
-The MVP assumes one Fly machine running one Rust service process. The public web server and worker loop share the same local SQLite database on the attached Fly volume. A separate worker process group is deferred until shared coordination is introduced or Fly volume sharing semantics are explicitly verified.
+The preferred MVP deployment is one Fly machine running one Rust service process. The public web server and worker loop share the same local SQLite database on the attached Fly volume.
+
+The branch also includes `onshape-export worker` and `WORKER_ENABLED=false` for split web/worker process groups. Treat that as an operational escape hatch, not the default scaling model. Before running independent workers on multiple machines, verify shared storage semantics explicitly or move coordination to Postgres or another shared database.
 
 ## Critical Runtime Constraints
 
-- Keep SQLite transactions short and never hold a database write transaction while calling Onshape.
-- Treat this as a mandatory implementation and test requirement for code paths that both update SQLite coordination state and call Onshape.
+- Keep SQLite transactions short.
+- Never hold a SQLite write transaction while calling Onshape, Tigris, or another network service.
+- Treat this as a mandatory implementation and test requirement for paths that both update SQLite coordination state and call Onshape.
+- Use SQLite only for local single-writer coordination until a concrete need justifies Postgres.
 
 Rationale:
 
@@ -24,7 +28,7 @@ Rationale:
 - SQLite's single-writer locking model makes long write transactions harmful to queue progress and duplicate-work prevention.
 - Network timeouts during Onshape calls must not extend database write locks until the timeout completes.
 
-Implementation tests should verify mocked slow Onshape calls do not hold SQLite write locks and that duplicate requests still deduplicate through short job-row transactions.
+TODO: add tests that mocked slow Onshape calls do not hold SQLite write locks and that duplicate requests still deduplicate through short job-row transactions.
 
 Initial public hostname:
 
@@ -50,7 +54,7 @@ Costs:
 - Fly volumes are region and machine scoped.
 - Recovery and backup policy must be explicit if job history becomes important.
 - Multi-machine scaling requires redesigning coordination, likely Postgres.
-- Web and worker restarts are coupled until the worker is split out later.
+- Web and worker restarts are coupled in the default single-process deployment.
 
 Best use:
 
@@ -61,8 +65,8 @@ Best use:
 
 Initial worker policy:
 
-- Run a bounded worker loop inside the Rust service process.
-- Start with conservative Onshape concurrency and increase only after real API behavior is measured.
+- Run a bounded worker loop inside the Rust service process by default.
+- Default `WORKER_CONCURRENCY` to `1` and increase only after real API behavior is measured.
 - Replace SQLite with Postgres or another shared coordination backend before adding multi-machine workers.
 
 ## Option: Fly Managed Postgres
@@ -106,7 +110,49 @@ Best use:
 
 ## Initial Runtime Decision Points
 
-- How many concurrent Onshape jobs are allowed initially.
-- What Tigris public hostname or URL shape is used for stable artifact URLs.
-- What backup/snapshot policy is enough for the SQLite volume.
+- What initial Onshape export concurrency limit is safe beyond the default of `1`.
+- What Tigris public hostname or URL shape should be used for stable artifact URLs.
+- Whether explicit operator snapshots are enough for the SQLite volume or platform backups are required.
 - When, if ever, SQLite should be replaced with Postgres.
+
+## Worker Runtime
+
+The default `serve` process starts the public web app and an in-process background worker. For separate Fly process groups, run the web process with `WORKER_ENABLED=false` and run a worker process with:
+
+```sh
+onshape-export worker
+```
+
+Scheduled rebuilds are opt-in. Set `REBUILD_INTERVAL_SECONDS` on a process with a worker to periodically enqueue parameter refreshes for every catalog model and enqueue missing default preview/download artifacts once cached parameter metadata exists. A missing or `0` value disables scheduled rebuilds.
+
+Worker concurrency is explicit through `WORKER_CONCURRENCY`. The default is `1`, which keeps the MVP conservative for Onshape API and translation load. Increase it only after observing real export latency, API limits, and SQLite volume behavior.
+
+## Fly Deployment Scaffold
+
+The repository includes a Dockerfile and `fly.toml` for the initial Fly deployment. The default config runs one app machine with `WORKER_ENABLED=true`, so public routes and queued work share the same SQLite database on the mounted `/data` volume.
+
+Create the volume before first deploy:
+
+```sh
+fly volumes create onshape_export_data --size 1 --region ord
+```
+
+Set Onshape and Tigris credentials plus `TIGRIS_PUBLIC_BASE_URL` as Fly secrets or environment variables. Change `primary_region` and the volume region together if `ord` is not the intended deployment region.
+
+Run a deploy-time readiness check after setting secrets or changing runtime configuration:
+
+```sh
+fly ssh console -C "/app/onshape-export ops check"
+```
+
+The check validates catalog loading, SQLite connectivity, storage client construction, Tigris public URL configuration, and required Onshape/Tigris credential presence without issuing Onshape or object-store API calls.
+
+## SQLite Backups
+
+The MVP backup policy is an explicit operator-triggered SQLite snapshot before deployments or cache maintenance that could affect job/artifact state:
+
+```sh
+fly ssh console -C "/app/onshape-export ops backup /data/backups/onshape-export-$(date +%Y%m%d%H%M%S).db"
+```
+
+The command uses SQLite `VACUUM INTO` through the live database connection, so the result is a consistent standalone database file. Create the destination directory first and copy completed backups off the volume according to operational needs. If backups need to become automatic or point-in-time, move this concern to platform snapshots or Postgres.

@@ -10,36 +10,58 @@ Initial admin operations:
 - Fetch and refresh parameter metadata.
 - Generate missing GLB previews.
 - Generate missing STEP, STL, and 3MF exports.
-- Inspect job status and failures.
-- Retry failed jobs.
-- Invalidate artifacts after exporter option changes.
+- Inspect recent job status and failures.
+- Create a consistent SQLite backup snapshot for Fly volume recovery.
+- Retry all failed jobs, one failed job by work key, or failed jobs by kind.
+- Invalidate artifacts after exporter option changes by superseding old public artifacts in normal operation.
+- Prune artifacts older than an explicit age threshold, with dry-run support.
 - List cached outputs for a model.
+- Inspect and optionally rewrite the manifest for a cached model configuration.
 
-## MVP CLI Commands
-
-Start with CLI or Fly-run commands. These commands may enqueue jobs rather than doing all work synchronously.
+Implemented CLI commands:
 
 ```text
-onshape-export validate-catalog [--model <slug>]
-onshape-export refresh-parameters <slug> [--wait]
-onshape-export generate-preview <slug> [--config <json>] [--missing-only] [--wait]
-onshape-export generate-export <slug> --format step|stl|3mf [--config <json>] [--missing-only] [--wait]
-onshape-export jobs list [--status queued|running|ready|failed]
-onshape-export jobs show <job-id>
-onshape-export jobs retry <job-id>
-onshape-export cache list <slug>
-onshape-export cache invalidate <artifact-id-or-group-id> --reason <text>
-onshape-export cache reconcile [--model <slug>]
+onshape-export catalog validate
+onshape-export ops check
+onshape-export ops backup <destination.db>
+onshape-export parameters refresh <slug|--all>
+onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]
+onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]
+onshape-export jobs list [--json]
+onshape-export failures list [--json]
+onshape-export failures retry [--all|<work-key>|--kind <job-kind>]
+onshape-export artifacts list <slug|--all>
+onshape-export artifacts manifest <slug> <config-hash> [--rewrite]
+onshape-export artifacts invalidate <artifact-key>
+onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]
 ```
 
-Command behavior:
+`default` uses Onshape parameter defaults. A preset slug targets a model's catalog-defined `parameterPresets` entry. `--all-parameter-sets` generates the default set plus every configured preset.
 
-- `validate-catalog` checks schema, supported catalog version fields, slug rules, duplicate source identities, override parameter IDs, `entryVersion` consistency when comparing against a previous catalog state, and public-export suitability flags.
-- `refresh-parameters` creates or finds a `parameter_refresh` job.
-- `generate-preview` and `generate-export` create or find deterministic work keys.
-- `jobs retry` respects retryability and max-attempt policy unless a future `--force` option is added.
-- `cache invalidate` marks artifacts superseded and should not delete public objects during normal operation.
-- `cache reconcile` repairs SQLite/Tigris drift such as uploaded objects whose jobs were not marked ready.
+`ops backup` writes a consistent SQLite snapshot to a new local database file using SQLite's native online backup path. On Fly, run it through `fly ssh console` to a path on the mounted volume or a temporary path that can be copied out separately. The command refuses to overwrite an existing destination.
+
+`failures retry` without arguments preserves the broad all-failures behavior.
+Use a listed work key or `--kind <job-kind>` when only one failed operation class
+should be retried.
+
+`artifacts invalidate` and `artifacts prune` supersede SQLite artifact records, preserve immutable public object-store artifacts, mark the producing ready job superseded when known, and rewrite the affected manifest from remaining ready records. Keep deletion for a future explicit operator cleanup command covering legal/IP concerns or storage-cost management.
+
+`artifacts prune` uses SQLite artifact records as the source of truth and supersedes each matching ready record. Use `--dry-run` first to inspect matches without changing artifact state.
+
+`artifacts manifest` renders the manifest that would be materialized from
+SQLite artifact records for one model configuration. Use `--rewrite` to upload
+that manifest to object storage after inspecting or repairing cache state.
+
+## Target Command Gaps
+
+The updated main plan expects several behaviors that are not implemented yet:
+
+- `jobs show <job-id>` and `jobs retry <job-id>` style job commands; current retry commands live under `failures retry` and use work keys or job kinds.
+- `cache reconcile` to repair SQLite/Tigris drift such as uploaded objects whose jobs were not marked ready.
+- Retryability classes and public-safe error codes/messages.
+- Replacement pointers and supersession reasons for artifacts and manifests.
+- Catalog validation against live Onshape metadata for a no-cache `catalog validate` mode.
+- Content disposition in SQLite artifact metadata.
 
 ## Web Admin Deferral
 

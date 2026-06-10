@@ -44,6 +44,8 @@ GLB is a preview format for the MVP and is not a supported user-download format;
 
 GLB is generated as a separate Onshape export for the same selected configuration. It is not derived locally from STEP, STL, or 3MF in the MVP. Documentation may mention glTF only as the broader format family or Onshape translation terminology; cache keys, manifests, public URLs, and viewer behavior should treat preview output as one `.glb` artifact.
 
+Current branch status: direct GLB responses are accepted after GLB header validation, and direct glTF JSON responses are accepted as browser viewer artifacts. Zipped Onshape preview responses use exactly one valid `.glb` when present; otherwise a ZIP with exactly one `.gltf` publishes that viewer asset, safe sidecars, and the original `source.zip` under the preview identity. ZIPs with multiple `.gltf` files are rejected rather than showing a partial preview.
+
 ## Public API
 
 **Decision:** Do not expose a stable public API initially.
@@ -80,9 +82,9 @@ The initial service is a Rust `axum` app on Fly.io, served at `https://onshape-e
 
 ## Worker Topology
 
-**Decision:** Run the MVP web server and worker loop in one Rust process.
+**Decision:** Run the MVP web server and worker loop in one Rust process by default.
 
-The initial Fly deployment uses one Rust service process with the public `axum` server and a bounded embedded background worker loop. SQLite lives on the same Fly volume and provides transactional job coordination for that process. Separate Fly worker process groups are deferred because they require verified shared storage semantics or a move to Postgres or another shared coordination backend.
+The initial Fly deployment uses one Rust service process with the public `axum` server and a bounded embedded background worker loop. SQLite lives on the same Fly volume and provides transactional job coordination for that process. Separate worker process groups are supported by the branch but should stay an operational escape hatch until shared storage semantics are verified or the coordination backend moves to Postgres.
 
 ## Public Artifact Delivery
 
@@ -94,7 +96,9 @@ The product is a public anonymous catalog, so completed GLB, STEP, STL, and 3MF 
 
 **Decision:** Normal MVP cache invalidation uses supersession, not overwrite or deletion.
 
-Public artifact objects are immutable in normal operation. Exporter, schema, catalog, option, or parameter changes produce new artifact keys and update manifests or index state to point at the newer outputs. Older public URLs may remain addressable and can be marked superseded for operational visibility. Deletion is reserved for explicit operator cleanup, legal or IP concerns, or storage-cost management.
+Public artifact objects are immutable in normal operation. Exporter, schema, catalog, option, or parameter changes produce new artifact keys and update manifests or index state to point at newer outputs. Older public URLs may remain addressable and can be marked superseded for operational visibility. Deletion is reserved for explicit operator cleanup, legal or IP concerns, or storage-cost management.
+
+Current branch status: `artifacts invalidate` and `artifacts prune` mark ready SQLite artifact records superseded, leave public object-store artifacts untouched, and rewrite manifests from remaining ready records. Destructive deletion remains reserved for a future explicit cleanup command.
 
 ## Admin Surface
 

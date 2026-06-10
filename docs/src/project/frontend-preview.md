@@ -4,7 +4,7 @@
 
 Start with server-rendered or static pages plus minimal JavaScript for parameter interaction, cache checks, status polling, and the 3D viewer.
 
-For the viewer, start with `<model-viewer>` consuming cached GLB files. Move to three.js only if the product needs custom CAD-like interactions such as measurements, section cuts, custom annotations, or advanced selection.
+For the viewer, start with `<model-viewer>` consuming cached GLB files or Onshape-provided glTF asset sets. Move to three.js only if the product needs custom CAD-like interactions such as measurements, section cuts, custom annotations, or advanced selection.
 
 ## Preview Is A Separate Export
 
@@ -14,7 +14,9 @@ The preview is not generated from STEP, STL, or 3MF locally. It is another Onsha
 selected configuration -> Onshape GLB export -> Tigris -> browser viewer
 ```
 
-The MVP preview artifact is strictly GLB. glTF may appear in Onshape API terminology, but cache keys, manifests, public URLs, and viewer behavior should treat preview output as one `.glb` file rather than a loose `.gltf` asset set.
+The preferred MVP preview artifact is GLB. In practice, Onshape can return direct glTF JSON or zipped glTF asset sets from the same preview endpoint, so the branch supports direct glTF and ZIPs that contain exactly one `.gltf` viewer asset by publishing that entry and its sidecars under the same immutable preview identity.
+
+Current branch status: preview handling writes direct or zipped GLB as `preview.glb`, and direct glTF JSON as `preview.gltf`. If a ZIP has no GLB but contains exactly one glTF file, it writes that `.gltf`, uploads all safe sidecar asset paths, and retains the original ZIP as `source.zip` for debugging/reprocessing. ZIPs with multiple `.gltf` files are rejected until the app can merge them.
 
 The final download is independently cached:
 

@@ -18,7 +18,11 @@ Initial scope:
 - Fly.io Rust app at `https://onshape-export.fly.dev` if the app name is available.
 - Tigris artifact cache with stable public artifact URLs.
 - SQLite on a Fly volume for queue coordination and job uniqueness.
-- Documentation-first planning before implementation.
+- Documentation tracks the current implementation and explicit TODO gaps.
+
+Current implementation note: the branch already contains an initial Rust service with `catalog/v1`, RFC 8785 cache-key hashing, supersession-based invalidation/pruning, GLB-or-Onshape-glTF preview artifacts, retry backoff, target job states, and ready artifact metadata. Remaining gaps are mostly live Onshape verification, typed/unit canonicalization, uploaded-object reconciliation, persisted translation state, and public-safe error taxonomy.
+
+The cache design is the central project risk. The current implementation snapshot is documented in [Caching](caching.md), while the target layered model is documented in [Forward-Looking Cache Model](cache-model.md).
 
 Out of initial scope:
 

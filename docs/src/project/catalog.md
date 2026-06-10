@@ -4,11 +4,40 @@
 
 Start with a curated catalog in the repository, documented and reviewed like code. Do not build an editable catalog system in the first pass.
 
-The catalog should describe only approved Onshape document versions and elements.
+The catalog should describe only approved Onshape document versions and elements. Catalog entries must be safe for public export because completed artifacts are public and normally immutable. Do not add private, customer-specific, or access-controlled models to the MVP catalog.
 
-Catalog entries must be safe for public export. Because completed artifacts are public and normally immutable, do not add private, customer-specific, or access-controlled models to the MVP catalog.
+## Current Branch Layout
 
-Initial files:
+The default implementation loads the versioned catalog index and per-model files:
+
+```text
+catalog/v1/models.json
+catalog/v1/models/{slug}.json
+```
+
+`catalog/models.json` is kept only as an explicit legacy-compatible file for local operators that point `CATALOG_PATH` at it.
+
+Current index shape:
+
+```json
+{
+  "catalogSchemaVersion": 1,
+  "models": [
+    {
+      "slug": "example-model",
+      "name": "Example Model",
+      "description": "Short public description.",
+      "published": true
+    }
+  ]
+}
+```
+
+Each model file contains the full model entry. Current validation covers schema version, entry version, non-empty fields, safe slugs/tags, duplicate slugs, duplicate Onshape source identities, duplicate download formats, preview resolution values, non-empty STEP version strings, preset slug rules, override precision limits, supported override widgets, and unknown override parameter IDs once normalized Onshape metadata is available.
+
+## v1 Layout
+
+The catalog uses versioned files:
 
 ```text
 catalog/v1/models.json
@@ -17,9 +46,9 @@ catalog/v1/models/{slug}.json
 
 `catalog/v1/models.json` is an index of published slugs and lightweight display data. Each `catalog/v1/models/{slug}.json` file is the source of truth for one model entry.
 
-## Model Entry
+## Model Entry Shape
 
-Each model entry should include:
+Implemented shape:
 
 ```json
 {
@@ -39,42 +68,27 @@ Each model entry should include:
     "linkDocumentId": null
   },
   "exports": {
-    "preview": {
-      "format": "glb",
-      "defaults": {
-        "meshResolution": "MEDIUM"
-      }
+    "downloads": ["step", "stl", "3mf"],
+    "preview": "glb",
+    "previewOptions": {
+      "resolution": "MEDIUM"
     },
-    "downloads": {
-      "step": {
-        "enabled": true,
-        "defaults": {
-          "stepVersion": "AP242"
-        }
-      },
-      "stl": {
-        "enabled": true,
-        "defaults": {}
-      },
-      "3mf": {
-        "enabled": true,
-        "defaults": {}
-      }
+    "downloadOptions": {
+      "stepVersionString": "AP242"
     }
   },
   "parameterPolicy": {
     "source": "onshape",
     "allowUnknown": false,
-    "autoRefresh": false
+    "autoRefresh": true
   },
   "parameterOverrides": {
     "parameter-id": {
       "label": "Public Label",
       "description": "Short help text.",
-      "visible": true,
+      "hidden": false,
       "precision": 3,
-      "widget": "number",
-      "previewAutoGenerate": false
+      "widget": "number"
     }
   }
 }
@@ -89,7 +103,7 @@ For Assemblies, use:
 Slug rules:
 
 - Lowercase ASCII letters, numbers, and hyphens only.
-- Start with a letter or number.
+- Start and end with a letter or number.
 - Do not use slugs as immutable cache identity.
 - Treat slug renames as URL/display changes; Onshape source identity and hashes remain the durable cache identity.
 
@@ -99,22 +113,32 @@ Slug rules:
 
 Parameter metadata can be fetched from Onshape and cached in Tigris. SQLite coordinates refresh jobs so duplicate Onshape parameter fetches are not started. The repo catalog should not need to duplicate every parameter by hand unless a model needs UI-specific overrides.
 
-Possible overrides:
+Current branch behavior:
+
+- `previewOptions` and `downloadOptions` are optional.
+- The default preview resolution is `MEDIUM`.
+- The default STEP version string is `AP242`.
+- Preview and download options participate in the current cache identity.
+- `parameterPresets` is optional and supports default, one preset, or all preset pre-generation.
+- Preset values are validated against normalized Onshape parameter metadata before previews or downloads are generated.
+
+Current UI overrides are keyed by Onshape parameter id:
 
 - Public label.
 - Description/help text.
-- Visibility.
+- Hidden flag.
 - Numeric precision.
 - Preferred input widget.
-- Preview auto-generation policy.
-- Export option defaults.
 
-Override merge rules:
+Target override behavior:
 
 - Onshape raw metadata remains the source of truth for parameter IDs and allowed values.
 - Catalog overrides may narrow visibility or presentation, but should not expand accepted values beyond Onshape metadata.
-- Unknown override parameter IDs fail catalog validation.
+- Unknown override parameter IDs fail catalog validation after metadata is available.
 - Unsupported Onshape parameter types may be hidden only if they are not required to generate a valid configuration.
+- Preview auto-generation policy may become an explicit future field if per-parameter generation policy is needed.
+
+Current branch gap: unsupported parameter types do not carry explicit `unsupportedReason` metadata.
 
 ## Later Configurability
 

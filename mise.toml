@@ -1,0 +1,44 @@
+[tools]
+rust = "stable"
+"aqua:superfly/flyctl" = "0.4.59"
+
+[tasks.local-s3]
+description = "Start local MinIO S3-compatible storage"
+run = "scripts/local-s3.sh"
+
+[tasks.local-run]
+description = "Run the app against local MinIO storage"
+run = "scripts/run-local.sh"
+
+[tasks.local-env]
+description = "Write .env.local from the Onshape 1Password API item"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+item="Onshape - Read Only For API"
+umask 077
+tmp="$(mktemp .env.local.XXXXXXXXXX)"
+cleanup() {
+  rm -f "$tmp"
+}
+trap cleanup EXIT
+
+access_key="$(op item get "$item" --fields label="access key")"
+secret_key="$(op item get "$item" --fields label="secret key" --reveal)"
+
+{
+  printf 'ONSHAPE_ACCESS_KEY=%s\n' "$access_key"
+  printf 'ONSHAPE_SECRET_KEY=%s\n' "$secret_key"
+} > "$tmp"
+
+chmod 600 "$tmp"
+mv "$tmp" .env.local
+trap - EXIT
+
+printf 'Wrote .env.local with Onshape credentials (values hidden)\n'
+'''
+
+[tasks.check]
+description = "Run local verification"
+run = "cargo fmt --check && cargo test && cargo clippy --all-targets --all-features -- -D warnings"

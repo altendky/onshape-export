@@ -6,7 +6,91 @@ The service is aimed at models where publishing every parameter combination ahea
 
 ## Current Status
 
-This repository currently contains planning documentation only. No application code has been added yet.
+This repository contains planning documentation and an initial Rust service. The implementation has moved past the original docs-only plan; the remaining gaps are mostly hardening and live Onshape verification details.
+
+Implemented foundation:
+
+- Single-crate Rust `axum` app.
+- `GET /healthz`, `GET /`, model pages, generation routes, and status polling routes.
+- Environment-based runtime configuration.
+- SQLite connection setup with migrations and MVP durability PRAGMAs.
+- Tigris/S3-compatible client construction.
+- Signed Onshape API-key client for configuration metadata reads and export calls.
+- In-repo `catalog/v1/` JSON loading and validation, with legacy catalog compatibility for explicit paths.
+- Onshape parameter metadata refresh, normalization, Tigris caching, and SQLite deduplication.
+- RFC 8785 JSON canonicalization for source, configuration, options, and work-key hash preimages.
+- Server-rendered model parameter controls and submitted-value validation.
+- Background worker loop for queued parameter refreshes, previews, and downloads.
+- Persisted retry attempt limits, `nextRetryAt`, and exponential full-jitter backoff for failed worker jobs.
+- Preview artifacts prefer GLB, but direct glTF JSON is accepted; a ZIP with exactly one Onshape glTF viewer asset is extracted with sidecars and retained with the original `source.zip` when Onshape does not return GLB.
+- Supersession-based artifact invalidation and pruning that leave public object-store artifacts immutable.
+- Worker-only runtime mode for separate Fly process groups.
+- Configurable worker concurrency through `WORKER_CONCURRENCY`.
+- CLI maintenance commands for catalog validation, parameter refresh, pre-generation, job/failure inspection and retry, and artifact inspection/invalidation.
+- CLI manifest inspection and rewrite support for cached model configurations.
+- Catalog-defined parameter presets for targeted preview/export pre-generation.
+- Catalog-defined parameter UI overrides and preview/STEP export option defaults.
+- Deploy-time `ops check` command for catalog, SQLite, storage, public URL, and credential readiness.
+- Operator-triggered SQLite backup snapshots through `ops backup <destination.db>`.
+- Temporary GitHub Actions placeholder job named exactly `all` for the required aggregate check.
+
+Known plan gaps:
+
+- Onshape translation IDs, polling state, and `Retry-After` values are not persisted for crash-resume yet.
+- Failure records and public status errors still need stable public-safe error codes and user messages.
+- Uploaded-object verification and cache reconciliation for partial writes are not implemented yet.
+- Manifests include ready output metadata, but do not yet materialize missing outputs, replacement pointers, or full supersession history.
+
+Local run:
+
+```sh
+cargo run
+```
+
+Local run with MinIO S3-compatible storage:
+
+```sh
+mise run local-s3
+mise run local-run
+```
+
+If you are not using mise, run the same scripts directly:
+
+```sh
+scripts/local-s3.sh
+scripts/run-local.sh
+```
+
+`scripts/run-local.sh` loads optional `.env.local` first. Put Onshape credentials there for local export testing:
+
+```sh
+ONSHAPE_ACCESS_KEY=...
+ONSHAPE_SECRET_KEY=...
+```
+
+MinIO runs at `http://localhost:9000`; its console is at `http://localhost:9001` with `minioadmin` / `minioadmin` by default.
+
+Worker-only run:
+
+```sh
+cargo run -- worker
+```
+
+Set `WORKER_ENABLED=false` when running a web process that should not also claim queued work.
+Set `WORKER_CONCURRENCY` to control how many queued jobs a worker process may run at once; the default is `1`.
+
+The default local database is `onshape-export.db`. Set `DATABASE_URL` for deployment, for example to a SQLite file on a Fly volume.
+
+Fly deployment foundation:
+
+```sh
+fly volumes create onshape_export_data --size 1 --region ord
+fly secrets set ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... TIGRIS_BUCKET=... TIGRIS_PUBLIC_BASE_URL=...
+fly deploy
+fly ssh console -C "/app/onshape-export ops check"
+```
+
+The included `fly.toml` runs a single web machine with the in-process worker enabled so SQLite coordination stays on one mounted Fly volume at `/data`.
 
 ## Product Direction
 
@@ -14,7 +98,7 @@ This repository currently contains planning documentation only. No application c
 - Onshape document versions only, not mutable workspaces.
 - Anonymous end users, using server-owned Onshape credentials.
 - Download formats: STEP, STL, and 3MF.
-- Preview format: cached GLB export shown in a browser 3D viewer.
+- Preview format: cached GLB or single glTF viewer asset shown in a browser 3D viewer.
 - Runtime: Fly.io Rust app at `https://onshape-export.fly.dev` if the app name is available.
 - Cache backend: Tigris Object Storage via Fly, with public stable artifact URLs.
 - Coordination database: SQLite on a Fly volume for queue/job uniqueness.
