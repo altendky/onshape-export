@@ -28,7 +28,7 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::parameters::{
-    ParameterKind, ParameterSchema, ParameterVisibilityCondition, apply_overrides,
+    ParameterKind, ParameterSchema, ParameterVisibilityCondition, SCHEMA_VERSION, apply_overrides,
     normalize_configuration, validate_values,
 };
 use crate::{
@@ -998,6 +998,7 @@ fn render_model_html(
     }}
     .parameter-label {{
       font-weight: 600;
+      text-align: right;
     }}
     .parameter-value {{
       min-width: 0;
@@ -1025,6 +1026,9 @@ fn render_model_html(
       .parameter-control {{
         grid-template-columns: 1fr;
         gap: 0.25rem;
+      }}
+      .parameter-label {{
+        text-align: left;
       }}
     }}
   </style>
@@ -1537,6 +1541,17 @@ async fn load_or_refresh_parameters(
             .storage
             .get_json::<ParameterSchema>(&record.normalized_object_key)
             .await?;
+        if !parameter_schema_is_current(&schema) {
+            tracing::info!(
+                model = %model.slug,
+                cached_schema_version = schema.schema_version,
+                current_schema_version = SCHEMA_VERSION,
+                "refreshing stale parameter schema"
+            );
+            return rebuild_normalized_parameters_from_raw(state, model, &record.raw_object_key)
+                .await;
+        }
+
         let mut schema = schema;
         apply_overrides(&mut schema, &model.parameter_overrides);
         return Ok(Some(schema));
@@ -1544,6 +1559,33 @@ async fn load_or_refresh_parameters(
 
     enqueue_parameter_refresh(state, model).await?;
     Ok(None)
+}
+
+fn parameter_schema_is_current(schema: &ParameterSchema) -> bool {
+    schema.schema_version == SCHEMA_VERSION
+}
+
+async fn rebuild_normalized_parameters_from_raw(
+    state: &AppState,
+    model: &catalog::Model,
+    raw_key: &str,
+) -> Result<Option<ParameterSchema>, AppError> {
+    let raw = match state.storage.get_json::<Value>(raw_key).await {
+        Ok(raw) => raw,
+        Err(error) => {
+            tracing::warn!(model = %model.slug, raw_key, %error, "cached raw parameter metadata unavailable");
+            enqueue_parameter_refresh(state, model).await?;
+            return Ok(None);
+        }
+    };
+
+    let mut schema = normalize_configuration(&model.onshape, &raw);
+    apply_overrides(&mut schema, &model.parameter_overrides);
+    state
+        .storage
+        .put_json(&parameter_normalized_key(model), &schema)
+        .await?;
+    Ok(Some(schema))
 }
 
 async fn background_runtime(
@@ -2711,6 +2753,7 @@ mod tests {
         assert!(html.contains("parameters-panel"));
         assert!(html.contains("output-panel"));
         assert!(html.contains("grid-template-columns: minmax(8rem, 42%) minmax(0, 1fr)"));
+        assert!(html.contains("text-align: right"));
         assert!(html.contains("document.addEventListener(\"submit\""));
         assert!(html.contains("fetch(submitter.formAction"));
         assert!(html.contains("new URLSearchParams(new FormData(form))"));

@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::catalog::{OnshapeSource, ParameterOverride};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

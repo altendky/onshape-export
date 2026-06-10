@@ -5,6 +5,7 @@ use sqlx::{Executor, Row, SqlitePool, sqlite::SqlitePoolOptions};
 
 #[derive(Debug, Clone)]
 pub struct ParameterMetadataRecord {
+    pub raw_object_key: String,
     pub normalized_object_key: String,
 }
 
@@ -115,12 +116,15 @@ impl Database {
         &self,
         model_slug: &str,
     ) -> sqlx::Result<Option<ParameterMetadataRecord>> {
-        sqlx::query("SELECT normalized_object_key FROM parameter_metadata WHERE model_slug = ?")
+        sqlx::query(
+            "SELECT raw_object_key, normalized_object_key FROM parameter_metadata WHERE model_slug = ?",
+        )
             .bind(model_slug)
             .fetch_optional(&self.pool)
             .await
             .map(|row| {
                 row.map(|row| ParameterMetadataRecord {
+                    raw_object_key: row.get("raw_object_key"),
                     normalized_object_key: row.get("normalized_object_key"),
                 })
             })
