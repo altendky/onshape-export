@@ -943,26 +943,87 @@ fn render_model_html(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/4.0.0/model-viewer.min.js"></script>
   <title>{name} - Onshape Export</title>
+  <style>
+    body {{
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      line-height: 1.4;
+    }}
+    main {{
+      padding: 1rem;
+    }}
+    .model-layout {{
+      display: grid;
+      grid-template-columns: minmax(18rem, 24rem) minmax(0, 1fr);
+      gap: 1.5rem;
+      align-items: start;
+    }}
+    .parameters-panel {{
+      position: sticky;
+      top: 1rem;
+      max-height: calc(100vh - 2rem);
+      overflow: auto;
+      padding-right: 0.25rem;
+    }}
+    .actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 1rem;
+    }}
+    .output-panel {{
+      min-width: 0;
+    }}
+    .preview-section model-viewer {{
+      width: min(100%, 52rem) !important;
+      height: min(70vh, 42rem) !important;
+    }}
+    input, select, textarea, button {{
+      font: inherit;
+    }}
+    input, select, textarea {{
+      box-sizing: border-box;
+      max-width: 100%;
+    }}
+    @media (max-width: 800px) {{
+      .model-layout {{
+        grid-template-columns: 1fr;
+      }}
+      .parameters-panel {{
+        position: static;
+        max-height: none;
+      }}
+    }}
+  </style>
 </head>
 <body>
   <main>
     <p><a href="/">Back to catalog</a></p>
     <h1>{name}</h1>
     <p>{description}</p>
-    <form method="post">
-      {parameter_controls}
-      <button type="submit">Validate Parameters</button>
-      <button type="submit" formaction="/models/{slug}/preview">Generate Preview</button>
-      {download_buttons}
-    </form>
-    <section>
-      <h2>Preview</h2>
-      {preview}
-    </section>
-    <section>
-      <h2>Downloads</h2>
-      {downloads}
-    </section>
+    <div class="model-layout">
+      <section class="parameters-panel" aria-labelledby="parameters-heading">
+        <h2 id="parameters-heading">Parameters</h2>
+        <form method="post">
+          {parameter_controls}
+          <div class="actions">
+            <button type="submit">Validate Parameters</button>
+            <button type="submit" formaction="/models/{slug}/preview">Generate Preview</button>
+            {download_buttons}
+          </div>
+        </form>
+      </section>
+      <div class="output-panel">
+        <section class="preview-section">
+          <h2>Preview</h2>
+          {preview}
+        </section>
+        <section>
+          <h2>Downloads</h2>
+          {downloads}
+        </section>
+      </div>
+    </div>
   </main>
   <script>
 (() => {{
@@ -2516,6 +2577,9 @@ mod tests {
         let model = test_model();
         let html = render_model_html(&model, "", "", "").0;
 
+        assert!(html.contains("model-layout"));
+        assert!(html.contains("parameters-panel"));
+        assert!(html.contains("output-panel"));
         assert!(html.contains("document.addEventListener(\"submit\""));
         assert!(html.contains("fetch(submitter.formAction"));
         assert!(html.contains("new URLSearchParams(new FormData(form))"));
