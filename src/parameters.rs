@@ -28,6 +28,8 @@ pub struct Parameter {
     pub options: Vec<ParameterOption>,
     #[serde(default)]
     pub hidden: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility_condition: Option<ParameterVisibilityCondition>,
     #[serde(default)]
     pub precision: Option<u32>,
     #[serde(default)]
@@ -51,6 +53,25 @@ pub enum ParameterKind {
 pub struct ParameterOption {
     pub value: String,
     pub label: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum ParameterVisibilityCondition {
+    All {
+        conditions: Vec<ParameterVisibilityCondition>,
+    },
+    Any {
+        conditions: Vec<ParameterVisibilityCondition>,
+    },
+    Equal {
+        parameter_id: String,
+        values: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -246,6 +267,10 @@ fn normalize_parameter(value: &Value) -> Option<Parameter> {
         default_value,
         options,
         hidden: false,
+        visibility_condition: message
+            .get("visibilityCondition")
+            .or_else(|| object.get("visibilityCondition"))
+            .and_then(normalize_visibility_condition),
         precision: is_integer.then_some(0),
         widget: None,
         units,
@@ -337,6 +362,108 @@ fn extract_options(value: &Value) -> Vec<ParameterOption> {
             Some(ParameterOption { value, label })
         })
         .collect()
+}
+
+fn normalize_visibility_condition(value: &Value) -> Option<ParameterVisibilityCondition> {
+    normalize_visibility_condition_result(value).ok().flatten()
+}
+
+fn normalize_visibility_condition_result(
+    value: &Value,
+) -> Result<Option<ParameterVisibilityCondition>, ()> {
+    let object = value.as_object().ok_or(())?;
+    let message = object
+        .get("message")
+        .and_then(Value::as_object)
+        .unwrap_or(object);
+
+    if message.is_empty() {
+        return Ok(None);
+    }
+
+    let type_hint = first_text(object, &["typeName", "type"])
+        .or_else(|| first_text(message, &["typeName", "type"]))
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if type_hint.contains("visibilitylogical")
+        || (message.contains_key("operation") && message.contains_key("children"))
+    {
+        return normalize_logical_visibility_condition(message);
+    }
+
+    if type_hint.contains("visibilityonequal")
+        || (message.contains_key("parameterId") && message.contains_key("value"))
+    {
+        return normalize_equal_visibility_condition(message);
+    }
+
+    Err(())
+}
+
+fn normalize_logical_visibility_condition(
+    message: &serde_json::Map<String, Value>,
+) -> Result<Option<ParameterVisibilityCondition>, ()> {
+    let operation = first_text(message, &["operation"])
+        .ok_or(())?
+        .to_ascii_uppercase();
+    let children = message
+        .get("children")
+        .and_then(Value::as_array)
+        .ok_or(())?;
+    let mut conditions = Vec::new();
+
+    for child in children {
+        match normalize_visibility_condition_result(child)? {
+            Some(condition) => conditions.push(condition),
+            None if operation == "OR" => return Ok(None),
+            None => {}
+        }
+    }
+
+    if conditions.is_empty() {
+        return Ok(None);
+    }
+
+    match operation.as_str() {
+        "AND" => Ok(Some(ParameterVisibilityCondition::All { conditions })),
+        "OR" => Ok(Some(ParameterVisibilityCondition::Any { conditions })),
+        _ => Err(()),
+    }
+}
+
+fn normalize_equal_visibility_condition(
+    message: &serde_json::Map<String, Value>,
+) -> Result<Option<ParameterVisibilityCondition>, ()> {
+    let parameter_id = first_string(message, &["parameterId"]).ok_or(())?;
+    let value = message.get("value").ok_or(())?;
+    let in_array = message
+        .get("inArray")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let values = visibility_condition_values(value, in_array).ok_or(())?;
+
+    Ok(Some(ParameterVisibilityCondition::Equal {
+        parameter_id,
+        values,
+    }))
+}
+
+fn visibility_condition_values(value: &Value, in_array: bool) -> Option<Vec<String>> {
+    let values = if in_array {
+        if let Some(array) = value.as_array() {
+            array
+                .iter()
+                .map(value_to_string)
+                .collect::<Option<Vec<_>>>()?
+        } else {
+            vec![value_to_string(value)?]
+        }
+    } else {
+        vec![value_to_string(value)?]
+    };
+
+    (!values.is_empty()).then_some(values)
 }
 
 fn first_string(object: &serde_json::Map<String, Value>, names: &[&str]) -> Option<String> {
@@ -460,12 +587,28 @@ mod tests {
                             "parameterName": "fillType"
                         },
                         "typeName": "BTMConfigurationParameterEnum"
+                    },
+                    {
+                        "message": {
+                            "defaultValue": 2,
+                            "parameterId": "dividerCount",
+                            "parameterName": "dividerCount",
+                            "visibilityCondition": {
+                                "message": {
+                                    "inArray": false,
+                                    "parameterId": "dividers",
+                                    "value": true
+                                },
+                                "typeName": "BTParameterVisibilityOnEqual"
+                            }
+                        },
+                        "typeName": "BTMConfigurationParameterQuantity"
                     }
                 ]
             }),
         );
 
-        assert_eq!(schema.parameters.len(), 4);
+        assert_eq!(schema.parameters.len(), 5);
         assert_eq!(schema.parameters[0].id, "xn");
         assert_eq!(schema.parameters[0].default_value.as_deref(), Some("2"));
         assert_eq!(schema.parameters[0].precision, Some(0));
@@ -477,6 +620,114 @@ mod tests {
         assert_eq!(schema.parameters[2].kind, ParameterKind::Boolean);
         assert_eq!(schema.parameters[3].kind, ParameterKind::Enum);
         assert_eq!(schema.parameters[3].options[0].label, "None");
+        assert_eq!(
+            schema.parameters[4].visibility_condition,
+            Some(ParameterVisibilityCondition::Equal {
+                parameter_id: "dividers".to_owned(),
+                values: vec!["true".to_owned()],
+            })
+        );
+    }
+
+    #[test]
+    fn normalizes_logical_visibility_conditions() {
+        let schema = normalize_configuration(
+            &source(),
+            &json!({
+                "configurationParameters": [
+                    {
+                        "message": {
+                            "defaultValue": 1,
+                            "parameterId": "partsRampRadius",
+                            "parameterName": "partsRampRadius",
+                            "visibilityCondition": {
+                                "message": {
+                                    "children": [
+                                        {
+                                            "message": {
+                                                "inArray": false,
+                                                "parameterId": "partsRamp",
+                                                "value": true
+                                            },
+                                            "typeName": "BTParameterVisibilityOnEqual"
+                                        },
+                                        {
+                                            "message": {
+                                                "inArray": true,
+                                                "parameterId": "fillType",
+                                                "value": ["Default", "Full", "From_Bottom"]
+                                            },
+                                            "typeName": "BTParameterVisibilityOnEqual"
+                                        }
+                                    ],
+                                    "operation": "AND"
+                                },
+                                "typeName": "BTParameterVisibilityLogical"
+                            }
+                        },
+                        "typeName": "BTMConfigurationParameterQuantity"
+                    }
+                ]
+            }),
+        );
+
+        assert_eq!(
+            schema.parameters[0].visibility_condition,
+            Some(ParameterVisibilityCondition::All {
+                conditions: vec![
+                    ParameterVisibilityCondition::Equal {
+                        parameter_id: "partsRamp".to_owned(),
+                        values: vec!["true".to_owned()],
+                    },
+                    ParameterVisibilityCondition::Equal {
+                        parameter_id: "fillType".to_owned(),
+                        values: vec![
+                            "Default".to_owned(),
+                            "Full".to_owned(),
+                            "From_Bottom".to_owned(),
+                        ],
+                    },
+                ],
+            })
+        );
+    }
+
+    #[test]
+    fn treats_empty_and_unsupported_visibility_conditions_as_visible() {
+        let schema = normalize_configuration(
+            &source(),
+            &json!({
+                "configurationParameters": [
+                    {
+                        "message": {
+                            "defaultValue": 1,
+                            "parameterId": "alwaysVisible",
+                            "parameterName": "alwaysVisible",
+                            "visibilityCondition": {
+                                "message": {},
+                                "typeName": "BTParameterVisibilityCondition"
+                            }
+                        },
+                        "typeName": "BTMConfigurationParameterQuantity"
+                    },
+                    {
+                        "message": {
+                            "defaultValue": 1,
+                            "parameterId": "unknownVisibility",
+                            "parameterName": "unknownVisibility",
+                            "visibilityCondition": {
+                                "message": {"other": true},
+                                "typeName": "BTParameterVisibilityCustom"
+                            }
+                        },
+                        "typeName": "BTMConfigurationParameterQuantity"
+                    }
+                ]
+            }),
+        );
+
+        assert_eq!(schema.parameters[0].visibility_condition, None);
+        assert_eq!(schema.parameters[1].visibility_condition, None);
     }
 
     #[test]
@@ -493,6 +744,7 @@ mod tests {
                 default_value: None,
                 options: Vec::new(),
                 hidden: false,
+                visibility_condition: None,
                 precision: None,
                 widget: None,
                 units: Some("millimeter".to_owned()),
@@ -520,6 +772,7 @@ mod tests {
                 default_value: Some("1.5".to_owned()),
                 options: Vec::new(),
                 hidden: false,
+                visibility_condition: None,
                 precision: None,
                 widget: None,
                 units: Some("millimeter".to_owned()),
@@ -586,6 +839,7 @@ mod tests {
                 default_value: None,
                 options: Vec::new(),
                 hidden: false,
+                visibility_condition: None,
                 precision: None,
                 widget: None,
                 units: None,

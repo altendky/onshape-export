@@ -28,7 +28,8 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::parameters::{
-    ParameterKind, ParameterSchema, apply_overrides, normalize_configuration, validate_values,
+    ParameterKind, ParameterSchema, ParameterVisibilityCondition, apply_overrides,
+    normalize_configuration, validate_values,
 };
 use crate::{
     catalog::Catalog,
@@ -985,6 +986,32 @@ fn render_model_html(
       box-sizing: border-box;
       max-width: 100%;
     }}
+    .parameter-control {{
+      display: grid;
+      grid-template-columns: minmax(8rem, 42%) minmax(0, 1fr);
+      gap: 0.75rem;
+      align-items: start;
+      margin: 0.75rem 0;
+    }}
+    .parameter-control[hidden] {{
+      display: none;
+    }}
+    .parameter-label {{
+      font-weight: 600;
+    }}
+    .parameter-value {{
+      min-width: 0;
+    }}
+    .parameter-value input:not([type="checkbox"]):not([type="hidden"]),
+    .parameter-value select,
+    .parameter-value textarea {{
+      width: 100%;
+    }}
+    .parameter-value small {{
+      display: block;
+      margin-top: 0.25rem;
+      color: #555;
+    }}
     @media (max-width: 800px) {{
       .model-layout {{
         grid-template-columns: 1fr;
@@ -992,6 +1019,12 @@ fn render_model_html(
       .parameters-panel {{
         position: static;
         max-height: none;
+      }}
+    }}
+    @media (max-width: 520px) {{
+      .parameter-control {{
+        grid-template-columns: 1fr;
+        gap: 0.25rem;
       }}
     }}
   </style>
@@ -1068,6 +1101,88 @@ fn render_model_html(
     }}
   }};
 
+  const normalizeParameterValue = (value) => {{
+    if (value === "on" || value === "1") {{
+      return "true";
+    }}
+    if (value === "0") {{
+      return "false";
+    }}
+    return value;
+  }};
+
+  const parameterValue = (form, parameterId) => {{
+    const controls = Array.from(form.elements).filter((control) => control.name === parameterId);
+    for (const control of controls) {{
+      if (control instanceof HTMLInputElement && control.type === "checkbox") {{
+        if (control.checked) {{
+          return control.value || "on";
+        }}
+        continue;
+      }}
+      if (control instanceof HTMLInputElement && control.type === "radio") {{
+        if (control.checked) {{
+          return control.value;
+        }}
+        continue;
+      }}
+    }}
+
+    const control = controls.find((control) =>
+      !(control instanceof HTMLInputElement) ||
+      (control.type !== "checkbox" && control.type !== "radio")
+    );
+    return control?.value;
+  }};
+
+  const evaluateVisibilityCondition = (condition, form) => {{
+    if (!condition || typeof condition !== "object") {{
+      return true;
+    }}
+
+    if (condition.kind === "all") {{
+      const conditions = Array.isArray(condition.conditions) ? condition.conditions : [];
+      return conditions.every((child) => evaluateVisibilityCondition(child, form));
+    }}
+    if (condition.kind === "any") {{
+      const conditions = Array.isArray(condition.conditions) ? condition.conditions : [];
+      return conditions.length === 0 || conditions.some((child) => evaluateVisibilityCondition(child, form));
+    }}
+    if (condition.kind === "equal") {{
+      const values = Array.isArray(condition.values) ? condition.values : [];
+      const value = parameterValue(form, condition.parameterId);
+      if (values.length === 0 || value === undefined) {{
+        return true;
+      }}
+
+      const normalizedValue = normalizeParameterValue(value);
+      return values
+        .map((expected) => normalizeParameterValue(String(expected)))
+        .includes(normalizedValue);
+    }}
+
+    return true;
+  }};
+
+  const applyParameterVisibility = (form) => {{
+    for (const wrapper of form.querySelectorAll("[data-visibility-condition]")) {{
+      try {{
+        wrapper.hidden = !evaluateVisibilityCondition(JSON.parse(wrapper.dataset.visibilityCondition), form);
+      }} catch (_error) {{
+        wrapper.hidden = false;
+      }}
+    }}
+  }};
+
+  const initializeParameterVisibility = (root) => {{
+    for (const form of root.querySelectorAll("form")) {{
+      const update = () => applyParameterVisibility(form);
+      form.addEventListener("input", update);
+      form.addEventListener("change", update);
+      update();
+    }}
+  }};
+
   const runInlineScripts = (root) => {{
     for (const script of root.querySelectorAll("script")) {{
       if (script.src || script.type === "module") {{
@@ -1119,6 +1234,7 @@ fn render_model_html(
         document.title = page.title;
       }}
       window.history.replaceState(null, "", form.action || window.location.pathname);
+      initializeParameterVisibility(nextMain);
       runInlineScripts(nextMain);
       configurePreviewViewers(nextMain);
     }} catch (error) {{
@@ -1128,6 +1244,7 @@ fn render_model_html(
     }}
   }});
 
+  initializeParameterVisibility(document);
   configurePreviewViewers(document);
 }})();
   </script>
@@ -2353,10 +2470,15 @@ fn render_parameter_controls_with_values(
                 .or_else(|| parameter.display_value())
                 .unwrap_or_default();
             let required = if parameter.required { " required" } else { "" };
+            let visibility_condition = parameter
+                .visibility_condition
+                .as_ref()
+                .map(render_visibility_condition_attribute)
+                .unwrap_or_default();
             let help = parameter
                 .description
                 .as_deref()
-                .map(|description| format!(r#"<br><small>{}</small>"#, escape_html(description)))
+                .map(|description| format!(r#"<small>{}</small>"#, escape_html(description)))
                 .unwrap_or_default();
             let input = match parameter.kind {
                 ParameterKind::Text if parameter.widget.as_deref() == Some("textarea") => format!(
@@ -2414,7 +2536,9 @@ fn render_parameter_controls_with_values(
                 }
             };
 
-            format!(r#"<p><label for="{id}">{label}</label><br>{input}{help}</p>"#)
+            format!(
+                r#"<p class="parameter-control" data-parameter-id="{id}"{visibility_condition}><label class="parameter-label" for="{id}">{label}</label><span class="parameter-value">{input}{help}</span></p>"#
+            )
         })
         .collect::<String>();
 
@@ -2423,6 +2547,11 @@ fn render_parameter_controls_with_values(
     } else {
         controls
     }
+}
+
+fn render_visibility_condition_attribute(condition: &ParameterVisibilityCondition) -> String {
+    let json = serde_json::to_string(condition).expect("visibility condition serializes");
+    format!(r#" data-visibility-condition="{}""#, escape_html(&json))
 }
 
 fn number_step(precision: Option<u32>) -> String {
@@ -2558,6 +2687,7 @@ mod tests {
                 default_value: Some("42".to_owned()),
                 options: Vec::new(),
                 hidden: false,
+                visibility_condition: None,
                 precision: None,
                 widget: None,
                 units: Some("millimeter".to_owned()),
@@ -2580,6 +2710,7 @@ mod tests {
         assert!(html.contains("model-layout"));
         assert!(html.contains("parameters-panel"));
         assert!(html.contains("output-panel"));
+        assert!(html.contains("grid-template-columns: minmax(8rem, 42%) minmax(0, 1fr)"));
         assert!(html.contains("document.addEventListener(\"submit\""));
         assert!(html.contains("fetch(submitter.formAction"));
         assert!(html.contains("new URLSearchParams(new FormData(form))"));
@@ -2587,6 +2718,62 @@ mod tests {
         assert!(html.contains("window.onshapeExportConfigurePreviewViewer"));
         assert!(html.contains("pbr.setBaseColorFactor([0.48, 0.50, 0.52"));
         assert!(html.contains("replaceWith(nextMain)"));
+        assert!(html.contains("initializeParameterVisibility(nextMain)"));
+        assert!(html.contains(r#"form.addEventListener("change", update)"#));
+        assert!(html.contains("wrapper.hidden = !evaluateVisibilityCondition"));
+    }
+
+    #[test]
+    fn parameter_controls_render_visibility_metadata_without_disabling_inputs() {
+        let schema = ParameterSchema {
+            schema_version: parameters::SCHEMA_VERSION,
+            source: test_model().onshape,
+            parameters: vec![
+                parameters::Parameter {
+                    id: "dividers".to_owned(),
+                    label: "Dividers".to_owned(),
+                    description: None,
+                    kind: ParameterKind::Boolean,
+                    required: false,
+                    default_value: Some("false".to_owned()),
+                    options: Vec::new(),
+                    hidden: false,
+                    visibility_condition: None,
+                    precision: None,
+                    widget: None,
+                    units: None,
+                    raw: Value::Null,
+                },
+                parameters::Parameter {
+                    id: "dividerCount".to_owned(),
+                    label: "Divider Count".to_owned(),
+                    description: None,
+                    kind: ParameterKind::Number,
+                    required: false,
+                    default_value: Some("2".to_owned()),
+                    options: Vec::new(),
+                    hidden: false,
+                    visibility_condition: Some(ParameterVisibilityCondition::Equal {
+                        parameter_id: "dividers".to_owned(),
+                        values: vec!["true".to_owned()],
+                    }),
+                    precision: Some(0),
+                    widget: None,
+                    units: None,
+                    raw: Value::Null,
+                },
+            ],
+        };
+
+        let controls = render_parameter_controls(&schema);
+
+        assert!(controls.contains(r#"class="parameter-control""#));
+        assert!(controls.contains(r#"class="parameter-label""#));
+        assert!(controls.contains(r#"class="parameter-value""#));
+        assert!(controls.contains(r#"data-parameter-id="dividerCount""#));
+        assert!(controls.contains(r#"data-visibility-condition="{&quot;kind&quot;:&quot;equal&quot;,&quot;parameterId&quot;:&quot;dividers&quot;,&quot;values&quot;:[&quot;true&quot;]}""#));
+        assert!(controls.contains(r#"name="dividerCount""#));
+        assert!(!controls.contains("disabled"));
     }
 
     #[test]

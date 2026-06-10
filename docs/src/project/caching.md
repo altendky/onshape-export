@@ -54,6 +54,22 @@ Use canonical JSON for parameter values and options before hashing:
 - Normalize numeric values according to the catalog's precision rules.
 - Include units where they affect the Onshape configuration string.
 
+Current parameter visibility handling is conservative: conditionally hidden form
+controls keep their values, remain enabled, and are still included in submitted
+forms and cache identity. Hidden or not-shown in Onshape does not prove the
+value is irrelevant to the generated model.
+
+Future cache canonicalization work should consider:
+
+- Whitespace around units.
+- Numeric spelling such as `15.0` versus `15`.
+- Unit synonyms and conversions such as `1 in` versus `25.4 mm`.
+- Boolean and enum value canonicalization.
+- Onshape's `configurationencodings` endpoint for canonical configuration strings.
+
+Do not reduce cache keys by omitting conditionally hidden parameters until that
+behavior has been proven safe for the target models.
+
 ## Object Storage Layout
 
 Proposed layout:
