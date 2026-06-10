@@ -1722,7 +1722,7 @@ fn preview_artifact_from_zip(
     }
 
     if let Some((index, _)) = largest_zip_entry_with_extension(&mut archive, "gltf")? {
-        let bytes = read_zip_entry(&mut archive, index)?;
+        let bytes = normalize_preview_gltf_materials(read_zip_entry(&mut archive, index)?)?;
         return Ok(PreviewArtifact {
             object_key: preview_gltf_object_key(model, config_hash),
             content_type: "model/gltf+json",
@@ -1731,6 +1731,54 @@ fn preview_artifact_from_zip(
     }
 
     anyhow::bail!("Onshape preview ZIP did not contain a GLB or glTF file")
+}
+
+fn normalize_preview_gltf_materials(bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    let mut gltf: Value = serde_json::from_slice(&bytes)?;
+    let mut changed = false;
+
+    if let Some(materials) = gltf.get_mut("materials").and_then(Value::as_array_mut) {
+        for material in materials {
+            let Some(pbr) = material
+                .get_mut("pbrMetallicRoughness")
+                .and_then(Value::as_object_mut)
+            else {
+                continue;
+            };
+            let Some(color) = pbr.get_mut("baseColorFactor").and_then(Value::as_array_mut) else {
+                continue;
+            };
+            if is_near_white_material(color) {
+                color[0] = Value::from(0.72);
+                color[1] = Value::from(0.76);
+                color[2] = Value::from(0.82);
+                pbr.insert("roughnessFactor".to_owned(), Value::from(0.82));
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        Ok(serde_json::to_vec(&gltf)?)
+    } else {
+        Ok(bytes)
+    }
+}
+
+fn is_near_white_material(color: &[Value]) -> bool {
+    let Some(red) = color.first().and_then(Value::as_f64) else {
+        return false;
+    };
+    let Some(green) = color.get(1).and_then(Value::as_f64) else {
+        return false;
+    };
+    let Some(blue) = color.get(2).and_then(Value::as_f64) else {
+        return false;
+    };
+    let min = red.min(green).min(blue);
+    let max = red.max(green).max(blue);
+
+    min >= 0.85 && max - min <= 0.08
 }
 
 fn largest_zip_entry_with_extension(
@@ -2575,6 +2623,57 @@ mod tests {
                 .unwrap()
                 .contains("meshes")
         );
+    }
+
+    #[test]
+    fn softens_near_white_gltf_preview_materials() {
+        let model = test_model();
+        let bytes = test_zip(&[(
+            "preview.gltf",
+            br#"{
+                "asset":{"version":"2.0"},
+                "materials":[{
+                    "pbrMetallicRoughness":{
+                        "baseColorFactor":[0.91,0.91,0.91,1.0],
+                        "metallicFactor":0.0
+                    }
+                }]
+            }"#
+            .as_slice(),
+        )]);
+
+        let artifact = preview_artifact_from_onshape_bytes(&model, "abc", bytes).unwrap();
+        let gltf: Value = serde_json::from_slice(&artifact.bytes).unwrap();
+        let color = &gltf["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"];
+
+        assert_eq!(color[0], Value::from(0.72));
+        assert_eq!(color[1], Value::from(0.76));
+        assert_eq!(color[2], Value::from(0.82));
+        assert_eq!(
+            gltf["materials"][0]["pbrMetallicRoughness"]["roughnessFactor"],
+            Value::from(0.82)
+        );
+    }
+
+    #[test]
+    fn keeps_colored_gltf_preview_materials() {
+        let bytes = br#"{
+            "asset":{"version":"2.0"},
+            "materials":[{
+                "pbrMetallicRoughness":{
+                    "baseColorFactor":[0.2,0.4,0.8,1.0]
+                }
+            }]
+        }"#
+        .to_vec();
+
+        let normalized = normalize_preview_gltf_materials(bytes).unwrap();
+        let gltf: Value = serde_json::from_slice(&normalized).unwrap();
+        let color = &gltf["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"];
+
+        assert_eq!(color[0], Value::from(0.2));
+        assert_eq!(color[1], Value::from(0.4));
+        assert_eq!(color[2], Value::from(0.8));
     }
 
     #[test]
