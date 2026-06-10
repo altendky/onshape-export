@@ -966,6 +966,47 @@ fn render_model_html(
   </main>
   <script>
 (() => {{
+  const isNearWhiteColor = (color) => {{
+    if (!color || color.length < 3) {{
+      return false;
+    }}
+    const min = Math.min(color[0], color[1], color[2]);
+    const max = Math.max(color[0], color[1], color[2]);
+    return min >= 0.85 && max - min <= 0.08;
+  }};
+
+  window.onshapeExportConfigurePreviewViewer = (viewer) => {{
+    viewer.setAttribute("environment-image", "neutral");
+    viewer.setAttribute("exposure", "0.7");
+    viewer.setAttribute("shadow-intensity", "0.85");
+    viewer.setAttribute("shadow-softness", "0.6");
+    viewer.style.background = "linear-gradient(#3b3f45, #25282d)";
+
+    const applyMaterialPreset = () => {{
+      for (const material of viewer.model?.materials ?? []) {{
+        const pbr = material.pbrMetallicRoughness;
+        const color = pbr?.baseColorFactor;
+        if (!isNearWhiteColor(color) || typeof pbr.setBaseColorFactor !== "function") {{
+          continue;
+        }}
+        pbr.setBaseColorFactor([0.48, 0.50, 0.52, color[3] ?? 1]);
+        pbr.setRoughnessFactor?.(0.74);
+      }}
+    }};
+
+    if (viewer.model) {{
+      applyMaterialPreset();
+    }} else {{
+      viewer.addEventListener("load", applyMaterialPreset, {{ once: true }});
+    }}
+  }};
+
+  const configurePreviewViewers = (root) => {{
+    for (const viewer of root.querySelectorAll("model-viewer")) {{
+      window.onshapeExportConfigurePreviewViewer(viewer);
+    }}
+  }};
+
   const runInlineScripts = (root) => {{
     for (const script of root.querySelectorAll("script")) {{
       if (script.src || script.type === "module") {{
@@ -1018,12 +1059,15 @@ fn render_model_html(
       }}
       window.history.replaceState(null, "", form.action || window.location.pathname);
       runInlineScripts(nextMain);
+      configurePreviewViewers(nextMain);
     }} catch (error) {{
       submitter.disabled = false;
       submitter.textContent = label;
       alert(error.message);
     }}
   }});
+
+  configurePreviewViewers(document);
 }})();
   </script>
 </body>
@@ -1722,7 +1766,7 @@ fn preview_artifact_from_zip(
     }
 
     if let Some((index, _)) = largest_zip_entry_with_extension(&mut archive, "gltf")? {
-        let bytes = normalize_preview_gltf_materials(read_zip_entry(&mut archive, index)?)?;
+        let bytes = read_zip_entry(&mut archive, index)?;
         return Ok(PreviewArtifact {
             object_key: preview_gltf_object_key(model, config_hash),
             content_type: "model/gltf+json",
@@ -1731,54 +1775,6 @@ fn preview_artifact_from_zip(
     }
 
     anyhow::bail!("Onshape preview ZIP did not contain a GLB or glTF file")
-}
-
-fn normalize_preview_gltf_materials(bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
-    let mut gltf: Value = serde_json::from_slice(&bytes)?;
-    let mut changed = false;
-
-    if let Some(materials) = gltf.get_mut("materials").and_then(Value::as_array_mut) {
-        for material in materials {
-            let Some(pbr) = material
-                .get_mut("pbrMetallicRoughness")
-                .and_then(Value::as_object_mut)
-            else {
-                continue;
-            };
-            let Some(color) = pbr.get_mut("baseColorFactor").and_then(Value::as_array_mut) else {
-                continue;
-            };
-            if is_near_white_material(color) {
-                color[0] = Value::from(0.48);
-                color[1] = Value::from(0.50);
-                color[2] = Value::from(0.52);
-                pbr.insert("roughnessFactor".to_owned(), Value::from(0.74));
-                changed = true;
-            }
-        }
-    }
-
-    if changed {
-        Ok(serde_json::to_vec(&gltf)?)
-    } else {
-        Ok(bytes)
-    }
-}
-
-fn is_near_white_material(color: &[Value]) -> bool {
-    let Some(red) = color.first().and_then(Value::as_f64) else {
-        return false;
-    };
-    let Some(green) = color.get(1).and_then(Value::as_f64) else {
-        return false;
-    };
-    let Some(blue) = color.get(2).and_then(Value::as_f64) else {
-        return false;
-    };
-    let min = red.min(green).min(blue);
-    let max = red.max(green).max(blue);
-
-    min >= 0.85 && max - min <= 0.08
 }
 
 fn largest_zip_entry_with_extension(
@@ -2232,13 +2228,9 @@ fn render_status_polling(
       viewer.src = status.publicUrl;
       viewer.setAttribute("camera-controls", "");
       viewer.setAttribute("auto-rotate", "");
-      viewer.setAttribute("environment-image", "neutral");
-      viewer.setAttribute("exposure", "0.7");
-      viewer.setAttribute("shadow-intensity", "0.85");
-      viewer.setAttribute("shadow-softness", "0.6");
       viewer.style.width = "min(100%, 720px)";
       viewer.style.height = "480px";
-      viewer.style.background = "linear-gradient(#3b3f45, #25282d)";
+      window.onshapeExportConfigurePreviewViewer?.(viewer);
       target.replaceWith(viewer);
       return;
     }}
@@ -2528,6 +2520,8 @@ mod tests {
         assert!(html.contains("fetch(submitter.formAction"));
         assert!(html.contains("new URLSearchParams(new FormData(form))"));
         assert!(html.contains("application/x-www-form-urlencoded"));
+        assert!(html.contains("window.onshapeExportConfigurePreviewViewer"));
+        assert!(html.contains("pbr.setBaseColorFactor([0.48, 0.50, 0.52"));
         assert!(html.contains("replaceWith(nextMain)"));
     }
 
@@ -2536,9 +2530,7 @@ mod tests {
         let html = render_status_polling("preview", "abcdef123456", "/status", "Queued").unwrap();
 
         assert!(html.contains(r#"document.createElement("model-viewer")"#));
-        assert!(html.contains(r#"viewer.setAttribute("environment-image", "neutral")"#));
-        assert!(html.contains(r#"viewer.setAttribute("exposure", "0.7")"#));
-        assert!(html.contains(r#"viewer.setAttribute("shadow-intensity", "0.85")"#));
+        assert!(html.contains("window.onshapeExportConfigurePreviewViewer?.(viewer)"));
         assert!(html.contains("showReadyArtifact(status)"));
         assert!(!html.contains("location.reload"));
     }
@@ -2623,57 +2615,6 @@ mod tests {
                 .unwrap()
                 .contains("meshes")
         );
-    }
-
-    #[test]
-    fn softens_near_white_gltf_preview_materials() {
-        let model = test_model();
-        let bytes = test_zip(&[(
-            "preview.gltf",
-            br#"{
-                "asset":{"version":"2.0"},
-                "materials":[{
-                    "pbrMetallicRoughness":{
-                        "baseColorFactor":[0.91,0.91,0.91,1.0],
-                        "metallicFactor":0.0
-                    }
-                }]
-            }"#
-            .as_slice(),
-        )]);
-
-        let artifact = preview_artifact_from_onshape_bytes(&model, "abc", bytes).unwrap();
-        let gltf: Value = serde_json::from_slice(&artifact.bytes).unwrap();
-        let color = &gltf["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"];
-
-        assert_eq!(color[0], Value::from(0.48));
-        assert_eq!(color[1], Value::from(0.50));
-        assert_eq!(color[2], Value::from(0.52));
-        assert_eq!(
-            gltf["materials"][0]["pbrMetallicRoughness"]["roughnessFactor"],
-            Value::from(0.74)
-        );
-    }
-
-    #[test]
-    fn keeps_colored_gltf_preview_materials() {
-        let bytes = br#"{
-            "asset":{"version":"2.0"},
-            "materials":[{
-                "pbrMetallicRoughness":{
-                    "baseColorFactor":[0.2,0.4,0.8,1.0]
-                }
-            }]
-        }"#
-        .to_vec();
-
-        let normalized = normalize_preview_gltf_materials(bytes).unwrap();
-        let gltf: Value = serde_json::from_slice(&normalized).unwrap();
-        let color = &gltf["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"];
-
-        assert_eq!(color[0], Value::from(0.2));
-        assert_eq!(color[1], Value::from(0.4));
-        assert_eq!(color[2], Value::from(0.8));
     }
 
     #[test]
