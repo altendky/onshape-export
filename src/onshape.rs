@@ -129,17 +129,7 @@ impl OnshapeClient {
             "/api/{collection}/d/{}/v/{}/e/{}/export/gltf",
             source.document_id, source.version_id, source.element_id
         );
-        let body = json!({
-            "advancedParams": {
-                "configuration": configuration,
-            },
-            "meshParams": {
-                "resolution": options.resolution.as_deref().unwrap_or("MEDIUM"),
-            },
-            "storeInDocument": false,
-            "notifyUser": false,
-            "triggerAutoDownload": false,
-        });
+        let body = gltf_export_body(configuration, options);
         let mut url = self.base_url.clone();
         url.set_path(&path);
         url.set_query(None);
@@ -313,6 +303,21 @@ impl OnshapeClient {
     }
 }
 
+fn gltf_export_body(configuration: &str, options: &PreviewOptions) -> Value {
+    json!({
+        "advancedParams": {
+            "configuration": configuration,
+        },
+        "meshParams": {
+            "resolution": options.resolution.as_deref().unwrap_or("MEDIUM"),
+        },
+        "grouping": true,
+        "storeInDocument": false,
+        "notifyUser": false,
+        "triggerAutoDownload": false,
+    })
+}
+
 fn element_collection(source: &OnshapeSource) -> &'static str {
     match source.element_kind {
         ElementKind::PartStudio => "partstudios",
@@ -400,4 +405,26 @@ fn nonce() -> String {
         .unwrap_or_default();
 
     format!("{nanos:x}{counter:x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gltf_export_body_requests_grouped_preview() {
+        let body = gltf_export_body(
+            "width=10 mm",
+            &PreviewOptions {
+                resolution: Some("FINE".to_owned()),
+            },
+        );
+
+        assert_eq!(body["advancedParams"]["configuration"], "width=10 mm");
+        assert_eq!(body["meshParams"]["resolution"], "FINE");
+        assert_eq!(body["grouping"], true);
+        assert_eq!(body["storeInDocument"], false);
+        assert_eq!(body["notifyUser"], false);
+        assert_eq!(body["triggerAutoDownload"], false);
+    }
 }

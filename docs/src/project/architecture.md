@@ -41,6 +41,19 @@ The public site should be able to serve cached content even when no export job i
 | Tigris Object Storage | Durable public artifacts, previews, manifests, raw Onshape responses, normalized parameter metadata. |
 | Onshape API | Configuration discovery and export generation. |
 
+Current Rust boundaries are still mostly in one crate and several responsibilities remain in `main.rs`. The intended internal boundaries are:
+
+- `config`: environment, secrets, deployment settings.
+- `catalog`: in-repo catalog loading and validation.
+- `routes`: product pages, enqueue/status handlers, health checks.
+- `onshape`: signed Onshape API requests and response models.
+- `jobs`: SQLite queue, leases, retries, failure records.
+- `worker`: bounded background loop and Onshape polling orchestration.
+- `storage`: Tigris/S3 reads, writes, metadata, public URLs.
+- `cache_keys`: canonical identity and hash helpers.
+- `manifests`: manifest read/write and artifact index coordination.
+- `templates`: server-rendered pages or static page helpers.
+
 ## Public User Flow
 
 1. User opens a curated model page.
@@ -55,6 +68,34 @@ The public site should be able to serve cached content even when no export job i
 10. Ready artifacts are served through stable public Tigris URLs.
 
 Every parameter refresh and export has a deterministic unique work key. Request handlers must create or find the SQLite job row before any Onshape call starts.
+
+The browser may submit parameter values, but the server owns validation, canonicalization, and hash calculation. Browser-computed hashes are advisory at most.
+
+## Product Routes
+
+These routes are product/UI behavior, not stable public API commitments.
+
+Implemented routes on this branch:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/` | Catalog landing page. |
+| `GET` | `/models/{slug}` | Model page with parameter controls. |
+| `POST` | `/models/{slug}` | Validate submitted parameters and render normalized values or errors. |
+| `POST` | `/models/{slug}/preview` | Validate submitted parameters and create or find a GLB preview job. |
+| `GET` | `/models/{slug}/preview/{config_hash}/status` | Poll preview status by server-computed hash. |
+| `POST` | `/models/{slug}/exports/{format}` | Validate submitted parameters and create or find a STEP, STL, or 3MF export job. |
+| `GET` | `/models/{slug}/exports/{format}/{config_hash}/status` | Poll download export status by server-computed hash. |
+| `GET` | `/healthz` | Process health check. |
+| `GET` | `/metrics` | Prometheus-style operational metrics. |
+
+Planned route and response gaps from the updated main plan:
+
+- Add a normalized parameter metadata/status route such as `GET /models/{slug}/parameters` if the UI needs JSON parameter data.
+- Ensure status checks and enqueue routes validate parameters through the same server path so status and job creation cannot disagree about `configHash`.
+- Add public-safe status fields such as `jobId`, `groupId`, `readyOutputs`, `retryAfterSeconds`, `errorCode`, and `userMessage`.
+- Add a stable job polling route such as `GET /jobs/{job_id}` only if product/UI polling needs an ID-based route.
+- Add `superseded` status handling once invalidation stops deleting artifacts.
 
 ## Operational Flow
 

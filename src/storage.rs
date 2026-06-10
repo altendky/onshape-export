@@ -108,16 +108,6 @@ impl StorageClient {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
-    pub async fn delete_object(&self, key: &str) -> anyhow::Result<()> {
-        self.client
-            .delete_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .send()
-            .await?;
-        Ok(())
-    }
-
     pub fn public_url(&self, key: &str) -> Option<String> {
         self.public_base_url.as_ref().map(|base| {
             format!(

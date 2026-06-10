@@ -1,188 +1,298 @@
 # Implementation Plan
 
+## Execution Protocol
+
+This plan is intended to support repeated prompts such as `implement the next phase of the plan`.
+
+When executing that prompt:
+
+1. Read this file and choose the first phase in the tracker whose status is not `done`.
+2. Complete only that phase unless a prerequisite from an earlier phase is clearly missing.
+3. Keep changes scoped to the selected phase.
+4. Run the phase verification commands and any relevant local checks.
+5. Update the phase tracker and checklist in this file.
+6. If the user requested commits for phase execution, create exactly one signed git commit for the completed phase.
+
+Do not skip a phase because a later phase looks more interesting. If a phase cannot be completed, leave it marked `blocked`, document the blocker, and do not start the next phase.
+
+## Phase Tracker
+
+| Phase | Status | Current Branch Summary |
+| --- | --- | --- |
+| Phase 0: Documentation And Decisions | `done` | Planning docs reconciled with implementation status and TODO gaps. |
+| Phase 1: Tooling And Rust Skeleton | `in_progress` | Rust skeleton exists; real CI/tooling still TODO. |
+| Phase 2: Contracts, Catalog, And Cache Keys | `in_progress` | `catalog/v1`, RFC 8785 hash helpers, and split identity hashes exist; typed/unit canonicalization and unsupported-parameter metadata are TODO. |
+| Phase 3: SQLite Queue And Fake Worker | `in_progress` | SQLite queue/leases, retry backoff, and target states exist; failure table and persisted translation state are TODO. |
+| Phase 4: Tigris Storage And Manifests | `in_progress` | Tigris writes, v1 keys, manifests, and ready metadata exist; upload verification, reconciliation, and full missing/superseded output history are TODO. |
+| Phase 5: Onshape Auth And Metadata Read Path | `in_progress` | API-key signing and metadata path exist; real smoke tests and unsupported metadata are TODO. |
+| Phase 6: Preview Vertical Slice | `in_progress` | Preview route, worker path, viewer, GLB handling, and single-asset Onshape zipped glTF fallback exist; real Onshape verification and full public-safe status contract are TODO. |
+| Phase 7: Download Export Vertical Slice | `in_progress` | STEP/STL/3MF paths and ready metadata exist; real Onshape verification and recovery from partial writes are TODO. |
+| Phase 8: Operational Commands | `in_progress` | CLI foundation and supersession invalidation/pruning exist; cache reconcile and target command shape are TODO. |
+| Phase 9: Runtime Hardening | `in_progress` | Metrics, backup, Fly scaffold, worker concurrency, scheduled rebuilds, retry backoff, and DB lock tests exist; rate/lifecycle hardening is TODO. |
+
+Status values:
+
+- `pending`: not started.
+- `in_progress`: partially implemented or currently being worked.
+- `blocked`: cannot continue without a decision, dependency, credential, or external service.
+- `done`: deliverables are complete, verification is recorded, and the phase commit exists if commits were requested.
+
+## Commit Policy
+
+For phase execution, prefer one commit per phase. The commit message should be concise and phase-scoped, for example:
+
+```text
+Implement phase 1 Rust skeleton
+```
+
+Before committing, inspect `git status`, `git diff`, and recent git history. Stage only files belonging to the completed phase. Commits must remain GPG signed according to local git configuration.
+
+## Branch Implementation Snapshot
+
+Implemented foundation:
+
+- Single-crate Rust `axum` app.
+- `GET /healthz`, `GET /`, `GET /metrics`, and model product routes.
+- Environment-based runtime configuration.
+- SQLite connection setup with migrations and MVP durability PRAGMAs.
+- Tigris/S3-compatible client construction.
+- Signed Onshape API-key client for configuration metadata and export calls.
+- In-repo `catalog/v1` JSON loading and validation, with explicit legacy catalog compatibility.
+- Onshape parameter metadata refresh, normalization, Tigris caching, and SQLite deduplication.
+- RFC 8785 canonical JSON hashing for source, configuration, options, and work keys.
+- Server-rendered model parameter controls and submitted-value validation.
+- Background worker loop for queued parameter refreshes, previews, and downloads.
+- Retry attempt limits, `nextRetryAt`, and bounded exponential full-jitter backoff.
+- Strict GLB preview artifact handling.
+- Supersession-based artifact invalidation and pruning.
+- Worker-only runtime mode and configurable worker concurrency.
+- CLI maintenance commands for catalog validation, parameter refresh, pre-generation, job/failure inspection and retry, artifact inspection/invalidation, pruning, and manifest rewrite.
+- Catalog-defined parameter presets, UI overrides, preview options, and STEP export option defaults.
+- Deploy-time `ops check` and operator-triggered SQLite backup snapshots.
+- Temporary placeholder GitHub Actions job named exactly `all`.
+
+Plan review TODOs that are not implemented yet:
+
+- Replace string-only parameter canonicalization with typed values and unit normalization where needed.
+- Add uploaded-object verification and cache reconciliation for partial writes.
+- Add retryability classes, stable public-safe error codes, and user messages.
+- Add a separate failure history table if job summaries stop being enough.
+- Persist Onshape translation IDs and polling state for crash recovery.
+- Honor Onshape `Retry-After` once the client exposes it.
+- Materialize missing outputs, replacement pointers, and full supersession history in manifests.
+
 ## Phase 0: Documentation And Decisions
 
-Completed.
+Purpose: keep planning docs accurate for the implemented branch and clearly mark target-plan deviations as TODO gaps.
 
-Outputs:
+Completed outputs:
 
-- Capture architecture and runtime options.
-- Capture Onshape API flow.
-- Capture Tigris cache contract.
-- Capture SQLite queue and coordination direction.
-- Capture frontend preview behavior.
-- Capture admin and catalog direction.
+- Architecture and product route status.
+- Runtime options and SQLite transaction constraints.
+- Onshape API flow and auth assumptions.
+- Tigris cache contract and current deviations.
+- Frontend preview behavior and GLB/glTF fallback target.
+- Admin and catalog direction.
+- CI and local tooling direction.
+- Decisions and open questions deduplicated.
 
-## Phase 1: Project Skeleton
+## Phase 1: Tooling And Rust Skeleton
 
-Set up the Rust project without implementing every feature.
+Set up the project without implementing the export workflow.
 
-Completed.
+Implemented on branch:
 
-Expected pieces:
-
-- Rust workspace or single crate decision.
+- Single Rust crate.
 - `axum` service skeleton.
-- Configuration and secret loading.
 - Health endpoint.
-- Tigris/S3-compatible client configuration.
-- SQLite connection, migrations, and robust PRAGMA setup.
-- Onshape client skeleton.
-- In-repo catalog representation.
-- Basic template/static UI direction.
+- Configuration and secret-loading path.
+- SQLite, Tigris, Onshape, catalog, and server-rendered UI foundations.
+- Placeholder GitHub Actions workflow with required job `all`.
 
-## Phase 2: Onshape Read Path
+TODO gaps:
 
-Implement parameter discovery.
+- Replace placeholder CI with real aggregate `all` over docs, Rust, and pre-commit jobs.
+- Reconcile `mise.toml` and `mise.lock` intentionally before depending on them in CI.
+- Add or confirm pre-commit, markdown, actionlint, mdBook, Rust fmt, clippy, and test checks.
+- Add route tests for `/healthz` if not covered by integration tests.
 
-Current phase foundation implemented.
+Verification target:
 
-Expected pieces:
+- `cargo fmt --all --check`.
+- `cargo clippy --all-targets --all-features -- -D warnings`.
+- `cargo test --all-targets --all-features` or `cargo nextest run` once configured.
+- `mdbook build docs` and `mdbook test docs` when mdBook is available.
 
-- Fetch raw configuration metadata for Part Studios and Assemblies.
-- Normalize metadata for UI rendering.
-- Enqueue parameter refreshes through SQLite so duplicate Onshape calls are not started.
-- Store raw and normalized parameter metadata in Tigris.
-- Render a model page with controls.
-- Validate submitted parameter values against normalized metadata.
+## Phase 2: Contracts, Catalog, And Cache Keys
 
-Needs live Onshape verification:
+Make implementation contracts executable before relying on Onshape.
 
-- Verify normalized schema against real target model responses.
+Implemented on branch:
 
-Implemented hardening:
+- `catalog/v1/models.json` plus `catalog/v1/models/{slug}.json`, with explicit legacy catalog compatibility for operators that set `CATALOG_PATH` to the old single-file layout.
+- Catalog validation for schema version, entry version, slugs, tags, duplicate source identities, duplicate formats, preview resolution, STEP option presence, preset slugs, override precision, override widgets, and cached-schema override IDs.
+- `catalogSchemaVersion`, `entryVersion`, `published`, `tags`, `thumbnail`, optional `linkDocumentId`, and `parameterPolicy.autoRefresh` support.
+- RFC 8785 canonical JSON hash helpers with golden tests.
+- Split source, configuration, options, work-key, group, and artifact identity helpers.
+- Hash tests for value ordering, domain separation, and option changes.
+- Model page rendering from catalog and normalized metadata.
 
-- UI-specific catalog `parameterOverrides` support public labels, help text,
-  hidden parameters, numeric precision, and preferred basic widgets.
-- Parameter refreshes run through the SQLite-backed worker path instead of
-  running inline from request handlers.
+TODO gaps:
 
-## Phase 3: Preview Path
+- Replace string-only parameter values with typed canonical values if the current representation proves ambiguous.
+- Add unit synonym/conversion canonicalization where target models need it.
+- Represent unsupported Onshape parameter types with `unsupportedReason`.
 
-Implement GLB preview generation and display.
+## Phase 3: SQLite Queue And Fake Worker
 
-Current phase foundation implemented.
+Build coordination before real external work.
 
-Expected pieces:
+Implemented on branch:
 
-- Compute canonical `config_hash`.
-- Check Tigris and SQLite artifact records for cached preview.
-- Request Onshape GLB export on cache miss.
-- Poll translation and download external data.
-- Store GLB in Tigris.
-- Return stable public Tigris preview URLs.
-- Show cached GLB with `<model-viewer>`.
+- SQLite migrations for `jobs`, `artifacts`, and `parameter_metadata`.
+- Unique `work_key` queue deduplication.
+- Lease claim and stale lease recovery by attempt fencing.
+- Embedded bounded worker loop.
+- `queued`, `running`, `ready`, `failed`, and `superseded` states.
+- `maxAttempts`, `nextRetryAt`, and bounded exponential full-jitter retry backoff.
+- Manual retry by all failures, work key, or job kind.
+- Job listing and metrics.
 
-Needs live Onshape verification:
+TODO gaps:
 
-- Verify GLB export request and translation response shapes against real Onshape models.
+- Add a separate `failures` table with error classes and public-safe summaries.
+- Add retryability classes and expose Onshape `Retry-After` through the retry scheduler.
+- Persist Onshape translation IDs and poll state in the job row.
+- Add `jobs show` and `jobs retry` target commands if the CLI shape is changed.
 
-Implemented hardening:
+## Phase 4: Tigris Storage And Manifests
 
-- Preview generation pages poll deterministic JSON status endpoints until the
-  worker produces an artifact or failure.
-- Catalog `previewOptions.resolution` allows model-specific GLB tessellation
-  tuning, and preview options participate in cache identity.
+Prove object storage and manifest coordination.
 
-## Phase 4: Download Exports
+Implemented on branch:
 
-Implement STEP, STL, and 3MF downloads.
+- S3-compatible Tigris client configuration.
+- Public URL generation.
+- Preview and download uploads.
+- Content type and download content disposition for downloads.
+- Manifest materialization from SQLite artifact records.
+- v1 object keys for parameter metadata, previews, downloads, and manifests.
+- Ready artifact metadata including public URL, SHA-256, byte length, source/options hashes, producing job key, and supersession state.
+- Manifest inspection and rewrite CLI.
 
-Current phase foundation implemented.
+TODO gaps:
 
-Expected pieces:
+- Verify uploaded objects before marking jobs ready.
+- Add reconciliation for object-store/SQLite drift.
+- Materialize missing outputs, replacement pointers, and full supersession history in manifests.
+- Store content disposition in SQLite if operations need it outside object metadata.
 
-- Format-specific export option defaults.
-- Cache key and manifest entries per format.
-- Onshape export and polling for each format.
-- Tigris upload, content type, content disposition, and cache headers.
-- Stable public Tigris download links after completion.
+## Phase 5: Onshape Auth And Metadata Read Path
 
-Needs live Onshape verification:
+Prove server-owned Onshape API key access and parameter discovery.
 
-- Verify STEP, STL, and 3MF export request and translation response shapes against real Onshape models.
+Implemented on branch:
 
-Implemented hardening:
+- Server-side Onshape API-key request signing.
+- Versioned configuration metadata fetch.
+- Raw metadata storage in Tigris.
+- Normalized metadata storage in Tigris.
+- Metadata refresh through CLI and queued worker path.
+- Model page rendering with normalized parameter controls.
 
-- Successful generation, invalidation, and manifest rewrite commands materialize
-  manifests from SQLite artifact records.
-- Download generation pages poll deterministic JSON status endpoints until the
-  worker produces an artifact or failure.
-- Catalog `downloadOptions.stepVersionString` allows model-specific STEP
-  defaults, and download options participate in cache identity.
+TODO gaps:
 
-## Phase 5: Operational Commands
+- Record real-call smoke-test results for Part Studio and Assembly metadata.
+- Confirm API-key permissions for linked-document assembly contexts.
+- Add sanitized Onshape fixtures for all target parameter types.
+- Preserve unsupported parameter types with `unsupportedReason`.
+- Decide when to use `configurationencodings` for canonical Onshape configuration strings.
 
-Add CLI or Fly-run maintenance controls. Do not add a web admin UI until browser-based admin workflows are needed.
+## Phase 6: GLB Preview Vertical Slice
 
-Current phase foundation implemented.
+Implement one complete preview path.
 
-Expected pieces:
+Implemented on branch:
 
-- Catalog validation.
-- Parameter refresh.
-- Preview/export pre-generation.
-- Failure inspection.
-- Retry and invalidate actions.
-- Operational access through local CLI credentials or Fly access.
+- Preview generation route and status route.
+- Server-side parameter validation before enqueue.
+- Worker export request, polling, external data download, Tigris upload, artifact record, and manifest rewrite.
+- `<model-viewer>` rendering for cached preview URLs.
+- Status polling in the product page.
+- GLB preview extraction from direct and zipped Onshape responses, plus single-asset zipped glTF fallback when Onshape does not return GLB.
 
-Remaining hardening:
+TODO gaps:
 
-- Add object-store deletion or tombstone handling if invalidation should remove Tigris objects, not only SQLite artifact records.
+- Add target public-safe status fields.
+- Persist Onshape translation IDs and polling state for crash recovery.
+- Verify GLB export behavior with real Onshape models.
 
-Implemented hardening:
+## Phase 7: Download Export Vertical Slice
 
-- Add catalog-defined `parameterPresets` and CLI selectors for default, one preset, or all parameter sets during preview/export pre-generation.
-- Add structured JSON output for `failures list` and `artifacts list` operational commands.
-- Add `jobs list` with text and JSON output for recent queued, running, ready,
-  and failed jobs.
-- `artifacts invalidate` now deletes the object-store artifact before removing
-  the SQLite artifact record.
-- Successful preview/export generation now rewrites a Tigris manifest for the
-  selected model configuration from SQLite artifact records; invalidation
-  rewrites the same manifest after deleting the artifact record.
-- `artifacts manifest` renders a SQLite-derived manifest for one model
-  configuration and can rewrite that manifest to Tigris with `--rewrite`.
-- `failures retry` supports targeted retries by work key or job kind, while
-  preserving all-failures retry as the default.
-- `jobs list` exposes recent queued, running, ready, and failed job state with
-  text and JSON output for operational inspection.
+Start with STEP, then add STL and 3MF after the abstraction is proven.
 
-## Phase 6: Runtime Hardening
+Implemented on branch:
 
-Add robustness only as needed.
+- STEP export path using format-specific endpoints.
+- STL and 3MF export paths using generic translation endpoints.
+- Download generation and status routes.
+- Tigris upload with content type, content disposition, and immutable cache header.
+- Public download links when `TIGRIS_PUBLIC_BASE_URL` is configured.
+- Source/config/options hash identity and v1 download object keys.
+- Ready artifact metadata in SQLite, manifests, and status responses.
 
-Current phase foundation implemented.
+TODO gaps:
 
-Implemented pieces:
+- Verify STEP, STL, and 3MF export requests and response shapes with real Onshape models.
+- Confirm exact generic `formatName` values.
+- Add recovery for completed Onshape translations whose upload or SQLite ready mark failed.
 
-- Prometheus-style `/metrics` route with catalog, job, artifact, and artifact-byte gauges.
-- Request handlers enqueue parameter, preview, and download jobs for a background worker instead of running Onshape calls inline.
-- SQLite job leases allow queued or expired work to be claimed without starting duplicate work.
-- Expired running job leases are reclaimable, and job completion is fenced by claim attempt to avoid stale worker status updates.
-- Worker-only runtime mode through `onshape-export worker`, plus `WORKER_ENABLED=false` for web-only `serve` processes.
-- Explicit worker concurrency through `WORKER_CONCURRENCY`, defaulting to one claimed job at a time for the MVP.
-- Opt-in scheduled rebuilds through `REBUILD_INTERVAL_SECONDS` enqueue catalog parameter refreshes and missing default artifacts from the worker runtime.
-- Preview and download generation pages expose deterministic JSON status endpoints and poll queued jobs until the artifact is ready or failed.
-- Age-based cache eviction is available through `artifacts prune`, deleting
-  matching object-store artifacts and rewriting affected manifests.
-- Operator-triggered SQLite snapshots are available through `ops backup <destination.db>`.
-- Fly deployment scaffolding is available through `Dockerfile`, `.dockerignore`,
-  and `fly.toml`, using a single machine with the in-process worker enabled so
-  SQLite coordination stays on one mounted volume.
-- `ops check` validates deployment-critical configuration before serving
-  traffic: catalog loading, SQLite connectivity, Tigris client construction,
-  Tigris public URL configuration, and Onshape/Tigris credential presence.
-- Artifact cache identity now includes the exporter package version plus the
-  preview/download option version strings, so option or code changes naturally
-  generate fresh cache entries instead of reusing stale exports.
-- Catalog validation rejects unsafe slugs, duplicate download formats, invalid
-  preview resolutions, invalid parameter override precision, and unsupported
-  parameter override widgets.
-- Catalog-defined preview and download option values are included in cache
-  identity, so model-specific tuning produces fresh artifact sets.
+## Phase 8: Operational Commands
 
-Possible additions:
+Add enough CLI/Fly-run maintenance controls for MVP operations.
 
-- Postgres if SQLite-on-volume limits become painful.
-- Web admin UI and authentication if CLI operations become insufficient.
+Implemented on branch:
+
+- `catalog validate`.
+- `parameters refresh`.
+- `previews generate`.
+- `exports generate`.
+- `jobs list`.
+- `failures list`.
+- `failures retry`.
+- `artifacts list`.
+- `artifacts manifest`.
+- `artifacts invalidate`.
+- `artifacts prune`.
+- `ops check`.
+- `ops backup`.
+
+TODO gaps:
+
+- Add cache reconciliation.
+- Decide whether to rename commands toward the target `validate-catalog`, `refresh-parameters`, `generate-preview`, `generate-export`, `jobs`, and `cache` shape.
+- Add dry-run behavior for expensive generation where needed.
+
+## Phase 9: Runtime Hardening
+
+Add robustness only as needed after the vertical slices work.
+
+Implemented on branch:
+
+- Prometheus-style `/metrics` route.
+- Worker-only runtime and `WORKER_ENABLED=false`.
+- Explicit `WORKER_CONCURRENCY`, defaulting to `1`.
+- Scheduled rebuild enqueueing through `REBUILD_INTERVAL_SECONDS`.
+- Scheduled parameter refresh respects `parameterPolicy.autoRefresh`.
+- SQLite backup snapshot through `ops backup`.
+- Fly deployment scaffold with a single machine and mounted volume.
+- Deploy-time `ops check` for catalog, SQLite, storage config, public URL config, and credential presence.
+- Retry backoff and a DB lock regression test for long-running claimed jobs.
+
+TODO gaps:
+
+- Add request rate limits and queue depth limits if traffic requires them.
+- Add runtime runbooks for stuck jobs, failed exports, and cache reconciliation.
+- Add automated or platform backup policy if explicit snapshots are not enough.
+- Move to Postgres or another shared coordination backend before multi-machine workers.
+- Add web admin UI and authentication only if CLI operations become insufficient.

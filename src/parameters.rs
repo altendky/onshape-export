@@ -862,6 +862,7 @@ mod tests {
             version_id: "vid".to_owned(),
             element_id: "eid".to_owned(),
             element_kind: ElementKind::PartStudio,
+            link_document_id: None,
         }
     }
 }

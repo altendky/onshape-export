@@ -6,20 +6,24 @@ The service is aimed at models where publishing every parameter combination ahea
 
 ## Current Status
 
-This repository contains planning documentation and an initial Rust service with parameter discovery.
+This repository contains planning documentation and an initial Rust service. The implementation has moved past the original docs-only plan; the remaining gaps are mostly hardening and live Onshape verification details.
 
 Implemented foundation:
 
 - Single-crate Rust `axum` app.
-- `GET /healthz`, `GET /`, and placeholder `GET /models/{slug}` routes.
+- `GET /healthz`, `GET /`, model pages, generation routes, and status polling routes.
 - Environment-based runtime configuration.
 - SQLite connection setup with migrations and MVP durability PRAGMAs.
 - Tigris/S3-compatible client construction.
-- Signed Onshape API-key client for configuration metadata reads.
-- In-repo catalog JSON loading and validation.
+- Signed Onshape API-key client for configuration metadata reads and export calls.
+- In-repo `catalog/v1/` JSON loading and validation, with legacy catalog compatibility for explicit paths.
 - Onshape parameter metadata refresh, normalization, Tigris caching, and SQLite deduplication.
+- RFC 8785 JSON canonicalization for source, configuration, options, and work-key hash preimages.
 - Server-rendered model parameter controls and submitted-value validation.
 - Background worker loop for queued parameter refreshes, previews, and downloads.
+- Persisted retry attempt limits, `nextRetryAt`, and exponential full-jitter backoff for failed worker jobs.
+- Preview artifacts prefer GLB, but direct glTF JSON is accepted; a ZIP with exactly one Onshape glTF viewer asset is extracted with sidecars and retained with the original `source.zip` when Onshape does not return GLB.
+- Supersession-based artifact invalidation and pruning that leave public object-store artifacts immutable.
 - Worker-only runtime mode for separate Fly process groups.
 - Configurable worker concurrency through `WORKER_CONCURRENCY`.
 - CLI maintenance commands for catalog validation, parameter refresh, pre-generation, job/failure inspection and retry, and artifact inspection/invalidation.
@@ -28,6 +32,14 @@ Implemented foundation:
 - Catalog-defined parameter UI overrides and preview/STEP export option defaults.
 - Deploy-time `ops check` command for catalog, SQLite, storage, public URL, and credential readiness.
 - Operator-triggered SQLite backup snapshots through `ops backup <destination.db>`.
+- Temporary GitHub Actions placeholder job named exactly `all` for the required aggregate check.
+
+Known plan gaps:
+
+- Onshape translation IDs, polling state, and `Retry-After` values are not persisted for crash-resume yet.
+- Failure records and public status errors still need stable public-safe error codes and user messages.
+- Uploaded-object verification and cache reconciliation for partial writes are not implemented yet.
+- Manifests include ready output metadata, but do not yet materialize missing outputs, replacement pointers, or full supersession history.
 
 Local run:
 
@@ -86,7 +98,7 @@ The included `fly.toml` runs a single web machine with the in-process worker ena
 - Onshape document versions only, not mutable workspaces.
 - Anonymous end users, using server-owned Onshape credentials.
 - Download formats: STEP, STL, and 3MF.
-- Preview format: cached GLB/glTF export shown in a browser 3D viewer.
+- Preview format: cached GLB or single glTF viewer asset shown in a browser 3D viewer.
 - Runtime: Fly.io Rust app at `https://onshape-export.fly.dev` if the app name is available.
 - Cache backend: Tigris Object Storage via Fly, with public stable artifact URLs.
 - Coordination database: SQLite on a Fly volume for queue/job uniqueness.
@@ -105,6 +117,7 @@ Project documentation is under `docs/src/project/`.
 - [Frontend and Preview](docs/src/project/frontend-preview.md)
 - [Catalog](docs/src/project/catalog.md)
 - [Admin Operations](docs/src/project/admin.md)
+- [CI And Local Tooling](docs/src/project/ci.md)
 - [Library Reuse](docs/src/project/library-reuse.md)
 - [Implementation Plan](docs/src/project/implementation.md)
 - [Decisions](docs/src/project/decisions.md)

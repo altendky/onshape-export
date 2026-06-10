@@ -13,8 +13,7 @@ Initial admin operations:
 - Inspect recent job status and failures.
 - Create a consistent SQLite backup snapshot for Fly volume recovery.
 - Retry all failed jobs, one failed job by work key, or failed jobs by kind.
-- Invalidate artifacts after exporter option changes, deleting the object-store
-  object before removing the SQLite artifact record.
+- Invalidate artifacts after exporter option changes by superseding old public artifacts in normal operation.
 - Prune artifacts older than an explicit age threshold, with dry-run support.
 - List cached outputs for a model.
 - Inspect and optionally rewrite the manifest for a cached model configuration.
@@ -45,14 +44,24 @@ onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]
 Use a listed work key or `--kind <job-kind>` when only one failed operation class
 should be retried.
 
-`artifacts prune` uses SQLite artifact records as the source of truth, deletes
-each matching object-store object, removes the artifact record, and rewrites the
-affected manifest. Use `--dry-run` first to inspect matches without deleting
-anything.
+`artifacts invalidate` and `artifacts prune` supersede SQLite artifact records, preserve immutable public object-store artifacts, mark the producing ready job superseded when known, and rewrite the affected manifest from remaining ready records. Keep deletion for a future explicit operator cleanup command covering legal/IP concerns or storage-cost management.
+
+`artifacts prune` uses SQLite artifact records as the source of truth and supersedes each matching ready record. Use `--dry-run` first to inspect matches without changing artifact state.
 
 `artifacts manifest` renders the manifest that would be materialized from
 SQLite artifact records for one model configuration. Use `--rewrite` to upload
 that manifest to object storage after inspecting or repairing cache state.
+
+## Target Command Gaps
+
+The updated main plan expects several behaviors that are not implemented yet:
+
+- `jobs show <job-id>` and `jobs retry <job-id>` style job commands; current retry commands live under `failures retry` and use work keys or job kinds.
+- `cache reconcile` to repair SQLite/Tigris drift such as uploaded objects whose jobs were not marked ready.
+- Retryability classes and public-safe error codes/messages.
+- Replacement pointers and supersession reasons for artifacts and manifests.
+- Catalog validation against live Onshape metadata for a no-cache `catalog validate` mode.
+- Content disposition in SQLite artifact metadata.
 
 ## Web Admin Deferral
 

@@ -1,0 +1,11 @@
+{
+  "catalogSchemaVersion": 1,
+  "models": [
+    {
+      "slug": "onshape-model",
+      "name": "Onshape Model",
+      "description": "Onshape model export test.",
+      "published": true
+    }
+  ]
+}

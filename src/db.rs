@@ -15,10 +15,18 @@ pub struct ArtifactRecord {
     pub model_slug: String,
     pub config_hash: String,
     pub output_kind: String,
+    pub status: String,
     pub object_key: String,
     pub content_type: String,
     pub byte_len: Option<i64>,
+    pub sha256: Option<String>,
+    pub producing_job_key: Option<String>,
+    pub source_hash: Option<String>,
+    pub options_hash: Option<String>,
+    pub parameter_schema_version: Option<i64>,
+    pub config_values_json: Option<String>,
     pub created_at: String,
+    pub superseded_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,6 +36,8 @@ pub struct JobRecord {
     pub status: String,
     pub error_summary: Option<String>,
     pub attempt: i64,
+    pub max_attempts: i64,
+    pub next_retry_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -38,6 +48,7 @@ pub struct JobLease {
     pub job_kind: String,
     pub payload_json: String,
     pub attempt: i64,
+    pub max_attempts: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +74,12 @@ pub struct ArtifactUpsert<'a> {
     pub object_key: &'a str,
     pub content_type: &'a str,
     pub byte_len: i64,
+    pub sha256: &'a str,
+    pub producing_job_key: Option<&'a str>,
+    pub source_hash: &'a str,
+    pub options_hash: &'a str,
+    pub parameter_schema_version: i64,
+    pub config_values_json: &'a str,
 }
 
 #[derive(Debug, Clone)]
@@ -160,22 +177,48 @@ impl Database {
         job_kind: &str,
         payload_json: &str,
     ) -> sqlx::Result<bool> {
+        self.enqueue_job_inner(work_key, job_kind, payload_json, false)
+            .await
+    }
+
+    pub async fn force_enqueue_job(
+        &self,
+        work_key: &str,
+        job_kind: &str,
+        payload_json: &str,
+    ) -> sqlx::Result<bool> {
+        self.enqueue_job_inner(work_key, job_kind, payload_json, true)
+            .await
+    }
+
+    async fn enqueue_job_inner(
+        &self,
+        work_key: &str,
+        job_kind: &str,
+        payload_json: &str,
+        force_ready: bool,
+    ) -> sqlx::Result<bool> {
         let result = sqlx::query(
             r#"
             INSERT INTO jobs (work_key, job_kind, status, payload_json)
             VALUES (?, ?, 'queued', ?)
             ON CONFLICT(work_key) DO UPDATE SET
                 status = 'queued',
+                job_kind = excluded.job_kind,
                 payload_json = excluded.payload_json,
                 error_summary = NULL,
+                attempt = 0,
                 lease_until = NULL,
+                next_retry_at = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE jobs.status IN ('ready', 'failed', 'expired')
+            WHERE jobs.status IN ('failed', 'superseded')
+               OR (? AND jobs.status = 'ready')
             "#,
         )
         .bind(work_key)
         .bind(job_kind)
         .bind(payload_json)
+        .bind(force_ready)
         .execute(&self.pool)
         .await?;
 
@@ -193,12 +236,14 @@ impl Database {
             WHERE id = (
                 SELECT id
                 FROM jobs
-                WHERE status IN ('queued', 'expired')
+                WHERE (status = 'queued' AND (next_retry_at IS NULL OR next_retry_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))
                    OR (status = 'running' AND lease_until <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-                ORDER BY CASE WHEN status = 'queued' THEN 0 ELSE 1 END, created_at
+                ORDER BY CASE WHEN status = 'queued' THEN 0 ELSE 1 END,
+                         COALESCE(next_retry_at, created_at),
+                         created_at
                 LIMIT 1
             )
-            RETURNING work_key, job_kind, payload_json, attempt
+            RETURNING work_key, job_kind, payload_json, attempt, max_attempts
             "#,
         )
         .bind(lease_seconds)
@@ -210,6 +255,7 @@ impl Database {
                 job_kind: row.get("job_kind"),
                 payload_json: row.get("payload_json"),
                 attempt: row.get("attempt"),
+                max_attempts: row.get("max_attempts"),
             })
         })
     }
@@ -227,6 +273,7 @@ impl Database {
             SET status = ?,
                 error_summary = ?,
                 lease_until = NULL,
+                next_retry_at = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             WHERE work_key = ? AND attempt = ? AND status = 'running'
             "#,
@@ -240,13 +287,62 @@ impl Database {
         Ok(result.rows_affected() == 1)
     }
 
+    pub async fn record_job_failure(
+        &self,
+        work_key: &str,
+        attempt: i64,
+        error_summary: &str,
+        retry_delay_seconds: i64,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE jobs
+            SET status = CASE WHEN attempt >= max_attempts THEN 'failed' ELSE 'queued' END,
+                error_summary = ?,
+                lease_until = NULL,
+                next_retry_at = CASE
+                    WHEN attempt >= max_attempts THEN NULL
+                    ELSE strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+' || ? || ' seconds')
+                END,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE work_key = ? AND attempt = ? AND status = 'running'
+            "#,
+        )
+        .bind(error_summary)
+        .bind(retry_delay_seconds.max(0))
+        .bind(work_key)
+        .bind(attempt)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn supersede_ready_job(&self, work_key: &str) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE jobs
+            SET status = 'superseded',
+                lease_until = NULL,
+                next_retry_at = NULL,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE work_key = ? AND status = 'ready'
+            "#,
+        )
+        .bind(work_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     pub async fn artifact(&self, artifact_key: &str) -> sqlx::Result<Option<ArtifactRecord>> {
         sqlx::query(
             r#"
-            SELECT artifact_key, model_slug, config_hash, output_kind, object_key,
-                   content_type, byte_len, created_at
+            SELECT artifact_key, model_slug, config_hash, output_kind, status, object_key,
+                   content_type, byte_len, sha256, producing_job_key, source_hash,
+                   options_hash, parameter_schema_version, config_values_json, created_at,
+                   superseded_at
             FROM artifacts
-            WHERE artifact_key = ?
+            WHERE artifact_key = ? AND status = 'ready'
             "#,
         )
         .bind(artifact_key)
@@ -258,10 +354,12 @@ impl Database {
     pub async fn artifacts_for_model(&self, model_slug: &str) -> sqlx::Result<Vec<ArtifactRecord>> {
         sqlx::query(
             r#"
-            SELECT artifact_key, model_slug, config_hash, output_kind, object_key,
-                   content_type, byte_len, created_at
+            SELECT artifact_key, model_slug, config_hash, output_kind, status, object_key,
+                   content_type, byte_len, sha256, producing_job_key, source_hash,
+                   options_hash, parameter_schema_version, config_values_json, created_at,
+                   superseded_at
             FROM artifacts
-            WHERE model_slug = ?
+            WHERE model_slug = ? AND status = 'ready'
             ORDER BY created_at DESC, output_kind
             "#,
         )
@@ -278,10 +376,13 @@ impl Database {
     ) -> sqlx::Result<Vec<ArtifactRecord>> {
         sqlx::query(
             r#"
-            SELECT artifact_key, model_slug, config_hash, output_kind, object_key,
-                   content_type, byte_len, created_at
+            SELECT artifact_key, model_slug, config_hash, output_kind, status, object_key,
+                   content_type, byte_len, sha256, producing_job_key, source_hash,
+                   options_hash, parameter_schema_version, config_values_json, created_at,
+                   superseded_at
             FROM artifacts
             WHERE model_slug = ?
+              AND status = 'ready'
               AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || ? || ' days')
             ORDER BY created_at, output_kind
             "#,
@@ -300,10 +401,12 @@ impl Database {
     ) -> sqlx::Result<Vec<ArtifactRecord>> {
         sqlx::query(
             r#"
-            SELECT artifact_key, model_slug, config_hash, output_kind, object_key,
-                   content_type, byte_len, created_at
+            SELECT artifact_key, model_slug, config_hash, output_kind, status, object_key,
+                   content_type, byte_len, sha256, producing_job_key, source_hash,
+                   options_hash, parameter_schema_version, config_values_json, created_at,
+                   superseded_at
             FROM artifacts
-            WHERE model_slug = ? AND config_hash = ?
+            WHERE model_slug = ? AND config_hash = ? AND status = 'ready'
             ORDER BY output_kind
             "#,
         )
@@ -314,12 +417,19 @@ impl Database {
         .map(|rows| rows.into_iter().map(artifact_record_from_row).collect())
     }
 
-    pub async fn delete_artifact(&self, artifact_key: &str) -> sqlx::Result<bool> {
-        let result = sqlx::query("DELETE FROM artifacts WHERE artifact_key = ?")
-            .bind(artifact_key)
-            .execute(&self.pool)
-            .await?;
-        Ok(result.rows_affected() > 0)
+    pub async fn supersede_artifact(&self, artifact_key: &str) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE artifacts
+            SET status = 'superseded',
+                superseded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE artifact_key = ? AND status = 'ready'
+            "#,
+        )
+        .bind(artifact_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
     }
 
     pub async fn upsert_artifact(&self, artifact: ArtifactUpsert<'_>) -> sqlx::Result<()> {
@@ -330,15 +440,34 @@ impl Database {
                 model_slug,
                 config_hash,
                 output_kind,
+                status,
                 object_key,
                 content_type,
-                byte_len
+                byte_len,
+                sha256,
+                producing_job_key,
+                source_hash,
+                options_hash,
+                parameter_schema_version,
+                config_values_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(artifact_key) DO UPDATE SET
+                model_slug = excluded.model_slug,
+                config_hash = excluded.config_hash,
+                output_kind = excluded.output_kind,
+                status = 'ready',
                 object_key = excluded.object_key,
                 content_type = excluded.content_type,
-                byte_len = excluded.byte_len
+                byte_len = excluded.byte_len,
+                sha256 = excluded.sha256,
+                producing_job_key = excluded.producing_job_key,
+                source_hash = excluded.source_hash,
+                options_hash = excluded.options_hash,
+                parameter_schema_version = excluded.parameter_schema_version,
+                config_values_json = excluded.config_values_json,
+                created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                superseded_at = NULL
             "#,
         )
         .bind(artifact.artifact_key)
@@ -348,6 +477,12 @@ impl Database {
         .bind(artifact.object_key)
         .bind(artifact.content_type)
         .bind(artifact.byte_len)
+        .bind(artifact.sha256)
+        .bind(artifact.producing_job_key)
+        .bind(artifact.source_hash)
+        .bind(artifact.options_hash)
+        .bind(artifact.parameter_schema_version)
+        .bind(artifact.config_values_json)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -356,7 +491,8 @@ impl Database {
     pub async fn failed_jobs(&self, limit: i64) -> sqlx::Result<Vec<JobRecord>> {
         sqlx::query(
             r#"
-            SELECT work_key, job_kind, status, error_summary, attempt, created_at, updated_at
+            SELECT work_key, job_kind, status, error_summary, attempt, max_attempts,
+                   next_retry_at, created_at, updated_at
             FROM jobs
             WHERE status = 'failed' AND payload_json <> '{}'
             ORDER BY updated_at DESC
@@ -372,7 +508,8 @@ impl Database {
     pub async fn jobs(&self, limit: i64) -> sqlx::Result<Vec<JobRecord>> {
         sqlx::query(
             r#"
-            SELECT work_key, job_kind, status, error_summary, attempt, created_at, updated_at
+            SELECT work_key, job_kind, status, error_summary, attempt, max_attempts,
+                   next_retry_at, created_at, updated_at
             FROM jobs
             WHERE payload_json <> '{}'
             ORDER BY updated_at DESC
@@ -388,7 +525,8 @@ impl Database {
     pub async fn job(&self, work_key: &str) -> sqlx::Result<Option<JobRecord>> {
         sqlx::query(
             r#"
-            SELECT work_key, job_kind, status, error_summary, attempt, created_at, updated_at
+            SELECT work_key, job_kind, status, error_summary, attempt, max_attempts,
+                   next_retry_at, created_at, updated_at
             FROM jobs
             WHERE work_key = ?
             "#,
@@ -418,6 +556,7 @@ impl Database {
             r#"
             SELECT output_kind, COUNT(*) AS count, COALESCE(SUM(byte_len), 0) AS byte_len
             FROM artifacts
+            WHERE status = 'ready'
             GROUP BY output_kind
             ORDER BY output_kind
             "#,
@@ -433,9 +572,11 @@ impl Database {
             UPDATE jobs
             SET status = 'queued',
                 error_summary = NULL,
+                attempt = 0,
                 lease_until = NULL,
+                next_retry_at = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE status = 'failed'
+            WHERE status = 'failed' AND payload_json <> '{}'
             "#,
         )
         .execute(&self.pool)
@@ -449,7 +590,9 @@ impl Database {
             UPDATE jobs
             SET status = 'queued',
                 error_summary = NULL,
+                attempt = 0,
                 lease_until = NULL,
+                next_retry_at = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             WHERE work_key = ? AND status = 'failed' AND payload_json <> '{}'
             "#,
@@ -466,7 +609,9 @@ impl Database {
             UPDATE jobs
             SET status = 'queued',
                 error_summary = NULL,
+                attempt = 0,
                 lease_until = NULL,
+                next_retry_at = NULL,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             WHERE job_kind = ? AND status = 'failed' AND payload_json <> '{}'
             "#,
@@ -492,10 +637,18 @@ fn artifact_record_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactRecord {
         model_slug: row.get("model_slug"),
         config_hash: row.get("config_hash"),
         output_kind: row.get("output_kind"),
+        status: row.get("status"),
         object_key: row.get("object_key"),
         content_type: row.get("content_type"),
         byte_len: row.get("byte_len"),
+        sha256: row.get("sha256"),
+        producing_job_key: row.get("producing_job_key"),
+        source_hash: row.get("source_hash"),
+        options_hash: row.get("options_hash"),
+        parameter_schema_version: row.get("parameter_schema_version"),
+        config_values_json: row.get("config_values_json"),
         created_at: row.get("created_at"),
+        superseded_at: row.get("superseded_at"),
     }
 }
 
@@ -506,6 +659,8 @@ fn job_record_from_row(row: sqlx::sqlite::SqliteRow) -> JobRecord {
         status: row.get("status"),
         error_summary: row.get("error_summary"),
         attempt: row.get("attempt"),
+        max_attempts: row.get("max_attempts"),
+        next_retry_at: row.get("next_retry_at"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }
@@ -530,9 +685,10 @@ fn artifact_metric_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactMetric {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[tokio::test]
-    async fn ready_jobs_can_be_requeued_after_artifact_invalidation() {
+    async fn ready_jobs_are_not_requeued_unless_forced() {
         let db = test_database().await;
         let payload = r#"{"kind":"parameter_refresh","model_slug":"demo"}"#;
 
@@ -550,12 +706,41 @@ mod tests {
         );
 
         assert!(
-            db.enqueue_job("work", "parameter_refresh", payload)
+            !db.enqueue_job("work", "parameter_refresh", payload)
+                .await
+                .unwrap()
+        );
+        assert!(db.claim_next_job(60).await.unwrap().is_none());
+
+        assert!(
+            db.force_enqueue_job("work", "parameter_refresh", payload)
                 .await
                 .unwrap()
         );
         let job = db.claim_next_job(60).await.unwrap().unwrap();
         assert_eq!(job.work_key, "work");
+    }
+
+    #[tokio::test]
+    async fn superseded_ready_jobs_can_be_requeued_normally() {
+        let db = test_database().await;
+        let payload = r#"{"kind":"parameter_refresh","model_slug":"demo"}"#;
+
+        db.enqueue_job("work", "parameter_refresh", payload)
+            .await
+            .unwrap();
+        let job = db.claim_next_job(60).await.unwrap().unwrap();
+        db.finish_job("work", job.attempt, "ready", None)
+            .await
+            .unwrap();
+
+        assert!(db.supersede_ready_job("work").await.unwrap());
+        assert!(
+            db.enqueue_job("work", "parameter_refresh", payload)
+                .await
+                .unwrap()
+        );
+        assert_eq!(db.claim_next_job(60).await.unwrap().unwrap().attempt, 1);
     }
 
     #[tokio::test]
@@ -595,26 +780,24 @@ mod tests {
     #[tokio::test]
     async fn artifacts_can_be_selected_by_age() {
         let db = test_database().await;
-        db.upsert_artifact(ArtifactUpsert {
-            artifact_key: "old",
-            model_slug: "demo",
-            config_hash: "abc",
-            output_kind: "preview_glb",
-            object_key: "previews/demo/old.glb",
-            content_type: "model/gltf-binary",
-            byte_len: 10,
-        })
+        db.upsert_artifact(test_artifact_upsert(
+            "old",
+            "abc",
+            "preview_glb",
+            "previews/demo/old.glb",
+            "model/gltf-binary",
+            10,
+        ))
         .await
         .unwrap();
-        db.upsert_artifact(ArtifactUpsert {
-            artifact_key: "new",
-            model_slug: "demo",
-            config_hash: "def",
-            output_kind: "step",
-            object_key: "artifacts/demo/new.step",
-            content_type: "model/step",
-            byte_len: 20,
-        })
+        db.upsert_artifact(test_artifact_upsert(
+            "new",
+            "def",
+            "step",
+            "artifacts/demo/new.step",
+            "model/step",
+            20,
+        ))
         .await
         .unwrap();
         sqlx::query(
@@ -628,6 +811,77 @@ mod tests {
 
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].artifact_key, "old");
+    }
+
+    #[tokio::test]
+    async fn superseded_artifacts_are_hidden_but_retained() {
+        let db = test_database().await;
+        db.upsert_artifact(test_artifact_upsert(
+            "artifact",
+            "abc",
+            "preview_glb",
+            "previews/demo/artifact.glb",
+            "model/gltf-binary",
+            10,
+        ))
+        .await
+        .unwrap();
+
+        assert!(db.artifact("artifact").await.unwrap().is_some());
+        assert!(db.supersede_artifact("artifact").await.unwrap());
+
+        assert!(db.artifact("artifact").await.unwrap().is_none());
+        let retained_status: String =
+            sqlx::query_scalar("SELECT status FROM artifacts WHERE artifact_key = 'artifact'")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(retained_status, "superseded");
+    }
+
+    #[tokio::test]
+    async fn failed_jobs_wait_for_next_retry_and_stop_at_max_attempts() {
+        let db = test_database().await;
+        let payload = r#"{"kind":"parameter_refresh","model_slug":"demo"}"#;
+
+        db.enqueue_job("work", "parameter_refresh", payload)
+            .await
+            .unwrap();
+        let first = db.claim_next_job(60).await.unwrap().unwrap();
+        assert_eq!(first.max_attempts, 3);
+        assert!(
+            db.record_job_failure("work", first.attempt, "boom", 60)
+                .await
+                .unwrap()
+        );
+
+        let job = db.job("work").await.unwrap().unwrap();
+        assert_eq!(job.status, "queued");
+        assert_eq!(job.attempt, 1);
+        assert!(job.next_retry_at.is_some());
+        assert!(db.claim_next_job(60).await.unwrap().is_none());
+
+        sqlx::query(
+            "UPDATE jobs SET next_retry_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 seconds') WHERE work_key = 'work'",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let second = db.claim_next_job(60).await.unwrap().unwrap();
+        assert_eq!(second.attempt, 2);
+        db.record_job_failure("work", second.attempt, "boom again", 0)
+            .await
+            .unwrap();
+        let third = db.claim_next_job(60).await.unwrap().unwrap();
+        assert_eq!(third.attempt, 3);
+        db.record_job_failure("work", third.attempt, "terminal", 0)
+            .await
+            .unwrap();
+
+        let job = db.job("work").await.unwrap().unwrap();
+        assert_eq!(job.status, "failed");
+        assert_eq!(job.next_retry_at, None);
+        assert_eq!(job.error_summary.as_deref(), Some("terminal"));
     }
 
     #[tokio::test]
@@ -656,7 +910,7 @@ mod tests {
         let payload = r#"{"kind":"parameter_refresh","model_slug":"demo"}"#;
         for (work_key, job_kind) in [
             ("parameters", "parameter_refresh"),
-            ("preview", "preview_glb"),
+            ("preview", "preview_export"),
             ("download", "download_export"),
         ] {
             db.enqueue_job(work_key, job_kind, payload).await.unwrap();
@@ -666,7 +920,10 @@ mod tests {
                 .unwrap();
         }
 
-        let count = db.retry_failed_jobs_by_kind("preview_glb").await.unwrap();
+        let count = db
+            .retry_failed_jobs_by_kind("preview_export")
+            .await
+            .unwrap();
 
         assert_eq!(count, 1);
         assert_eq!(db.job("preview").await.unwrap().unwrap().status, "queued");
@@ -709,6 +966,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn running_job_leases_do_not_block_other_writes() {
+        let db = test_database().await;
+        let payload = r#"{"kind":"parameter_refresh","model_slug":"demo"}"#;
+
+        db.enqueue_job("slow", "parameter_refresh", payload)
+            .await
+            .unwrap();
+        let slow_lease = db.claim_next_job(60).await.unwrap().unwrap();
+        let slow_finish = {
+            let db = db.clone();
+            let work_key = slow_lease.work_key.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                db.finish_job(&work_key, slow_lease.attempt, "ready", None)
+                    .await
+                    .unwrap()
+            })
+        };
+
+        let enqueued = tokio::time::timeout(Duration::from_millis(500), async {
+            db.enqueue_job("other", "parameter_refresh", payload).await
+        })
+        .await
+        .expect("enqueue blocked while slow job work was in progress")
+        .unwrap();
+
+        assert!(enqueued);
+        assert_eq!(
+            db.claim_next_job(60).await.unwrap().unwrap().work_key,
+            "other"
+        );
+        assert!(slow_finish.await.unwrap());
+    }
+
+    #[tokio::test]
     async fn database_can_be_backed_up_to_new_file() {
         let db = test_database().await;
         db.enqueue_job(
@@ -748,5 +1040,30 @@ mod tests {
         let db = Database::connect(&url).await.unwrap();
         std::mem::forget(directory);
         db
+    }
+
+    fn test_artifact_upsert<'a>(
+        artifact_key: &'a str,
+        config_hash: &'a str,
+        output_kind: &'a str,
+        object_key: &'a str,
+        content_type: &'a str,
+        byte_len: i64,
+    ) -> ArtifactUpsert<'a> {
+        ArtifactUpsert {
+            artifact_key,
+            model_slug: "demo",
+            config_hash,
+            output_kind,
+            object_key,
+            content_type,
+            byte_len,
+            sha256: "abc123",
+            producing_job_key: Some("work"),
+            source_hash: "sourcehash",
+            options_hash: "optionshash",
+            parameter_schema_version: 1,
+            config_values_json: r#"{"width":"10"}"#,
+        }
     }
 }
