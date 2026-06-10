@@ -1749,10 +1749,10 @@ fn normalize_preview_gltf_materials(bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
                 continue;
             };
             if is_near_white_material(color) {
-                color[0] = Value::from(0.72);
-                color[1] = Value::from(0.76);
-                color[2] = Value::from(0.82);
-                pbr.insert("roughnessFactor".to_owned(), Value::from(0.82));
+                color[0] = Value::from(0.48);
+                color[1] = Value::from(0.50);
+                color[2] = Value::from(0.52);
+                pbr.insert("roughnessFactor".to_owned(), Value::from(0.74));
                 changed = true;
             }
         }
@@ -2141,7 +2141,7 @@ if (window.location.pathname !== {path}) {{
 fn render_preview_viewer(state: &AppState, object_key: &str) -> String {
     match state.storage.public_url(object_key) {
         Some(url) => format!(
-            r#"<model-viewer src="{}" camera-controls auto-rotate environment-image="neutral" exposure="1.1" shadow-intensity="0.7" shadow-softness="1" style="width: min(100%, 720px); height: 480px; background: linear-gradient(#f8fafc, #dbe4ef);"></model-viewer>"#,
+            r#"<model-viewer src="{}" camera-controls auto-rotate environment-image="neutral" exposure="0.7" shadow-intensity="0.85" shadow-softness="0.6" style="width: min(100%, 720px); height: 480px; background: linear-gradient(#3b3f45, #25282d);"></model-viewer>"#,
             escape_html(&url),
         ),
         None => {
@@ -2233,12 +2233,12 @@ fn render_status_polling(
       viewer.setAttribute("camera-controls", "");
       viewer.setAttribute("auto-rotate", "");
       viewer.setAttribute("environment-image", "neutral");
-      viewer.setAttribute("exposure", "1.1");
-      viewer.setAttribute("shadow-intensity", "0.7");
-      viewer.setAttribute("shadow-softness", "1");
+      viewer.setAttribute("exposure", "0.7");
+      viewer.setAttribute("shadow-intensity", "0.85");
+      viewer.setAttribute("shadow-softness", "0.6");
       viewer.style.width = "min(100%, 720px)";
       viewer.style.height = "480px";
-      viewer.style.background = "linear-gradient(#f8fafc, #dbe4ef)";
+      viewer.style.background = "linear-gradient(#3b3f45, #25282d)";
       target.replaceWith(viewer);
       return;
     }}
@@ -2537,8 +2537,8 @@ mod tests {
 
         assert!(html.contains(r#"document.createElement("model-viewer")"#));
         assert!(html.contains(r#"viewer.setAttribute("environment-image", "neutral")"#));
-        assert!(html.contains(r#"viewer.setAttribute("exposure", "1.1")"#));
-        assert!(html.contains(r#"viewer.setAttribute("shadow-intensity", "0.7")"#));
+        assert!(html.contains(r#"viewer.setAttribute("exposure", "0.7")"#));
+        assert!(html.contains(r#"viewer.setAttribute("shadow-intensity", "0.85")"#));
         assert!(html.contains("showReadyArtifact(status)"));
         assert!(!html.contains("location.reload"));
     }
@@ -2646,12 +2646,12 @@ mod tests {
         let gltf: Value = serde_json::from_slice(&artifact.bytes).unwrap();
         let color = &gltf["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"];
 
-        assert_eq!(color[0], Value::from(0.72));
-        assert_eq!(color[1], Value::from(0.76));
-        assert_eq!(color[2], Value::from(0.82));
+        assert_eq!(color[0], Value::from(0.48));
+        assert_eq!(color[1], Value::from(0.50));
+        assert_eq!(color[2], Value::from(0.52));
         assert_eq!(
             gltf["materials"][0]["pbrMetallicRoughness"]["roughnessFactor"],
-            Value::from(0.82)
+            Value::from(0.74)
         );
     }
 
