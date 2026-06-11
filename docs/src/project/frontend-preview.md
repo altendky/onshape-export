@@ -59,7 +59,7 @@ Preview defaults:
 - GLB format.
 - Medium or coarse tessellation until quality requirements are known.
 - Stable orientation and scale.
-- Cache identity includes preview options plus request, defaults-policy, and post-processing versions where they affect the relevant cache layer.
+- Cache identity should keep the layers from [Forward-Looking Cache Model](cache-model.md) separate: preview quality, orientation, scale, and grouping affect `optionsHash`; exact request shape, explicit defaults, defaults-policy version, and request-builder version affect `requestHash`; local extraction, validation, packing, and tool versions affect `postprocessHash`; the published preview artifact set combines those identities into `artifactSetHash`.
 
 Final export defaults:
 
