@@ -66,7 +66,7 @@ Implemented foundation:
 - Strict GLB preview artifact handling.
 - Supersession-based artifact invalidation and pruning.
 - Worker-only runtime mode and configurable worker concurrency.
-- CLI maintenance commands for catalog validation, parameter refresh, pre-generation, job/failure inspection and retry, artifact inspection/invalidation, pruning, and manifest rewrite.
+- CLI maintenance commands for catalog validation, parameter refresh, pre-generation, job/failure inspection and retry, artifact inspection/invalidation, pruning, and manifest inspection.
 - Catalog-defined parameter presets, UI overrides, preview options, and STEP export option defaults.
 - Deploy-time `ops check` and operator-triggered SQLite backup snapshots.
 - Temporary placeholder GitHub Actions job named exactly `all`.
@@ -80,7 +80,7 @@ Plan review TODOs that are not implemented yet:
 - Persist Onshape translation IDs and polling state for crash recovery.
 - Honor Onshape `Retry-After` once the client exposes it.
 - Materialize missing outputs, replacement pointers, and full supersession history in manifests.
-- Reconcile the current v1 cache implementation with the v2 cache model as a clean cut, following [Forward-Looking Cache Model](cache-model.md): do not merge v1 artifact records into v2 identity; resolve microversion source identity before hashing; dedupe export work by `requestHash`; retain private raw payloads before post-processing; create artifact sets from DB-first metadata; and keep public manifests deferred to DB/status-derived responses until a later explicit materialization feature.
+- Reconcile the current v1 cache implementation with the v2 cache model as a clean cut, following [Forward-Looking Cache Model](cache-model.md): do not merge v1 artifact records into v2 identity; resolve microversion source identity before hashing; honor Onshape `configurationencodings`; and add explicit upload verification and repair state for partial-write recovery.
 
 ## Phase 0: Documentation And Decisions
 

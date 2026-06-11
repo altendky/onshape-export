@@ -134,11 +134,6 @@ struct PruneOptions {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ManifestOptions {
-    rewrite: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FailureRetrySelector<'a> {
     All,
     Kind(&'a str),
@@ -502,7 +497,7 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
                 return Ok(());
             };
 
-            supersede_artifact_and_rewrite_manifest(&state, &artifact).await?;
+            supersede_published_artifact(&state, &artifact).await?;
             println!(
                 "invalidated artifact {artifact_key} and marked {} superseded",
                 artifact.object_key
@@ -512,7 +507,7 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
         ("artifacts", [subcommand, slug, config_hash, manifest_args @ ..])
             if subcommand == "manifest" =>
         {
-            let options = parse_manifest_options(manifest_args)?;
+            parse_manifest_options(manifest_args)?;
             let state = cli_state(config).await?;
             let model = state
                 .catalog
@@ -534,13 +529,6 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
                 &artifacts,
                 state.storage.public_base_url(),
             );
-
-            if options.rewrite {
-                let object_key = manifest_object_key(&source_hash, config_hash);
-                state.storage.put_json(&object_key, &manifest).await?;
-                eprintln!("rewrote manifest {object_key}");
-            }
-
             println!("{}", serde_json::to_string_pretty(&manifest)?);
             Ok(())
         }
@@ -576,7 +564,7 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
                         artifact.object_key,
                     );
                     if !options.dry_run {
-                        supersede_artifact_and_rewrite_manifest(&state, &artifact).await?;
+                        supersede_published_artifact(&state, &artifact).await?;
                     }
                     pruned += 1;
                 }
@@ -742,17 +730,12 @@ fn parse_prune_options(args: &[String]) -> anyhow::Result<PruneOptions> {
     })
 }
 
-fn parse_manifest_options(args: &[String]) -> anyhow::Result<ManifestOptions> {
-    let mut rewrite = false;
-
-    for arg in args {
-        match arg.as_str() {
-            "--rewrite" => rewrite = true,
-            _ => anyhow::bail!("unknown manifest option: {arg}"),
-        }
+fn parse_manifest_options(args: &[String]) -> anyhow::Result<()> {
+    if let Some(arg) = args.first() {
+        anyhow::bail!("unknown manifest option: {arg}");
     }
 
-    Ok(ManifestOptions { rewrite })
+    Ok(())
 }
 
 async fn cli_state(config: Config) -> anyhow::Result<AppState> {
@@ -872,10 +855,6 @@ async fn enqueue_preview(
 ) -> anyhow::Result<bool> {
     let source_hash = resolve_source_hash(state, model).await?;
     let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
-    let legacy_work_key = preview_work_key(&source_hash, model, &config_hash);
-    if should_defer_to_legacy_export_job(state.db.job(&legacy_work_key).await?.as_ref()) {
-        return Ok(false);
-    }
     let prepared =
         prepare_preview_export(state, model, &source_hash, &validated.values, &config_hash).await?;
     let payload = JobPayload::PreviewGlb {
@@ -907,10 +886,6 @@ async fn enqueue_download(
 ) -> anyhow::Result<bool> {
     let source_hash = resolve_source_hash(state, model).await?;
     let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
-    let legacy_work_key = download_work_key(&source_hash, model, &config_hash, format);
-    if should_defer_to_legacy_export_job(state.db.job(&legacy_work_key).await?.as_ref()) {
-        return Ok(false);
-    }
     let prepared = prepare_download_export(
         state,
         model,
@@ -1056,7 +1031,7 @@ fn validated_parameter_set(
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export ops check\n  onshape-export ops backup <destination.db>\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export jobs list [--json]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts manifest <slug> <config-hash> [--rewrite]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
+        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export ops check\n  onshape-export ops backup <destination.db>\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export jobs list [--json]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts manifest <slug> <config-hash>\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
     );
 }
 
@@ -2998,7 +2973,6 @@ async fn refresh_preview(
         )
         .await?;
     tracing::debug!(request_hash = %prepared.request_hash, raw_payload_hash = %raw_payload.raw_payload_hash, %artifact_key, "staged preview export request");
-    rewrite_manifest(state, model, config_hash, Some(values)).await?;
     Ok(primary_object_key)
 }
 
@@ -3328,7 +3302,6 @@ async fn refresh_download(
         )
         .await?;
     tracing::debug!(request_hash = %prepared.request_hash, raw_payload_hash = %raw_payload.raw_payload_hash, %artifact_key, "staged download export request");
-    rewrite_manifest(state, model, config_hash, Some(values)).await?;
     Ok(object_key)
 }
 
@@ -3619,59 +3592,15 @@ async fn persist_export_request(
     Ok(request_hash)
 }
 
-async fn rewrite_manifest(
-    state: &AppState,
-    model: &catalog::Model,
-    config_hash: &str,
-    values: Option<&HashMap<String, String>>,
-) -> anyhow::Result<String> {
-    let artifacts = state
-        .db
-        .artifacts_for_configuration(&model.slug, config_hash)
-        .await?;
-    let source_hash = artifacts
-        .first()
-        .and_then(|artifact| artifact.source_hash.clone())
-        .unwrap_or(resolve_source_hash(state, model).await?);
-    let manifest = build_manifest(
-        &source_hash,
-        model,
-        config_hash,
-        values,
-        &artifacts,
-        state.storage.public_base_url(),
-    );
-    let object_key = manifest_object_key(&source_hash, config_hash);
-    state.storage.put_json(&object_key, &manifest).await?;
-    Ok(object_key)
-}
-
-async fn supersede_artifact_and_rewrite_manifest(
+async fn supersede_published_artifact(
     state: &AppState,
     artifact: &db::ArtifactRecord,
 ) -> anyhow::Result<()> {
     state.db.supersede_artifact(&artifact.artifact_key).await?;
-    if let Some(model) = state.catalog.find(&artifact.model_slug) {
-        let producing_job_key = artifact
-            .producing_job_key
-            .clone()
-            .or_else(|| artifact_work_key(model, artifact));
-        if let Some(work_key) = producing_job_key {
-            state.db.supersede_ready_job(&work_key).await?;
-        }
-        rewrite_manifest(state, model, &artifact.config_hash, None).await?;
+    if let Some(work_key) = artifact.producing_job_key.as_deref() {
+        state.db.supersede_ready_job(work_key).await?;
     }
     Ok(())
-}
-
-fn artifact_work_key(model: &catalog::Model, artifact: &db::ArtifactRecord) -> Option<String> {
-    let source_hash = artifact.source_hash.as_deref()?;
-    if artifact.output_kind == "preview_glb" {
-        return Some(preview_work_key(source_hash, model, &artifact.config_hash));
-    }
-
-    catalog::DownloadFormat::from_slug(&artifact.output_kind)
-        .map(|format| download_work_key(source_hash, model, &artifact.config_hash, format))
 }
 
 fn build_manifest(
@@ -3760,13 +3689,6 @@ fn manifest_group_id(source_hash: &str, config_hash: &str) -> String {
     format!("group-v1:{source_hash}:{config_hash}")
 }
 
-fn manifest_object_key(source_hash: &str, config_hash: &str) -> String {
-    format!(
-        "manifests/v1/{}.json",
-        manifest_group_id(source_hash, config_hash)
-    )
-}
-
 fn parameter_refresh_work_key(source_hash: &str) -> String {
     work_key(
         "parameter_refresh",
@@ -3783,6 +3705,7 @@ fn export_job_key(request_hash: &str) -> String {
     format!("work-v2:export:{request_hash}")
 }
 
+#[cfg(test)]
 fn preview_work_key(source_hash: &str, model: &catalog::Model, config_hash: &str) -> String {
     work_key(
         "preview_export",
@@ -3795,6 +3718,7 @@ fn preview_work_key(source_hash: &str, model: &catalog::Model, config_hash: &str
     )
 }
 
+#[cfg(test)]
 fn download_work_key(
     source_hash: &str,
     model: &catalog::Model,
@@ -3825,7 +3749,6 @@ async fn preview_status_job_keys(
         &preview_options_hash(model),
         "preview",
         "glb",
-        preview_work_key(source_hash, model, config_hash),
     )
     .await
 }
@@ -3844,7 +3767,6 @@ async fn download_status_job_keys(
         &download_options_hash(model, format),
         "download",
         format.slug(),
-        download_work_key(source_hash, model, config_hash, format),
     )
     .await
 }
@@ -3856,9 +3778,8 @@ async fn export_status_job_keys(
     options_hash: &str,
     output_kind: &str,
     format: &str,
-    legacy_work_key: String,
 ) -> Result<Vec<String>, AppError> {
-    let mut work_keys = Vec::with_capacity(2);
+    let mut work_keys = Vec::with_capacity(1);
     if let Some(request) = state
         .db
         .latest_export_request_for_output(
@@ -3872,17 +3793,7 @@ async fn export_status_job_keys(
     {
         work_keys.push(export_job_key(&request.request_hash));
     }
-    if !work_keys.iter().any(|key| key == &legacy_work_key) {
-        work_keys.push(legacy_work_key);
-    }
     Ok(work_keys)
-}
-
-fn should_defer_to_legacy_export_job(legacy_job: Option<&db::JobRecord>) -> bool {
-    matches!(
-        legacy_job.map(|job| job.status.as_str()),
-        Some("queued" | "running" | "ready")
-    )
 }
 
 fn job_status_priority(status: &str) -> u8 {
@@ -4615,6 +4526,7 @@ fn escape_html(value: &str) -> String {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::sync::Arc;
 
     #[test]
     fn escapes_html() {
@@ -4969,23 +4881,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_failed_jobs_do_not_block_request_hash_enqueue() {
-        let failed_job = db::JobRecord {
-            work_key: "legacy".to_owned(),
-            job_kind: "preview_export".to_owned(),
-            status: "failed".to_owned(),
-            error_summary: Some("boom".to_owned()),
-            attempt: 3,
-            max_attempts: 3,
-            next_retry_at: None,
-            created_at: "now".to_owned(),
-            updated_at: "now".to_owned(),
-        };
-
-        assert!(!should_defer_to_legacy_export_job(Some(&failed_job)));
-    }
-
-    #[test]
     fn prefers_active_job_status_over_stale_failed_status() {
         assert!(job_status_priority("running") > job_status_priority("failed"));
         assert!(job_status_priority("queued") > job_status_priority("superseded"));
@@ -5020,6 +4915,114 @@ mod tests {
         let error = validate_parameter_overrides(&model, &schema).unwrap_err();
 
         assert!(error.to_string().contains("unknown parameter: missing"));
+    }
+
+    #[tokio::test]
+    async fn export_status_job_keys_ignore_legacy_export_jobs() {
+        let state = test_state().await;
+        let legacy_work_key = preview_work_key("sourcehash", &test_model(), "confighash");
+        state
+            .db
+            .enqueue_job(&legacy_work_key, "preview_export", "{}")
+            .await
+            .unwrap();
+
+        let work_keys = export_status_job_keys(
+            &state,
+            "sourcehash",
+            "confighash",
+            "optionshash",
+            "preview",
+            "glb",
+        )
+        .await
+        .unwrap();
+
+        assert!(work_keys.is_empty());
+
+        state
+            .db
+            .insert_export_request_if_absent(ExportRequestInsert {
+                request_hash: "requesthash",
+                source_hash: "sourcehash",
+                config_hash: "confighash",
+                options_hash: "optionshash",
+                output_kind: "preview",
+                format: "glb",
+                endpoint: "createPartStudioExportGltf",
+                method: "POST",
+                path: "/api/partstudios/d/did/v/mid/e/eid/export/gltf",
+                request_json: "{}",
+                defaults_policy_version: "v1",
+                request_builder_version: "v1",
+                status: EXPORT_REQUEST_STATUS_STAGED,
+            })
+            .await
+            .unwrap();
+
+        let work_keys = export_status_job_keys(
+            &state,
+            "sourcehash",
+            "confighash",
+            "optionshash",
+            "preview",
+            "glb",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(work_keys, vec![export_job_key("requesthash")]);
+    }
+
+    #[tokio::test]
+    async fn superseding_artifact_marks_only_the_recorded_job() {
+        let state = test_state().await;
+        let work_key = export_job_key("requesthash");
+        state
+            .db
+            .enqueue_job(&work_key, "preview_export", "{}")
+            .await
+            .unwrap();
+        let lease = state.db.claim_next_job(30).await.unwrap().unwrap();
+        state
+            .db
+            .finish_job(&work_key, lease.attempt, "ready", None)
+            .await
+            .unwrap();
+        state
+            .db
+            .upsert_artifact(db::ArtifactUpsert {
+                artifact_key: "artifact-set",
+                model_slug: "demo",
+                config_hash: "confighash",
+                output_kind: "preview_glb",
+                format: "glb",
+                object_key: "previews/v2/artifact-set/preview.glb",
+                content_type: "model/gltf-binary",
+                byte_len: 42,
+                sha256: "sha256",
+                producing_job_key: Some(&work_key),
+                source_hash: "sourcehash",
+                options_hash: "optionshash",
+                request_hash: Some("requesthash"),
+                raw_payload_hash: Some("rawhash"),
+                postprocess_hash: Some("posthash"),
+                parameter_schema_version: SCHEMA_VERSION.into(),
+                config_values_json: "{}",
+            })
+            .await
+            .unwrap();
+
+        let artifact = state.db.artifact("artifact-set").await.unwrap().unwrap();
+        supersede_published_artifact(&state, &artifact)
+            .await
+            .unwrap();
+
+        assert!(state.db.artifact("artifact-set").await.unwrap().is_none());
+        assert_eq!(
+            state.db.job(&work_key).await.unwrap().unwrap().status,
+            "superseded"
+        );
     }
 
     #[test]
@@ -5326,15 +5329,51 @@ mod tests {
 
     #[test]
     fn parses_manifest_options() {
-        assert_eq!(
-            parse_manifest_options(&[]).unwrap(),
-            ManifestOptions { rewrite: false }
-        );
-        assert_eq!(
-            parse_manifest_options(&["--rewrite".to_owned()]).unwrap(),
-            ManifestOptions { rewrite: true }
-        );
+        parse_manifest_options(&[]).unwrap();
+        assert!(parse_manifest_options(&["--rewrite".to_owned()]).is_err());
         assert!(parse_manifest_options(&["--missing".to_owned()]).is_err());
+    }
+
+    async fn test_state() -> AppState {
+        let directory = tempfile::tempdir().unwrap();
+        let database_url = format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("test.db").display()
+        );
+        let db = Database::connect(&database_url).await.unwrap();
+        std::mem::forget(directory);
+        let storage = StorageClient::new(crate::config::StorageConfig {
+            bucket: "test-bucket".to_owned(),
+            endpoint_url: Some("http://127.0.0.1:9000".to_owned()),
+            region: "auto".to_owned(),
+            access_key_id: None,
+            secret_access_key: None,
+            public_base_url: Some("https://cdn.example.com".to_owned()),
+            force_path_style: true,
+        })
+        .await
+        .unwrap();
+        let onshape = OnshapeClient::new(crate::config::OnshapeConfig {
+            base_url: "https://cad.onshape.com".to_owned(),
+            access_key: None,
+            secret_key: None,
+        })
+        .unwrap();
+
+        AppState {
+            catalog: Arc::new(test_catalog()),
+            db,
+            onshape,
+            storage,
+        }
+    }
+
+    fn test_catalog() -> Catalog {
+        serde_json::from_value(serde_json::json!({
+            "catalogSchemaVersion": catalog::CATALOG_SCHEMA_VERSION,
+            "models": [test_model()],
+        }))
+        .unwrap()
     }
 
     fn test_model() -> catalog::Model {
