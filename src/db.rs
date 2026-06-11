@@ -1101,20 +1101,37 @@ impl Database {
         &self,
         artifact_set_hash: &str,
         primary_object_key: &str,
-        metadata_json: &str,
     ) -> sqlx::Result<bool> {
         let result = sqlx::query(
             r#"
             UPDATE artifact_sets
             SET status = 'ready',
                 primary_object_key = ?,
-                metadata_json = ?,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             WHERE artifact_set_hash = ?
             "#,
         )
         .bind(primary_object_key)
-        .bind(metadata_json)
+        .bind(artifact_set_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn transition_artifact_set_status(
+        &self,
+        artifact_set_hash: &str,
+        status: &str,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE artifact_sets
+            SET status = ?,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE artifact_set_hash = ?
+            "#,
+        )
+        .bind(status)
         .bind(artifact_set_hash)
         .execute(&self.pool)
         .await?;
@@ -1511,11 +1528,42 @@ impl Database {
         .map(|row| row.map(artifact_record_from_v2_row))
     }
 
+    pub async fn latest_artifact_set_for_output(
+        &self,
+        source_hash: &str,
+        config_hash: &str,
+        options_hash: &str,
+        output_kind: &str,
+    ) -> sqlx::Result<Option<ArtifactSetRecord>> {
+        sqlx::query(
+            r#"
+            SELECT artifact_set_hash, source_hash, config_hash, options_hash, request_hash,
+                   raw_payload_hash, postprocess_hash, output_kind, format, status,
+                   primary_object_key, metadata_json, created_at, updated_at,
+                   superseded_at, superseded_by, supersession_reason
+            FROM artifact_sets
+            WHERE source_hash = ?
+              AND config_hash = ?
+              AND options_hash = ?
+              AND output_kind = ?
+            ORDER BY updated_at DESC, created_at DESC, artifact_set_hash DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(source_hash)
+        .bind(config_hash)
+        .bind(options_hash)
+        .bind(output_kind)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(artifact_set_record_from_row))
+    }
+
     pub async fn supersede_artifact(&self, artifact_key: &str) -> sqlx::Result<bool> {
         self.supersede_artifact_set(artifact_key, None, None).await
     }
 
-    pub async fn publish_artifact(
+    pub async fn stage_artifact(
         &self,
         artifact: ArtifactUpsert<'_>,
         files: &[ArtifactFileInsert<'_>],
@@ -1598,23 +1646,18 @@ impl Database {
             .await?;
         }
 
-        sqlx::query(
-            r#"
-            UPDATE artifact_sets
-            SET status = 'ready',
-                primary_object_key = ?,
-                metadata_json = ?,
-                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE artifact_set_hash = ?
-            "#,
-        )
-        .bind(artifact.object_key)
-        .bind(&metadata_json)
-        .bind(artifact.artifact_key)
-        .execute(&mut *tx)
-        .await?;
-
         tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn publish_artifact(
+        &self,
+        artifact: ArtifactUpsert<'_>,
+        files: &[ArtifactFileInsert<'_>],
+    ) -> sqlx::Result<()> {
+        self.stage_artifact(artifact, files).await?;
+        self.mark_artifact_set_ready(artifact.artifact_key, artifact.object_key)
+            .await?;
         Ok(())
     }
 
@@ -2881,8 +2924,7 @@ mod tests {
         assert!(
             db.mark_artifact_set_ready(
                 "artifactsethash",
-                "previews/v2/artifactsethash/scene/model.gltf",
-                "{}"
+                "previews/v2/artifactsethash/scene/model.gltf"
             )
             .await
             .unwrap()
@@ -2990,6 +3032,93 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(record.translation_id, "done");
+    }
+
+    #[tokio::test]
+    async fn staged_artifact_sets_are_not_ready_until_explicitly_marked_ready() {
+        let db = test_database().await;
+
+        db.stage_artifact(
+            test_artifact_upsert(
+                "artifact",
+                "abc",
+                "preview_glb",
+                "previews/v2/artifact/preview.glb",
+                "model/gltf-binary",
+                10,
+            ),
+            &[ArtifactFileInsert {
+                artifact_set_hash: "artifact",
+                role: "viewer_entry",
+                logical_path: "preview.glb",
+                original_path: Some("preview.glb"),
+                object_key: "previews/v2/artifact/preview.glb",
+                content_type: "model/gltf-binary",
+                byte_len: 10,
+                sha256: "abc123",
+                metadata_json: "{}",
+            }],
+        )
+        .await
+        .unwrap();
+
+        assert!(db.artifact("artifact").await.unwrap().is_none());
+        assert_eq!(
+            db.artifact_set("artifact").await.unwrap().unwrap().status,
+            "staged"
+        );
+
+        assert!(
+            db.mark_artifact_set_ready("artifact", "previews/v2/artifact/preview.glb")
+                .await
+                .unwrap()
+        );
+
+        assert_eq!(
+            db.artifact("artifact").await.unwrap().unwrap().status,
+            "ready"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_failed_artifact_sets_remain_non_ready() {
+        let db = test_database().await;
+
+        db.stage_artifact(
+            test_artifact_upsert(
+                "artifact",
+                "abc",
+                "step",
+                "artifacts/v2/artifact/demo.step",
+                "model/step",
+                10,
+            ),
+            &[ArtifactFileInsert {
+                artifact_set_hash: "artifact",
+                role: "download",
+                logical_path: "demo.step",
+                original_path: Some("demo.step"),
+                object_key: "artifacts/v2/artifact/demo.step",
+                content_type: "model/step",
+                byte_len: 10,
+                sha256: "abc123",
+                metadata_json: "{}",
+            }],
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            db.transition_artifact_set_status("artifact", "upload_failed")
+                .await
+                .unwrap()
+        );
+
+        assert!(db.artifact("artifact").await.unwrap().is_none());
+        assert_eq!(
+            db.artifact_set("artifact").await.unwrap().unwrap().status,
+            "upload_failed"
+        );
     }
 
     async fn test_database() -> Database {

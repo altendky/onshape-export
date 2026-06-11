@@ -60,6 +60,7 @@ const PREVIEW_POSTPROCESSOR_NAME: &str = "preview_extract";
 const PREVIEW_POSTPROCESSOR_VERSION: &str = "1";
 const DOWNLOAD_POSTPROCESSOR_NAME: &str = "download_identity";
 const DOWNLOAD_POSTPROCESSOR_VERSION: &str = "1";
+const STRICT_UPLOAD_VERIFICATION: bool = false;
 
 #[derive(Clone)]
 struct AppState {
@@ -1668,12 +1669,15 @@ async fn preview_status(
     let source_hash = resolve_source_hash(&state, model).await?;
     let work_keys = preview_status_job_keys(&state, &source_hash, model, &config_hash).await?;
     let artifact = ready_preview_artifact(&state, model, &source_hash, &config_hash).await?;
+    let artifact_set =
+        latest_preview_artifact_set(&state, model, &source_hash, &config_hash).await?;
 
     Ok(Json(
         artifact_status(
             &state,
             preview_lookup_key(&source_hash, model, &config_hash),
             artifact,
+            artifact_set,
             &work_keys,
         )
         .await?,
@@ -1694,12 +1698,15 @@ async fn download_status(
         download_status_job_keys(&state, &source_hash, model, &config_hash, format).await?;
     let artifact =
         ready_download_artifact(&state, model, &source_hash, &config_hash, format).await?;
+    let artifact_set =
+        latest_download_artifact_set(&state, model, &source_hash, &config_hash, format).await?;
 
     Ok(Json(
         artifact_status(
             &state,
             download_lookup_key(&source_hash, model, &config_hash, format),
             artifact,
+            artifact_set,
             &work_keys,
         )
         .await?,
@@ -1710,6 +1717,7 @@ async fn artifact_status(
     state: &AppState,
     lookup_key: String,
     artifact: Option<db::ArtifactRecord>,
+    artifact_set: Option<db::ArtifactSetRecord>,
     work_keys: &[String],
 ) -> Result<ArtifactStatusResponse, AppError> {
     if let Some(record) = artifact {
@@ -1750,10 +1758,74 @@ async fn artifact_status(
         }
     }
 
-    if let Some(job) = selected_job {
+    if let Some(job) = selected_job.as_ref()
+        && matches!(job.status.as_str(), "queued" | "running")
+    {
         let message = match job.status.as_str() {
             "queued" => "Generation is queued.",
             "running" => "Generation is running.",
+            _ => unreachable!("matched queued or running above"),
+        };
+        return Ok(ArtifactStatusResponse {
+            artifact_key: lookup_key,
+            status: job.status.clone(),
+            message: message.to_owned(),
+            public_url: None,
+            object_key: None,
+            content_type: None,
+            size_bytes: None,
+            sha256: None,
+            job_id: Some(job.work_key.clone()),
+            source_hash: None,
+            config_hash: None,
+            options_hash: None,
+            schema_version: None,
+            attempt: Some(job.attempt),
+            max_attempts: Some(job.max_attempts),
+            next_retry_at: job.next_retry_at.clone(),
+            error_summary: job.error_summary.clone(),
+            updated_at: Some(job.updated_at.clone()),
+        });
+    }
+
+    if let Some(artifact_set) = artifact_set
+        && artifact_set.status != "ready"
+    {
+        let message = match artifact_set.status.as_str() {
+            "staged" => "Artifact upload is staged but not ready yet.",
+            "upload_failed" => "Artifact upload verification failed.",
+            "repair_required" => "Artifact verification requires repair.",
+            "superseded" => "Artifact was superseded and needs to be queued again.",
+            _ => "Artifact status is unknown.",
+        };
+        return Ok(ArtifactStatusResponse {
+            artifact_key: artifact_set.artifact_set_hash,
+            status: artifact_set.status,
+            message: message.to_owned(),
+            public_url: None,
+            object_key: artifact_set.primary_object_key,
+            content_type: None,
+            size_bytes: None,
+            sha256: None,
+            job_id: selected_job.as_ref().map(|job| job.work_key.clone()),
+            source_hash: Some(artifact_set.source_hash),
+            config_hash: Some(artifact_set.config_hash),
+            options_hash: Some(artifact_set.options_hash),
+            schema_version: None,
+            attempt: selected_job.as_ref().map(|job| job.attempt),
+            max_attempts: selected_job.as_ref().map(|job| job.max_attempts),
+            next_retry_at: selected_job
+                .as_ref()
+                .and_then(|job| job.next_retry_at.clone()),
+            error_summary: selected_job
+                .as_ref()
+                .and_then(|job| job.error_summary.clone()),
+            updated_at: Some(artifact_set.updated_at),
+        });
+    }
+
+    if let Some(job) = selected_job {
+        let message = match job.status.as_str() {
             "failed" => "Generation failed.",
             "ready" => "Generation completed; artifact is not visible yet.",
             "superseded" => "Generation was superseded and needs to be queued again.",
@@ -2799,6 +2871,15 @@ async fn verify_uploaded_object(
     expected_len: i64,
 ) -> anyhow::Result<()> {
     let metadata = state.storage.head_object(object_key).await?;
+    verify_uploaded_object_metadata(&metadata, object_key, expected_content_type, expected_len)
+}
+
+fn verify_uploaded_object_metadata(
+    metadata: &storage::ObjectMetadata,
+    object_key: &str,
+    expected_content_type: &str,
+    expected_len: i64,
+) -> anyhow::Result<()> {
     anyhow::ensure!(
         metadata.content_length == expected_len,
         "uploaded object length mismatch for {object_key}: expected {expected_len}, got {}",
@@ -2810,6 +2891,63 @@ async fn verify_uploaded_object(
             "uploaded object content type mismatch for {object_key}: expected {expected_content_type}, got {content_type}"
         );
     }
+    Ok(())
+}
+
+async fn verify_uploaded_object_read_back(
+    state: &AppState,
+    object_key: &str,
+    expected_len: i64,
+    expected_sha256: &str,
+) -> anyhow::Result<()> {
+    let bytes = state.storage.get_bytes(object_key).await?;
+    verify_uploaded_object_bytes(&bytes, object_key, expected_len, expected_sha256)
+}
+
+fn verify_uploaded_object_bytes(
+    bytes: &[u8],
+    object_key: &str,
+    expected_len: i64,
+    expected_sha256: &str,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        bytes.len() as i64 == expected_len,
+        "uploaded object read-back length mismatch for {object_key}: expected {expected_len}, got {}",
+        bytes.len()
+    );
+    let actual_sha256 = cache_key::hex_sha256(bytes);
+    anyhow::ensure!(
+        actual_sha256 == expected_sha256,
+        "uploaded object read-back sha256 mismatch for {object_key}: expected {expected_sha256}, got {actual_sha256}"
+    );
+    Ok(())
+}
+
+async fn verify_uploaded_artifact(
+    state: &AppState,
+    object_key: &str,
+    expected_content_type: &str,
+    expected_len: i64,
+    expected_sha256: &str,
+) -> anyhow::Result<()> {
+    verify_uploaded_object(state, object_key, expected_content_type, expected_len).await?;
+    if STRICT_UPLOAD_VERIFICATION {
+        verify_uploaded_object_read_back(state, object_key, expected_len, expected_sha256).await?;
+    }
+    Ok(())
+}
+
+async fn mark_artifact_upload_failed(
+    state: &AppState,
+    artifact_key: &str,
+    error: &anyhow::Error,
+) -> anyhow::Result<()> {
+    state
+        .db
+        .transition_artifact_set_status(artifact_key, "upload_failed")
+        .await
+        .with_context(|| format!("marking artifact set upload_failed for {artifact_key}"))?;
+    tracing::warn!(artifact_key = %artifact_key, error = %error, "artifact upload verification failed");
     Ok(())
 }
 
@@ -2865,38 +3003,6 @@ async fn refresh_preview(
         .iter()
         .map(|sidecar| preview_asset_object_key(&artifact_key, &sidecar.logical_path))
         .collect::<Vec<_>>();
-    state
-        .storage
-        .put_bytes(
-            &primary_object_key,
-            preview_artifact.bytes.clone(),
-            preview_artifact.content_type,
-        )
-        .await?;
-    verify_uploaded_object(
-        state,
-        &primary_object_key,
-        preview_artifact.content_type,
-        preview_artifact.bytes.len() as i64,
-    )
-    .await?;
-    for (sidecar, object_key) in preview_artifact
-        .sidecars
-        .iter()
-        .zip(sidecar_object_keys.iter())
-    {
-        state
-            .storage
-            .put_bytes(object_key, sidecar.bytes.clone(), sidecar.content_type)
-            .await?;
-        verify_uploaded_object(
-            state,
-            object_key,
-            sidecar.content_type,
-            sidecar.bytes.len() as i64,
-        )
-        .await?;
-    }
     let preview_sha256 = cache_key::hex_sha256(&preview_artifact.bytes);
     let sidecar_sha256 = preview_artifact
         .sidecars
@@ -2934,7 +3040,7 @@ async fn refresh_preview(
     );
     state
         .db
-        .publish_artifact(
+        .stage_artifact(
             ArtifactUpsert {
                 artifact_key: &artifact_key,
                 model_slug: &model.slug,
@@ -2960,6 +3066,53 @@ async fn refresh_preview(
             },
             &artifact_files,
         )
+        .await?;
+    let upload_result: anyhow::Result<()> = async {
+        state
+            .storage
+            .put_bytes(
+                &primary_object_key,
+                preview_artifact.bytes.clone(),
+                preview_artifact.content_type,
+            )
+            .await?;
+        verify_uploaded_artifact(
+            state,
+            &primary_object_key,
+            preview_artifact.content_type,
+            preview_artifact.bytes.len() as i64,
+            &preview_sha256,
+        )
+        .await?;
+        for ((sidecar, object_key), sidecar_sha256) in preview_artifact
+            .sidecars
+            .iter()
+            .zip(sidecar_object_keys.iter())
+            .zip(sidecar_sha256.iter())
+        {
+            state
+                .storage
+                .put_bytes(object_key, sidecar.bytes.clone(), sidecar.content_type)
+                .await?;
+            verify_uploaded_artifact(
+                state,
+                object_key,
+                sidecar.content_type,
+                sidecar.bytes.len() as i64,
+                sidecar_sha256,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(error) = upload_result {
+        mark_artifact_upload_failed(state, &artifact_key, &error).await?;
+        return Err(error);
+    }
+    state
+        .db
+        .mark_artifact_set_ready(&artifact_key, &primary_object_key)
         .await?;
     state
         .db
@@ -3236,23 +3389,6 @@ async fn refresh_download(
         "attachment; filename=\"{}\"",
         download_artifact.logical_path
     );
-    state
-        .storage
-        .put_bytes_with_headers(
-            &object_key,
-            download_artifact.bytes.clone(),
-            format.content_type(),
-            Some(&content_disposition),
-            Some("public, max-age=31536000, immutable"),
-        )
-        .await?;
-    verify_uploaded_object(
-        state,
-        &object_key,
-        format.content_type(),
-        download_artifact.bytes.len() as i64,
-    )
-    .await?;
     let download_sha256 = cache_key::hex_sha256(&download_artifact.bytes);
     let artifact_files = [db::ArtifactFileInsert {
         artifact_set_hash: &artifact_key,
@@ -3267,7 +3403,7 @@ async fn refresh_download(
     }];
     state
         .db
-        .publish_artifact(
+        .stage_artifact(
             ArtifactUpsert {
                 artifact_key: &artifact_key,
                 model_slug: &model.slug,
@@ -3289,6 +3425,35 @@ async fn refresh_download(
             },
             &artifact_files,
         )
+        .await?;
+    let upload_result: anyhow::Result<()> = async {
+        state
+            .storage
+            .put_bytes_with_headers(
+                &object_key,
+                download_artifact.bytes.clone(),
+                format.content_type(),
+                Some(&content_disposition),
+                Some("public, max-age=31536000, immutable"),
+            )
+            .await?;
+        verify_uploaded_artifact(
+            state,
+            &object_key,
+            format.content_type(),
+            download_artifact.bytes.len() as i64,
+            &download_sha256,
+        )
+        .await
+    }
+    .await;
+    if let Err(error) = upload_result {
+        mark_artifact_upload_failed(state, &artifact_key, &error).await?;
+        return Err(error);
+    }
+    state
+        .db
+        .mark_artifact_set_ready(&artifact_key, &object_key)
         .await?;
     state
         .db
@@ -3834,6 +3999,41 @@ async fn ready_download_artifact(
     state
         .db
         .latest_ready_artifact_for_output(
+            source_hash,
+            config_hash,
+            &download_options_hash(model, format),
+            format.slug(),
+        )
+        .await
+}
+
+async fn latest_preview_artifact_set(
+    state: &AppState,
+    model: &catalog::Model,
+    source_hash: &str,
+    config_hash: &str,
+) -> sqlx::Result<Option<db::ArtifactSetRecord>> {
+    state
+        .db
+        .latest_artifact_set_for_output(
+            source_hash,
+            config_hash,
+            &preview_options_hash(model),
+            "preview_glb",
+        )
+        .await
+}
+
+async fn latest_download_artifact_set(
+    state: &AppState,
+    model: &catalog::Model,
+    source_hash: &str,
+    config_hash: &str,
+    format: catalog::DownloadFormat,
+) -> sqlx::Result<Option<db::ArtifactSetRecord>> {
+    state
+        .db
+        .latest_artifact_set_for_output(
             source_hash,
             config_hash,
             &download_options_hash(model, format),
@@ -4884,6 +5084,104 @@ mod tests {
     fn prefers_active_job_status_over_stale_failed_status() {
         assert!(job_status_priority("running") > job_status_priority("failed"));
         assert!(job_status_priority("queued") > job_status_priority("superseded"));
+    }
+
+    #[test]
+    fn upload_metadata_verification_checks_length_and_content_type() {
+        verify_uploaded_object_metadata(
+            &storage::ObjectMetadata {
+                content_length: 42,
+                content_type: Some("model/gltf-binary".to_owned()),
+            },
+            "previews/v2/artifact/preview.glb",
+            "model/gltf-binary",
+            42,
+        )
+        .unwrap();
+
+        let error = verify_uploaded_object_metadata(
+            &storage::ObjectMetadata {
+                content_length: 42,
+                content_type: Some("application/octet-stream".to_owned()),
+            },
+            "previews/v2/artifact/preview.glb",
+            "model/gltf-binary",
+            42,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("content type mismatch"));
+
+        let error = verify_uploaded_object_metadata(
+            &storage::ObjectMetadata {
+                content_length: 41,
+                content_type: Some("model/gltf-binary".to_owned()),
+            },
+            "previews/v2/artifact/preview.glb",
+            "model/gltf-binary",
+            42,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("length mismatch"));
+    }
+
+    #[test]
+    fn strict_upload_verification_checks_read_back_sha256() {
+        let bytes = b"verified-bytes";
+        let expected_sha256 = cache_key::hex_sha256(bytes);
+
+        verify_uploaded_object_bytes(
+            bytes,
+            "artifacts/v2/artifact/demo.step",
+            bytes.len() as i64,
+            &expected_sha256,
+        )
+        .unwrap();
+
+        let error = verify_uploaded_object_bytes(
+            bytes,
+            "artifacts/v2/artifact/demo.step",
+            bytes.len() as i64,
+            "deadbeef",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("sha256 mismatch"));
+    }
+
+    #[tokio::test]
+    async fn artifact_status_surfaces_upload_failed_artifact_sets() {
+        let state = test_state().await;
+
+        let status = artifact_status(
+            &state,
+            "artifact-lookup".to_owned(),
+            None,
+            Some(db::ArtifactSetRecord {
+                artifact_set_hash: "artifact-set".to_owned(),
+                source_hash: "sourcehash".to_owned(),
+                config_hash: "confighash".to_owned(),
+                options_hash: "optionshash".to_owned(),
+                request_hash: Some("requesthash".to_owned()),
+                raw_payload_hash: Some("rawhash".to_owned()),
+                postprocess_hash: Some("posthash".to_owned()),
+                output_kind: "preview_glb".to_owned(),
+                format: "glb".to_owned(),
+                status: "upload_failed".to_owned(),
+                primary_object_key: Some("previews/v2/artifact-set/preview.glb".to_owned()),
+                metadata_json: "{}".to_owned(),
+                created_at: "2026-01-01T00:00:00.000Z".to_owned(),
+                updated_at: "2026-01-01T00:00:01.000Z".to_owned(),
+                superseded_at: None,
+                superseded_by: None,
+                supersession_reason: None,
+            }),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status.status, "upload_failed");
+        assert!(status.message.contains("verification failed"));
+        assert_eq!(status.artifact_key, "artifact-set");
     }
 
     #[test]
