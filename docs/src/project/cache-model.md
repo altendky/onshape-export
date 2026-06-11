@@ -24,13 +24,42 @@ The main design goal is to keep every cache boundary explicit: selected source, 
 - Local post-processing changes should not require another Onshape export when the raw payload is retained.
 - Artifact sets must model primary files plus sidecars as one unit.
 - Preserve Onshape-provided filenames and ZIP entry names whenever available. Store roles in metadata instead of renaming raw files to fixed names like `source.zip`.
-- Public artifact objects are immutable in normal operation. Supersession updates indexes and manifests rather than overwriting existing public files.
+- Public artifact objects are immutable in normal operation. Supersession updates indexes and manifests rather than overwriting existing public files. Repair may restore intended bytes to an existing artifact-set object key when verification finds a missing, corrupt, or wrong object.
+
+## Initial v2 Slice
+
+The full model below remains the forward-looking cache contract. The first v2 implementation should be a clean cut from the current v1 cache: existing v1 SQLite records, object keys, public URLs, and manifests are disposable during the migration.
+
+Initial v2 scope:
+
+- Keep catalog entries version-based for operator usability, but resolve `versionId` to `microversionId` before computing cache identity.
+- Compute `sourceHash` from resolved `microversionId`, not from `versionId`; store the version-to-microversion mapping and resolution diagnostics in the database.
+- Support versioned Onshape sources only. Workspace/latest exports remain future work and must resolve to an immutable microversion before caching.
+- Defer linked-document context. Add `linkDocumentId` only if live API testing shows a catalog source needs it as an access/context escape hatch.
+- Use Onshape `configurationencodings` for every v2 export after local validation and typed canonicalization.
+- Use typed canonical values for supported parameter types. Unsupported parameter types must be represented explicitly or fail validation; they must not silently participate in `configHash`.
+- Store metadata in SQLite/server database first. Object storage holds private raw payload blobs and public artifact blobs.
+- Do not require object-store public manifests for the initial v2 public flow. Product pages and status routes read database state and return artifact URLs. Public/cacheable manifests can be derived later from database state.
+- Always retain every successful Onshape download as a private content-addressed raw payload before local processing.
+- Make schemas capable of representing multiple translation results, but initially fail clearly when a runtime export returns an unexpected multi-result shape.
+- Support only strict known preview input shapes at first: direct GLB, direct glTF JSON, ZIP with one GLB, or ZIP with one glTF viewer asset plus sidecars. Ambiguous or multi-scene ZIPs retain the raw payload and record a post-processing failure.
+- Use `requestHash` as the authoritative v2 export dedupe key. Current/v1 `workKey` terminology can remain for non-export jobs or historical docs.
+- Use DB-first diagnostics plus structured logs. Persist key success milestones and structured failure events with correlation IDs.
+- Use staged database records around object writes. Upload and verify objects outside database write transactions, then mark records ready in a short transaction.
+- Verify uploads before marking records ready. Use metadata verification for normal writes and full read-back SHA-256 verification for repairs, raw recovery, suspicious metadata, or configured strict modes.
+
+Repair policy for the initial slice:
+
+- If a raw payload object is missing or corrupt, try re-downloading from stored translation result IDs and verify the expected `rawPayloadHash`. If the bytes differ, store them as a new raw payload and record diagnostics.
+- If a public artifact file or sidecar is missing/corrupt but the raw payload exists, repair by re-running the same post-processing recipe and restoring the intended artifact-set object key.
+- Semantic changes create new artifact sets. Overwriting existing object keys is allowed only for repair of intended bytes, not for normal supersession.
+- Revisit repair and overwrite semantics before relying on v2 in production, including CDN behavior, concurrent repairs, partial uploads, and when corruption should supersede instead of repair.
 
 ## Cache Layers
 
 | Layer | Purpose | Key Inputs | Stored Outputs |
 | --- | --- | --- | --- |
-| Source identity | Identify the immutable Onshape element being exported. | `documentId`, `versionId` or resolved `microversionId`, `elementId`, `elementKind`, link-document context. | `sourceHash`, source metadata, resolved version/microversion diagnostics. |
+| Source identity | Identify the immutable Onshape element being exported. | `documentId`, resolved `microversionId`, `elementId`, `elementKind`, link-document context if later needed. | `sourceHash`, source metadata, resolved version/microversion diagnostics. |
 | Parameter metadata | Preserve and normalize Onshape configuration schema. | `sourceHash`, Onshape configuration response, local schema version. | Raw configuration JSON, normalized parameter schema, schema hash/version. |
 | Configuration selection | Identify validated parameter values. | `sourceHash`, normalized schema hash/version, typed canonical values after defaults and overrides. | `configHash`, canonical values, validation details. |
 | Configuration encoding | Cache Onshape's encoded configuration string. | `sourceHash`, `configHash`, encoding request body, `linkDocumentId`. | `encodedId`, `queryParam`, decoded parameters when available. |
@@ -51,11 +80,12 @@ The main design goal is to keep every cache boundary explicit: selected source, 
 For versioned sources, include:
 
 - `documentId`
-- `versionId`
+- resolved `microversionId`
 - `elementId`
 - `elementKind`
-- `linkDocumentId` when needed
-- resolved version `microversion` as stored metadata, not necessarily as part of the v1 hash
+- `linkDocumentId` when needed by future live API validation
+
+Catalog entries may continue to store `versionId`. v2 should resolve and persist a `documentId` + `versionId` to `microversionId` mapping before cache identity is computed. Store `versionId` and resolution diagnostics as metadata for traceability, but do not use `versionId` as the durable v2 source cache identity.
 
 For any future workspace source, resolve the mutable workspace to a current document microversion before caching exports. Onshape exposes `GET /documents/d/{did}/{wv}/{wvid}/currentmicroversion`, whose response includes `microversion`. Workspace exports should key by the resolved microversion, not by the mutable workspace ID alone.
 
@@ -352,6 +382,8 @@ For single-file STEP/STL/3MF outputs, the artifact set still has one primary fil
 
 The manifest is application state for a source/configuration group. It should point at artifact sets, not individual files.
 
+For the initial v2 implementation, this manifest state may live only in SQLite/server database records and be exposed through app status routes. Object-store manifests are a future materialization of the same state for public/cacheable distribution.
+
 Suggested manifest shape:
 
 ```json
@@ -386,7 +418,7 @@ Suggested manifest shape:
 }
 ```
 
-Manifests should materialize missing outputs, active outputs, and superseded outputs. SQLite or a future server database remains the coordination source of truth; object-store manifests are public/cacheable application state.
+Manifests should materialize missing outputs, active outputs, and superseded outputs. SQLite or a future server database remains the coordination source of truth. Object-store manifests are future public/cacheable materializations of that database state, not required for the initial v2 flow.
 
 ## Supersession
 
@@ -536,6 +568,8 @@ CREATE TABLE artifact_files (
 
 Keep raw payloads private or operational unless explicitly intended for public diagnostics.
 
+Initial v2 should store metadata in the database and use object storage for raw and public artifact blobs. The metadata object keys below are full-model/future suggestions for cases where database state is later materialized into object storage.
+
 ```text
 onshape/source/v1/{sourceHash}/configuration.raw.json
 onshape/source/v1/{sourceHash}/parameters.normalized/{parameterSchemaHash}.json
@@ -549,12 +583,14 @@ onshape/raw/v1/{rawPayloadHashPrefix}/{rawPayloadHash}/{storageSafeOriginalFilen
 onshape/raw/v1/{rawPayloadHashPrefix}/{rawPayloadHash}/payload.bin
 onshape/raw-index/v1/{requestHash}/{translationId}/{resultIndex}.json
 
-previews/v2/{sourceHash}/{configHash}/{requestHash}/{postprocessHash}/{artifactSetHash}/{logicalPath}
-artifacts/v2/{sourceHash}/{configHash}/{format}/{requestHash}/{artifactSetHash}/{filename}
+previews/v2/{artifactSetHash}/{logicalPath}
+artifacts/v2/{artifactSetHash}/{downloadFilename}
 manifests/v2/{groupId}.json
 ```
 
-`storageSafeOriginalFilename` is a sanitized storage path segment. The original filename remains in metadata. If no original filename exists, use `payload.bin` or another neutral fallback that is not part of cache identity.
+For initial v2, prefer the neutral content-addressed raw key shape ending in `payload.bin`. Store the original filename, filename source, content type, and response headers in database metadata instead of the raw object key.
+
+`downloadFilename` may be a sanitized cosmetic path segment. User-facing download names should be controlled with `Content-Disposition` and stored in database metadata. Individual artifact file SHA-256 values are stored separately for verification; they are not part of `artifactSetHash` in the initial v2 model.
 
 ## Live Experiments
 

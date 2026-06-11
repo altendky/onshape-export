@@ -7,7 +7,7 @@ The recommended MVP shape stays on Fly/Tigris:
 ```text
 Browser
   |
-  | public pages, cache checks, status, downloads, GLB preview
+  | public pages, cache checks, status, downloads, preview artifact set
   v
 Fly.io Rust axum app
   |\
@@ -60,8 +60,8 @@ Current Rust boundaries are still mostly in one crate and several responsibiliti
 2. The page loads normalized parameter metadata from repo data or Tigris.
 3. User changes parameter selections.
 4. The site computes or requests a deterministic configuration hash.
-5. The site calls a public app route to check whether a GLB preview exists for that configuration.
-6. If no preview exists, the user can request preview generation through the app route.
+5. The site calls a public app route to check whether a preview artifact set exists for that configuration.
+6. If no preview artifact set exists, the user can request preview generation through the app route.
 7. User chooses STEP, STL, or 3MF for final download.
 8. The app enqueues missing work through SQLite. A worker generates missing artifacts and stores them in Tigris.
 9. The UI polls status until preview or download artifacts are ready.
@@ -82,7 +82,7 @@ Implemented routes on this branch:
 | `GET` | `/` | Catalog landing page. |
 | `GET` | `/models/{slug}` | Model page with parameter controls. |
 | `POST` | `/models/{slug}` | Validate submitted parameters and render normalized values or errors. |
-| `POST` | `/models/{slug}/preview` | Validate submitted parameters and create or find a GLB preview job. |
+| `POST` | `/models/{slug}/preview` | Validate submitted parameters and create or find a preview job. |
 | `GET` | `/models/{slug}/preview/{config_hash}/status` | Poll preview status by server-computed hash. |
 | `POST` | `/models/{slug}/exports/{format}` | Validate submitted parameters and create or find a STEP, STL, or 3MF export job. |
 | `GET` | `/models/{slug}/exports/{format}/{config_hash}/status` | Poll download export status by server-computed hash. |
@@ -95,7 +95,7 @@ Planned route and response gaps from the updated main plan:
 - Ensure status checks and enqueue routes validate parameters through the same server path so status and job creation cannot disagree about `configHash`.
 - Add public-safe status fields such as `jobId`, `groupId`, `readyOutputs`, `retryAfterSeconds`, `errorCode`, and `userMessage`.
 - Add a stable job polling route such as `GET /jobs/{job_id}` only if product/UI polling needs an ID-based route.
-- Add `superseded` status handling once invalidation stops deleting artifacts.
+- Keep public status handling aligned with supersession-based invalidation; normal invalidation should supersede records rather than delete public artifacts.
 
 ## Operational Flow
 

@@ -80,6 +80,7 @@ Plan review TODOs that are not implemented yet:
 - Persist Onshape translation IDs and polling state for crash recovery.
 - Honor Onshape `Retry-After` once the client exposes it.
 - Materialize missing outputs, replacement pointers, and full supersession history in manifests.
+- Reconcile the current v1 cache implementation with the v2 cache model as a clean cut, following [Forward-Looking Cache Model](cache-model.md): do not merge v1 artifact records into v2 identity; resolve microversion source identity before hashing; dedupe export work by `requestHash`; retain private raw payloads before post-processing; create artifact sets from DB-first metadata; and keep public manifests deferred to DB/status-derived responses until a later explicit materialization feature.
 
 ## Phase 0: Documentation And Decisions
 
@@ -206,7 +207,7 @@ TODO gaps:
 - Confirm API-key permissions for linked-document assembly contexts.
 - Add sanitized Onshape fixtures for all target parameter types.
 - Preserve unsupported parameter types with `unsupportedReason`.
-- Decide when to use `configurationencodings` for canonical Onshape configuration strings.
+- Implement v2's always-use `configurationencodings` path after local typed canonicalization.
 
 ## Phase 6: GLB Preview Vertical Slice
 
@@ -272,6 +273,8 @@ TODO gaps:
 - Add cache reconciliation.
 - Decide whether to rename commands toward the target `validate-catalog`, `refresh-parameters`, `generate-preview`, `generate-export`, `jobs`, and `cache` shape.
 - Add dry-run behavior for expensive generation where needed.
+- For v2, make cache commands model/configuration/output first, with advanced hash selectors for `requestHash`, `rawPayloadHash`, and `artifactSetHash`.
+- Revisit repair and overwrite semantics before production use.
 
 ## Phase 9: Runtime Hardening
 

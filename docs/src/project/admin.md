@@ -58,10 +58,15 @@ The updated main plan expects several behaviors that are not implemented yet:
 
 - `jobs show <job-id>` and `jobs retry <job-id>` style job commands; current retry commands live under `failures retry` and use work keys or job kinds.
 - `cache reconcile` to repair SQLite/Tigris drift such as uploaded objects whose jobs were not marked ready.
+- v2 cache commands should be human-first by model/configuration/output, with advanced hash-based selectors such as `requestHash`, `rawPayloadHash`, and `artifactSetHash` for debugging and repair.
 - Retryability classes and public-safe error codes/messages.
 - Replacement pointers and supersession reasons for artifacts and manifests.
 - Catalog validation against live Onshape metadata for a no-cache `catalog validate` mode.
 - Content disposition in SQLite artifact metadata.
+
+Future v2 repair behavior should distinguish repair from semantic supersession. If raw payload bytes are missing or corrupt, try to re-download from stored translation result IDs before starting a new Onshape translation; this repair path is available only after translation result IDs and polling state are persisted. If public artifact files are missing or corrupt and the raw payload exists, repair by re-running the same post-processing recipe and restoring the intended artifact-set object keys. Intended bytes are bytes that match recorded metadata and hashes for the same raw payload, or a verifiable derivation from the same persisted translation result. Overwriting object keys should be allowed only for verified repair of intended bytes, not for normal cache invalidation or post-processing semantic changes that should create a superseding artifact set.
+
+Follow-up ticket: reconsider v2 repair and overwrite semantics before production use, including translation result ID persistence, intended-byte verification, raw payload repair, public artifact repair, DB/object drift, corrupt-but-public objects, missing sidecars, partial uploads, concurrent repair races, CDN behavior, and cases that should supersede instead of overwrite.
 
 ## Web Admin Deferral
 

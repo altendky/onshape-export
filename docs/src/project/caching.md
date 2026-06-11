@@ -10,7 +10,9 @@
 
 ## Current Branch Snapshot
 
-This page tracks the current cache implementation and near-term gaps. The target design for layered request, response, raw-payload, post-processing, artifact-set, and manifest identity is documented in [Forward-Looking Cache Model](cache-model.md).
+This page tracks the current v1 cache implementation and near-term gaps. The authoritative target design for layered request, response, raw-payload, post-processing, artifact-set, and manifest identity is documented in [Forward-Looking Cache Model](cache-model.md).
+
+The v2 cache implementation is expected to be a clean cut from this v1 cache. Existing v1 SQLite records, object keys, public URLs, and manifests may be discarded or ignored during the v2 migration.
 
 The branch has a working cache foundation and now implements the most important pieces of the newer main-branch target contract.
 
@@ -39,7 +41,7 @@ Remaining deviations from the updated plan:
 - Failure records are still stored as job summaries only. Stable public-safe error codes and user messages are not implemented.
 - Onshape translation IDs, poll state, and `Retry-After` values are not persisted for crash-resume yet.
 
-## Cache Tiers
+## Current v1 Cache Tiers
 
 | Cache | Keyed By | Purpose |
 | --- | --- | --- |
@@ -47,30 +49,30 @@ Remaining deviations from the updated plan:
 | Raw Onshape configuration | Source identity | Preserve original Onshape parameter response. |
 | Normalized parameter schema | Source identity and schema version | UI-ready form model. |
 | Configuration encoding | Source identity and config hash | Cached output of Onshape configuration encoding, if used. |
-| GLB preview | Source identity, config hash, preview options hash | Browser 3D preview. |
+| Preview artifact | Source identity, config hash, preview options hash | Browser 3D preview, usually GLB but sometimes direct glTF or a single glTF asset set. |
 | Download artifact | Source identity, config hash, format, export options hash | STEP, STL, and 3MF downloads. |
 | Manifest | Artifact group id | Application state for completed, missing, and superseded outputs. |
 | Job record | Deterministic work key | Status polling and strict deduplication in SQLite. |
 | Failure record | Job id or work key plus timestamp | Debugging and retry cooldown. Current branch stores only `jobs.error_summary`. |
 
-## Identity Model
+## Current v1 Identity Model
 
 Onshape IDs identify the immutable source, but not a generated output. Output identity must also include validated parameter values, export settings, and implementation versions that affect bytes.
 
-Target identifiers:
+Current v1 identifiers:
 
 | Identifier | Meaning | Inputs | Storage |
 | --- | --- | --- | --- |
 | `sourceIdentity` | Immutable Onshape source element. | `documentId`, `versionId`, `elementId`, `elementKind`, optional `linkDocumentId`. | Catalog, manifests, jobs, artifacts. |
 | `sourceHash` | Compact hash of `sourceIdentity`. | Canonical `sourceIdentity`. | Object keys, manifests, jobs. |
 | `configHash` | Validated selected configuration. | `sourceIdentity`, normalized parameter schema version, canonical parameter values, canonicalization version. | Routes, manifests, jobs, artifacts. |
-| `optionsHash` | Preview or export options. | Format, format-specific options, exporter version. | Object keys, manifests, jobs, artifacts. |
+| `optionsHash` | Preview or export options. | Format and format-specific logical options. | Object keys, manifests, jobs, artifacts. |
 | `groupId` | One selected source/configuration group. | `sourceHash`, `configHash`. | Manifest key, status responses. |
-| `workKey` | One deduplicated unit of work. | Job kind plus source/config/options identity. | Unique SQLite index. |
-| `artifactId` | One immutable produced artifact. | Source/config/options identity plus content hash or deterministic output identity. | Artifact records, object keys. |
+| `workKey` | One deduplicated v1 unit of work. | Job kind plus source/config/options identity. | Unique SQLite index. |
+| `artifactId` | One immutable v1 produced artifact. | Source/config/options identity plus content hash or deterministic output identity. | Artifact records, object keys. |
 | `manifestId` | Manifest for a selected source/configuration group. | Usually `groupId`. | Tigris manifest object and SQLite artifact index. |
 
-Target hashing rules:
+Current and target-compatible hashing rules:
 
 - Use SHA-256 encoded as lowercase hex.
 - Do not truncate hashes in the MVP.
@@ -81,7 +83,7 @@ Target hashing rules:
 - Include units where they affect the Onshape configuration string.
 - Do not rely on `slug` for immutable identity. Slugs are useful for URLs and display, but source IDs and hashes own uniqueness.
 
-TODO: continue hardening parameter canonicalization with typed values, unit normalization, and Onshape configuration encodings if hand-built configuration strings prove insufficient.
+TODO: v2 moves export deduplication from `workKey` to `requestHash`, uses resolved microversion source identity, always uses Onshape configuration encodings after typed local canonicalization, and adds `rawPayloadHash`, `postprocessHash`, and `artifactSetHash` layers. See [Forward-Looking Cache Model](cache-model.md).
 
 ## Object Storage Layout
 
@@ -129,7 +131,7 @@ artifacts/v1/{source_hash}/{config_hash}/3mf/{options_hash}/{artifact_id}.3mf
 manifests/v1/{group_id}.json
 ```
 
-The `groupId` represents one selected source/configuration. It links a GLB preview and any generated STEP, STL, or 3MF outputs for that configuration.
+The `groupId` represents one selected source/configuration. In v1 it links a preview artifact and any generated STEP, STL, or 3MF outputs for that configuration.
 
 Completed public artifacts under `previews/` and `artifacts/` are served directly through stable Tigris URLs. Internal operational objects should stay out of public prefixes, and object listing should not be exposed. Job and failure state lives primarily in SQLite; detailed failure payloads may also be stored in private Tigris prefixes if they are too large for SQLite summaries.
 
@@ -137,11 +139,11 @@ Public artifacts are immutable in normal operation. Cache invalidation means wri
 
 ## Data Contracts
 
-The exact Rust types can evolve during implementation, but the MVP should preserve these logical contracts.
+The exact Rust types can evolve during implementation. The examples below describe the current/v1 contract and near-term gaps; v2 target schemas live in [Forward-Looking Cache Model](cache-model.md).
 
 ### Normalized Parameter Metadata
 
-Target shape:
+Current v1 direction:
 
 ```json
 {
@@ -175,7 +177,7 @@ Current branch gap: normalized metadata uses the implemented `ParameterSchema` s
 
 ### Canonical Configuration Payload
 
-Target shape:
+Current v1 direction:
 
 ```json
 {
@@ -194,9 +196,9 @@ Current branch status: server-side validation, RFC 8785 canonicalization, and sp
 
 ### Manifest
 
-A completed configuration should have a manifest that points to every generated output.
+A completed v1 configuration should have a manifest that points to every generated output.
 
-Target shape:
+Current v1 shape:
 
 ```json
 {
@@ -215,7 +217,7 @@ Target shape:
     "values": {}
   },
   "outputs": {
-    "previewGlb": {
+    "preview": {
       "objectKey": "previews/.../preview.glb",
       "publicUrl": "https://...",
       "status": "ready",
@@ -247,13 +249,13 @@ Target shape:
 }
 ```
 
-The manifest is application state. Tigris object metadata is useful but should not be the only source of truth.
+The manifest is application state. Tigris object metadata is useful but should not be the only source of truth. In v2, initial public flow is expected to be database/status-route driven, with object-store manifests deferred as a future materialization of database state.
 
 Current branch status: manifests are materialized at `manifests/v1/{group_id}.json` from active SQLite artifact records. Ready outputs include schema version, output status, public URL, SHA-256, producing job key, source/options hashes, stored configuration values, and byte length. They do not yet materialize missing outputs, replacement pointers, full supersession history, or content disposition.
 
 ### Artifact Records
 
-Target ready artifact metadata:
+Current v1 ready artifact metadata:
 
 ```json
 {
@@ -278,7 +280,7 @@ Target ready artifact metadata:
 }
 ```
 
-Current branch status: SQLite artifact records include `artifact_key`, `model_slug`, `config_hash`, `output_kind`, `status`, `object_key`, `content_type`, `byte_len`, `sha256`, `producing_job_key`, `source_hash`, `options_hash`, `parameter_schema_version`, `config_values_json`, `created_at`, and `superseded_at`. Replacement pointers and supersession reasons are not yet stored.
+Current branch status: SQLite artifact records include `artifact_key`, `model_slug`, `config_hash`, `output_kind`, `status`, `object_key`, `content_type`, `byte_len`, `sha256`, `producing_job_key`, `source_hash`, `options_hash`, `parameter_schema_version`, `config_values_json`, `created_at`, and `superseded_at`. Replacement pointers and supersession reasons are not yet stored. v2 replaces single artifact records with artifact sets and artifact files.
 
 ## Artifact Write Ordering
 
@@ -306,9 +308,9 @@ Current branch status: `artifacts invalidate` and `artifacts prune` mark ready a
 
 ## Job Records
 
-SQLite job records are the coordination source of truth.
+SQLite job records are the current v1 coordination source of truth.
 
-Target shape:
+Current v1 planned shape:
 
 ```json
 {
@@ -336,7 +338,7 @@ Target shape:
 }
 ```
 
-Target job kinds:
+Planned job kinds:
 
 - `parameter_refresh`
 - `configuration_encoding`
@@ -349,7 +351,7 @@ Current branch job kinds:
 - `preview_export`
 - `download_export`
 
-Target states:
+Planned states:
 
 - `queued`
 - `running`
@@ -367,7 +369,7 @@ Current branch states:
 
 Expired leases are reclaimed by selecting `running` jobs whose `lease_until` timestamp has passed; `expired` is not a stored state.
 
-Target transitions:
+Planned transitions:
 
 - `queued -> running` when a worker claims the job lease.
 - `running -> ready` after artifacts, manifests, and artifact index records are written.
@@ -380,13 +382,13 @@ Validation should happen before enqueue, so terminal validation failures that ar
 
 Use a unique constraint on the deterministic `workKey` so only one job exists for each parameter refresh or export. Workers must claim jobs in short SQLite transactions and must not hold write transactions while calling Onshape.
 
-Store Onshape translation IDs and polling state in the job row so a restarted worker can resume polling instead of starting duplicate translations.
+Current v1 docs planned to store Onshape translation IDs and polling state in the job row so a restarted worker can resume polling instead of starting duplicate translations. In v2, `requestHash` deduplicates exact export requests, `translationId` records one Onshape attempt, and `runId` records one local worker execution.
 
 Current branch gap: Onshape export calls run as one worker operation after claiming a job, but translation IDs and polling state are not persisted separately for crash recovery.
 
 ## Failure Records
 
-Target shape:
+Current planned shape:
 
 ```json
 {
