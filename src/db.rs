@@ -907,6 +907,31 @@ impl Database {
         Ok(result.rows_affected() == 1)
     }
 
+    pub async fn raw_payload_hash_for_source(
+        &self,
+        request_hash: &str,
+        translation_id: Option<&str>,
+        external_data_id: Option<&str>,
+        result_index: Option<i64>,
+    ) -> sqlx::Result<Option<String>> {
+        sqlx::query_scalar(
+            r#"
+            SELECT raw_payload_hash
+            FROM raw_payload_sources
+            WHERE request_hash = ?
+              AND ifnull(translation_id, '') = ifnull(?, '')
+              AND ifnull(external_data_id, '') = ifnull(?, '')
+              AND ifnull(result_index, -1) = ifnull(?, -1)
+            "#,
+        )
+        .bind(request_hash)
+        .bind(translation_id)
+        .bind(external_data_id)
+        .bind(result_index)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
     pub async fn postprocess_run(
         &self,
         postprocess_hash: &str,
@@ -2475,6 +2500,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn raw_payload_insert_dedupes_by_hash() {
+        let db = test_database().await;
+
+        assert!(
+            db.insert_raw_payload_if_absent(RawPayloadInsert {
+                raw_payload_hash: "rawhash",
+                object_key: "onshape/raw/v1/ra/rawhash/payload.bin",
+                content_type: Some("application/octet-stream"),
+                byte_len: 4,
+                headers_json: "{}",
+                original_filename: None,
+                filename_source: None,
+                detected_kind: "binary",
+                zip_manifest_json: None,
+            })
+            .await
+            .unwrap()
+        );
+
+        assert!(
+            !db.insert_raw_payload_if_absent(RawPayloadInsert {
+                raw_payload_hash: "rawhash",
+                object_key: "onshape/raw/v1/ra/rawhash/payload.bin",
+                content_type: Some("application/octet-stream"),
+                byte_len: 4,
+                headers_json: "{}",
+                original_filename: None,
+                filename_source: None,
+                detected_kind: "binary",
+                zip_manifest_json: None,
+            })
+            .await
+            .unwrap()
+        );
+
+        assert_eq!(
+            db.raw_payload("rawhash")
+                .await
+                .unwrap()
+                .unwrap()
+                .raw_payload_hash,
+            "rawhash"
+        );
+    }
+
+    #[tokio::test]
     async fn translation_raw_payload_and_artifact_set_round_trip() {
         let db = test_database().await;
 
@@ -2529,6 +2600,13 @@ mod tests {
             })
             .await
             .unwrap()
+        );
+        assert_eq!(
+            db.raw_payload_hash_for_source("requesthash", Some("tid"), Some("fid"), Some(0))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("rawhash")
         );
 
         assert!(

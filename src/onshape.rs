@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
@@ -84,6 +84,16 @@ pub struct PolledTranslation {
     pub result_element_ids: Vec<String>,
     pub response_hash: String,
     pub failure_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadedExternalData {
+    pub bytes: Vec<u8>,
+    pub content_type: Option<String>,
+    pub response_headers_json: String,
+    pub original_filename: Option<String>,
+    pub filename_source: Option<String>,
+    pub etag: Option<String>,
 }
 
 impl PolledTranslation {
@@ -345,8 +355,10 @@ impl OnshapeClient {
                 .unwrap_or(&polled.final_response_json)
         );
         let external_data_id = polled.single_external_data_id()?;
-        self.download_external_data(request.document_id()?, &external_data_id)
-            .await
+        Ok(self
+            .download_external_data(request.document_id()?, &external_data_id)
+            .await?
+            .bytes)
     }
 
     fn build_step_export_request(
@@ -498,7 +510,7 @@ impl OnshapeClient {
         &self,
         document_id: &str,
         external_data_id: &str,
-    ) -> anyhow::Result<Vec<u8>> {
+    ) -> anyhow::Result<DownloadedExternalData> {
         let path = format!(
             "/api/documents/d/{}/externaldata/{}",
             document_id, external_data_id
@@ -509,9 +521,28 @@ impl OnshapeClient {
         let mut headers =
             self.signed_json_headers(Method::GET, url.path(), url.query().unwrap_or_default())?;
         headers.insert(header::ACCEPT, HeaderValue::from_static("*/*"));
-        let response = self.client.get(url).headers(headers).send().await?;
-        let bytes = onshape_response(response).await?.bytes().await?;
-        Ok(bytes.to_vec())
+        let response =
+            onshape_response(self.client.get(url).headers(headers).send().await?).await?;
+        let response_headers = response.headers().clone();
+        let content_type = response_headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let etag = response_headers
+            .get(header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let (original_filename, filename_source) = download_filename(&response_headers);
+        let response_headers_json = header_map_json(&response_headers)?;
+        let bytes = response.bytes().await?;
+        Ok(DownloadedExternalData {
+            bytes: bytes.to_vec(),
+            content_type,
+            response_headers_json,
+            original_filename,
+            filename_source,
+            etag,
+        })
     }
 
     fn signed_json_headers(
@@ -655,6 +686,163 @@ fn first_string(value: &Value, names: &[&str]) -> Option<String> {
         .iter()
         .filter_map(|name| object.get(*name))
         .find_map(|value| value.as_str().map(ToOwned::to_owned))
+}
+
+fn header_map_json(headers: &HeaderMap) -> anyhow::Result<String> {
+    let mut names = BTreeSet::new();
+    for name in headers.keys() {
+        names.insert(name.as_str().to_owned());
+    }
+
+    let mut json = BTreeMap::<String, Vec<String>>::new();
+    for name in names {
+        let values = headers
+            .get_all(name.as_str())
+            .iter()
+            .filter_map(|value| value.to_str().ok().map(str::to_owned))
+            .collect::<Vec<_>>();
+        json.insert(name, values);
+    }
+
+    Ok(serde_json::to_string(&json)?)
+}
+
+fn download_filename(headers: &HeaderMap) -> (Option<String>, Option<String>) {
+    let Some(value) = headers.get(header::CONTENT_DISPOSITION) else {
+        return (None, None);
+    };
+    let Ok(value) = value.to_str() else {
+        return (None, None);
+    };
+
+    if let Some(filename) = content_disposition_filename_star(value) {
+        return (
+            Some(filename),
+            Some("content-disposition-filename*".to_owned()),
+        );
+    }
+    if let Some(filename) = content_disposition_filename(value) {
+        return (Some(filename), Some("content-disposition".to_owned()));
+    }
+
+    (None, None)
+}
+
+fn content_disposition_filename(value: &str) -> Option<String> {
+    content_disposition_parameters(value)
+        .into_iter()
+        .find_map(|(name, value)| {
+            (name.eq_ignore_ascii_case("filename") && !value.is_empty()).then_some(value)
+        })
+}
+
+fn content_disposition_filename_star(value: &str) -> Option<String> {
+    let encoded = content_disposition_parameters(value)
+        .into_iter()
+        .find_map(|(name, value)| {
+            (name.eq_ignore_ascii_case("filename*") && !value.is_empty()).then_some(value)
+        })?;
+    decode_rfc8187_filename(&encoded)
+}
+
+fn content_disposition_parameters(value: &str) -> Vec<(String, String)> {
+    split_header_parameters(value)
+        .into_iter()
+        .skip(1)
+        .filter_map(|part| {
+            let (name, value) = part.trim().split_once('=')?;
+            Some((name.trim().to_owned(), unquote_header_value(value.trim())))
+        })
+        .collect()
+}
+
+fn split_header_parameters(value: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    let mut escaped = false;
+
+    for ch in value.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if quoted => {
+                current.push(ch);
+                escaped = true;
+            }
+            '"' => {
+                quoted = !quoted;
+                current.push(ch);
+            }
+            ';' if !quoted => {
+                parts.push(current.trim().to_owned());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    parts.push(current.trim().to_owned());
+    parts
+}
+
+fn unquote_header_value(value: &str) -> String {
+    if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+        let mut unescaped = String::with_capacity(value.len() - 2);
+        let mut escaped = false;
+        for ch in value[1..value.len() - 1].chars() {
+            if escaped {
+                unescaped.push(ch);
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else {
+                unescaped.push(ch);
+            }
+        }
+        unescaped
+    } else {
+        value.to_owned()
+    }
+}
+
+fn decode_rfc8187_filename(value: &str) -> Option<String> {
+    let (_, rest) = value.split_once("''")?;
+    percent_decode(rest)
+}
+
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                let high = hex_nibble(bytes[index + 1])?;
+                let low = hex_nibble(bytes[index + 2])?;
+                decoded.push((high << 4) | low);
+                index += 3;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn first_array_string(value: &Value, name: &str) -> Option<String> {
@@ -1006,5 +1194,69 @@ mod tests {
         .unwrap();
 
         assert_eq!(parsed.failure_reason.as_deref(), Some("bad geometry"));
+    }
+
+    #[test]
+    fn extracts_download_filename_from_content_disposition() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_static("attachment; filename=\"model.step\""),
+        );
+
+        assert_eq!(
+            download_filename(&headers),
+            (
+                Some("model.step".to_owned()),
+                Some("content-disposition".to_owned())
+            )
+        );
+    }
+
+    #[test]
+    fn prefers_rfc8187_download_filename() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_static(
+                "attachment; filename=\"fallback.zip\"; filename*=UTF-8''model%20space.zip",
+            ),
+        );
+
+        assert_eq!(
+            download_filename(&headers),
+            (
+                Some("model space.zip".to_owned()),
+                Some("content-disposition-filename*".to_owned())
+            )
+        );
+    }
+
+    #[test]
+    fn serializes_response_headers_for_diagnostics() {
+        let mut headers = HeaderMap::new();
+        headers.append("x-test", HeaderValue::from_static("first"));
+        headers.append("x-test", HeaderValue::from_static("second"));
+
+        let json = header_map_json(&headers).unwrap();
+
+        assert_eq!(json, r#"{"x-test":["first","second"]}"#);
+    }
+
+    #[test]
+    fn preserves_quoted_semicolons_in_download_filename() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_static("attachment; filename=\"part;a.step\""),
+        );
+
+        assert_eq!(
+            download_filename(&headers),
+            (
+                Some("part;a.step".to_owned()),
+                Some("content-disposition".to_owned())
+            )
+        );
     }
 }

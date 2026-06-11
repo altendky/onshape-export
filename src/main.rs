@@ -37,8 +37,8 @@ use crate::{
     catalog::Catalog,
     config::Config,
     db::{
-        ArtifactUpsert, Database, ExportRequestInsert, TranslationFinalUpdate,
-        TranslationStartInsert,
+        ArtifactUpsert, Database, ExportRequestInsert, RawPayloadInsert, RawPayloadSourceInsert,
+        TranslationFinalUpdate, TranslationStartInsert,
     },
     onshape::OnshapeClient,
     storage::StorageClient,
@@ -229,6 +229,19 @@ struct PreparedExportRequest {
     options_hash: String,
     request_hash: String,
     request: onshape::CanonicalExportRequest,
+}
+
+#[derive(Debug)]
+struct PersistedRawPayload {
+    raw_payload_hash: String,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RawZipEntry {
+    path: String,
+    byte_len: u64,
 }
 
 #[tokio::main]
@@ -2368,13 +2381,13 @@ async fn execute_staged_export_request(
     state: &AppState,
     request_hash: &str,
     request: &onshape::CanonicalExportRequest,
-) -> anyhow::Result<Vec<u8>> {
+) -> anyhow::Result<PersistedRawPayload> {
     if let Some(translation) = state
         .db
         .latest_completed_translation_for_request(request_hash)
         .await?
     {
-        return download_translation_result(state, request, &translation).await;
+        return download_translation_result(state, request_hash, request, &translation).await;
     }
 
     if let Some(translation) = state
@@ -2414,10 +2427,19 @@ async fn execute_staged_export_request(
                 .as_deref()
                 .unwrap_or(&polled.final_response_json)
         );
-        return state
+        let external_data_id = polled.single_external_data_id()?.to_owned();
+        let downloaded = state
             .onshape
-            .download_external_data(request.document_id()?, polled.single_external_data_id()?)
-            .await;
+            .download_external_data(request.document_id()?, &external_data_id)
+            .await?;
+        return persist_downloaded_raw_payload(
+            state,
+            request_hash,
+            &translation.translation_id,
+            &external_data_id,
+            downloaded,
+        )
+        .await;
     }
 
     start_and_download_translation(state, request_hash, request).await
@@ -2427,7 +2449,7 @@ async fn start_and_download_translation(
     state: &AppState,
     request_hash: &str,
     request: &onshape::CanonicalExportRequest,
-) -> anyhow::Result<Vec<u8>> {
+) -> anyhow::Result<PersistedRawPayload> {
     let started = state.onshape.start_export_request(request).await?;
     state
         .db
@@ -2467,17 +2489,27 @@ async fn start_and_download_translation(
             .as_deref()
             .unwrap_or(&polled.final_response_json)
     );
-    state
+    let external_data_id = polled.single_external_data_id()?.to_owned();
+    let downloaded = state
         .onshape
-        .download_external_data(request.document_id()?, polled.single_external_data_id()?)
-        .await
+        .download_external_data(request.document_id()?, &external_data_id)
+        .await?;
+    persist_downloaded_raw_payload(
+        state,
+        request_hash,
+        &started.translation_id,
+        &external_data_id,
+        downloaded,
+    )
+    .await
 }
 
 async fn download_translation_result(
     state: &AppState,
+    request_hash: &str,
     request: &onshape::CanonicalExportRequest,
     translation: &db::TranslationRecord,
-) -> anyhow::Result<Vec<u8>> {
+) -> anyhow::Result<PersistedRawPayload> {
     anyhow::ensure!(
         translation.state == "DONE",
         "persisted Onshape translation {} is not resumable: {}{}",
@@ -2490,10 +2522,18 @@ async fn download_translation_result(
             .unwrap_or_default()
     );
     let external_data_id = persisted_result_external_data_id(translation)?;
-    state
+    let downloaded = state
         .onshape
         .download_external_data(request.document_id()?, &external_data_id)
-        .await
+        .await?;
+    persist_downloaded_raw_payload(
+        state,
+        request_hash,
+        &translation.translation_id,
+        &external_data_id,
+        downloaded,
+    )
+    .await
 }
 
 fn persisted_result_external_data_id(
@@ -2523,6 +2563,123 @@ fn parse_json_string_vec(json: &str) -> anyhow::Result<Vec<String>> {
     Ok(serde_json::from_str(json)?)
 }
 
+async fn persist_downloaded_raw_payload(
+    state: &AppState,
+    request_hash: &str,
+    translation_id: &str,
+    external_data_id: &str,
+    downloaded: onshape::DownloadedExternalData,
+) -> anyhow::Result<PersistedRawPayload> {
+    let raw_payload_hash = cache_key::hex_sha256(&downloaded.bytes);
+    let object_key = raw_payload_object_key(&raw_payload_hash);
+    state
+        .storage
+        .put_bytes(
+            &object_key,
+            downloaded.bytes.clone(),
+            downloaded
+                .content_type
+                .as_deref()
+                .unwrap_or("application/octet-stream"),
+        )
+        .await?;
+    let detected_kind = detect_raw_payload_kind(&downloaded.bytes);
+    let zip_manifest_json = zip_inventory_json(&downloaded.bytes);
+    state
+        .db
+        .insert_raw_payload_if_absent(RawPayloadInsert {
+            raw_payload_hash: &raw_payload_hash,
+            object_key: &object_key,
+            content_type: downloaded.content_type.as_deref(),
+            byte_len: downloaded.bytes.len() as i64,
+            headers_json: &downloaded.response_headers_json,
+            original_filename: downloaded.original_filename.as_deref(),
+            filename_source: downloaded.filename_source.as_deref(),
+            detected_kind,
+            zip_manifest_json: zip_manifest_json
+                .as_ref()
+                .ok()
+                .and_then(|json| json.as_deref()),
+        })
+        .await?;
+    let linked = state
+        .db
+        .link_raw_payload_source(RawPayloadSourceInsert {
+            request_hash,
+            translation_id: Some(translation_id),
+            external_data_id: Some(external_data_id),
+            result_index: Some(0),
+            response_headers_json: &downloaded.response_headers_json,
+            etag: downloaded.etag.as_deref(),
+            raw_payload_hash: &raw_payload_hash,
+        })
+        .await?;
+    if !linked {
+        let existing = state
+            .db
+            .raw_payload_hash_for_source(
+                request_hash,
+                Some(translation_id),
+                Some(external_data_id),
+                Some(0),
+            )
+            .await?;
+        anyhow::ensure!(
+            existing.as_deref() == Some(raw_payload_hash.as_str()),
+            "raw payload source mapping already exists with a different payload hash"
+        );
+    }
+    if let Err(error) = zip_manifest_json {
+        return Err(error).context("inspecting raw payload ZIP inventory");
+    }
+    Ok(PersistedRawPayload {
+        raw_payload_hash,
+        bytes: downloaded.bytes,
+    })
+}
+
+fn raw_payload_object_key(raw_payload_hash: &str) -> String {
+    let prefix_len = raw_payload_hash.len().min(2);
+    format!(
+        "onshape/raw/v1/{}/{}/payload.bin",
+        &raw_payload_hash[..prefix_len],
+        raw_payload_hash
+    )
+}
+
+fn detect_raw_payload_kind(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(b"PK\x03\x04") {
+        "zip"
+    } else if bytes.starts_with(b"glTF") {
+        "glb"
+    } else if validate_gltf_json(bytes).is_ok() {
+        "gltf_json"
+    } else {
+        "binary"
+    }
+}
+
+fn zip_inventory_json(bytes: &[u8]) -> anyhow::Result<Option<String>> {
+    if !bytes.starts_with(b"PK\x03\x04") {
+        return Ok(None);
+    }
+
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes.to_vec()))?;
+    let mut entries = Vec::new();
+    for index in 0..archive.len() {
+        let file = archive.by_index(index)?;
+        if file.is_dir() {
+            continue;
+        }
+        entries.push(RawZipEntry {
+            path: safe_zip_asset_name(file.name())?,
+            byte_len: file.size(),
+        });
+    }
+
+    Ok(Some(serde_json::to_string(&entries)?))
+}
+
 async fn refresh_preview(
     state: &AppState,
     model: &catalog::Model,
@@ -2540,10 +2697,10 @@ async fn refresh_preview(
             "queued preview request hash no longer matches the canonical export request"
         );
     }
-    let bytes =
+    let raw_payload =
         execute_staged_export_request(state, &prepared.request_hash, &prepared.request).await?;
     let preview_artifact =
-        preview_artifact_from_onshape_bytes(source_hash, model, config_hash, bytes)?;
+        preview_artifact_from_onshape_bytes(source_hash, model, config_hash, raw_payload.bytes)?;
     let sha256 = cache_key::hex_sha256(&preview_artifact.bytes);
     let config_values_json = config_values_json(values)?;
     state
@@ -2578,7 +2735,7 @@ async fn refresh_preview(
             config_values_json: &config_values_json,
         })
         .await?;
-    tracing::debug!(request_hash = %prepared.request_hash, %artifact_key, "staged preview export request");
+    tracing::debug!(request_hash = %prepared.request_hash, raw_payload_hash = %raw_payload.raw_payload_hash, %artifact_key, "staged preview export request");
     rewrite_manifest(state, model, config_hash, Some(values)).await?;
     Ok(preview_artifact.object_key)
 }
@@ -2825,18 +2982,18 @@ async fn refresh_download(
             "queued download request hash no longer matches the canonical export request"
         );
     }
-    let bytes =
+    let raw_payload =
         execute_staged_export_request(state, &prepared.request_hash, &prepared.request).await?;
     let object_key = download_object_key(source_hash, model, config_hash, format);
     let filename = download_filename(model, format);
     let content_disposition = format!("attachment; filename=\"{filename}\"");
-    let sha256 = cache_key::hex_sha256(&bytes);
+    let sha256 = cache_key::hex_sha256(&raw_payload.bytes);
     let config_values_json = config_values_json(values)?;
     state
         .storage
         .put_bytes_with_headers(
             &object_key,
-            bytes.clone(),
+            raw_payload.bytes.clone(),
             format.content_type(),
             Some(&content_disposition),
             Some("public, max-age=31536000, immutable"),
@@ -2851,7 +3008,7 @@ async fn refresh_download(
             output_kind: format.slug(),
             object_key: &object_key,
             content_type: format.content_type(),
-            byte_len: bytes.len() as i64,
+            byte_len: raw_payload.bytes.len() as i64,
             sha256: &sha256,
             producing_job_key,
             source_hash,
@@ -2860,7 +3017,7 @@ async fn refresh_download(
             config_values_json: &config_values_json,
         })
         .await?;
-    tracing::debug!(request_hash = %prepared.request_hash, %artifact_key, "staged download export request");
+    tracing::debug!(request_hash = %prepared.request_hash, raw_payload_hash = %raw_payload.raw_payload_hash, %artifact_key, "staged download export request");
     rewrite_manifest(state, model, config_hash, Some(values)).await?;
     Ok(object_key)
 }
@@ -4517,6 +4674,41 @@ mod tests {
             preview_artifact_from_onshape_bytes(&source_hash, &model, "abc", bytes).unwrap_err();
 
         assert!(error.to_string().contains("validating zipped GLB"));
+    }
+
+    #[test]
+    fn raw_payload_hash_matches_exact_download_bytes() {
+        let first = cache_key::hex_sha256(b"abc");
+        let second = cache_key::hex_sha256(b"abcd");
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn raw_payload_object_key_is_content_addressed() {
+        assert_eq!(
+            raw_payload_object_key("abcdef"),
+            "onshape/raw/v1/ab/abcdef/payload.bin"
+        );
+    }
+
+    #[test]
+    fn zip_inventory_records_safe_entries() {
+        let json = zip_inventory_json(&test_zip(&[("scene.gltf", b"{}"), ("scene.bin", b"1234")]))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            json,
+            r#"[{"path":"scene.gltf","byteLen":2},{"path":"scene.bin","byteLen":4}]"#
+        );
+    }
+
+    #[test]
+    fn zip_inventory_rejects_unsafe_paths() {
+        let error = zip_inventory_json(&test_zip(&[("../scene.bin", b"1234")])).unwrap_err();
+
+        assert!(error.to_string().contains("not safe"));
     }
 
     #[test]
