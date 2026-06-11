@@ -737,6 +737,48 @@ impl Database {
         .map(|row| row.map(translation_record_from_row))
     }
 
+    pub async fn latest_translation_for_request(
+        &self,
+        request_hash: &str,
+    ) -> sqlx::Result<Option<TranslationRecord>> {
+        sqlx::query(
+            r#"
+            SELECT translation_id, request_hash, state, start_response_json, final_response_json,
+                   poll_state_json, result_external_data_ids_json, result_element_ids_json,
+                   response_hash, failure_reason, created_at, updated_at
+            FROM translations
+            WHERE request_hash = ?
+            ORDER BY updated_at DESC, created_at DESC, translation_id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(request_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(translation_record_from_row))
+    }
+
+    pub async fn latest_completed_translation_for_request(
+        &self,
+        request_hash: &str,
+    ) -> sqlx::Result<Option<TranslationRecord>> {
+        sqlx::query(
+            r#"
+            SELECT translation_id, request_hash, state, start_response_json, final_response_json,
+                   poll_state_json, result_external_data_ids_json, result_element_ids_json,
+                   response_hash, failure_reason, created_at, updated_at
+            FROM translations
+            WHERE request_hash = ? AND state = 'DONE' AND final_response_json IS NOT NULL
+            ORDER BY updated_at DESC, created_at DESC, translation_id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(request_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(translation_record_from_row))
+    }
+
     pub async fn insert_translation_start(
         &self,
         translation: TranslationStartInsert<'_>,
@@ -2557,6 +2599,84 @@ mod tests {
         let error = db.backup_to_path(&backup_path).await.unwrap_err();
 
         assert!(error.to_string().contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn latest_translation_for_request_prefers_most_recent_record() {
+        let db = test_database().await;
+
+        db.insert_translation_start(TranslationStartInsert {
+            translation_id: "older",
+            request_hash: "requesthash",
+            state: "ACTIVE",
+            start_response_json: r#"{"id":"older"}"#,
+        })
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE translations SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day') WHERE translation_id = 'older'",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        db.insert_translation_start(TranslationStartInsert {
+            translation_id: "newer",
+            request_hash: "requesthash",
+            state: "ACTIVE",
+            start_response_json: r#"{"id":"newer"}"#,
+        })
+        .await
+        .unwrap();
+
+        let record = db
+            .latest_translation_for_request("requesthash")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.translation_id, "newer");
+    }
+
+    #[tokio::test]
+    async fn latest_completed_translation_for_request_prefers_done_record() {
+        let db = test_database().await;
+
+        db.insert_translation_start(TranslationStartInsert {
+            translation_id: "done",
+            request_hash: "requesthash",
+            state: "ACTIVE",
+            start_response_json: r#"{"id":"done"}"#,
+        })
+        .await
+        .unwrap();
+        db.update_translation_final(TranslationFinalUpdate {
+            translation_id: "done",
+            state: "DONE",
+            final_response_json: r#"{"requestState":"DONE"}"#,
+            poll_state_json: r#"{"requestState":"DONE"}"#,
+            result_external_data_ids_json: r#"["fid"]"#,
+            result_element_ids_json: "[]",
+            response_hash: Some("responsehash"),
+            failure_reason: None,
+        })
+        .await
+        .unwrap();
+
+        db.insert_translation_start(TranslationStartInsert {
+            translation_id: "active",
+            request_hash: "requesthash",
+            state: "ACTIVE",
+            start_response_json: r#"{"id":"active"}"#,
+        })
+        .await
+        .unwrap();
+
+        let record = db
+            .latest_completed_translation_for_request("requesthash")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.translation_id, "done");
     }
 
     async fn test_database() -> Database {

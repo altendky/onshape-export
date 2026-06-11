@@ -11,6 +11,7 @@ use reqwest::Url;
 use serde_json::{Value, json};
 use sha2::Sha256;
 
+use crate::cache_key;
 use crate::config::OnshapeConfig;
 use crate::{
     cache_model::{EncodedConfigurationIdentity, RequestIdentity, ResolvedOnshapeSourceIdentity},
@@ -58,12 +59,43 @@ impl CanonicalExportRequest {
         Ok(serde_json::to_string(&self.identity)?)
     }
 
-    fn document_id(&self) -> anyhow::Result<&str> {
+    pub fn document_id(&self) -> anyhow::Result<&str> {
         self.identity
             .path_params
             .get("did")
             .map(String::as_str)
             .ok_or_else(|| anyhow::anyhow!("canonical export request did not include document id"))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartedTranslation {
+    pub translation_id: String,
+    pub state: String,
+    pub response_json: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolledTranslation {
+    pub state: String,
+    pub final_response_json: String,
+    pub poll_state_json: String,
+    pub result_external_data_ids: Vec<String>,
+    pub result_element_ids: Vec<String>,
+    pub response_hash: String,
+    pub failure_reason: Option<String>,
+}
+
+impl PolledTranslation {
+    pub fn single_external_data_id(&self) -> anyhow::Result<&str> {
+        match self.result_external_data_ids.as_slice() {
+            [external_data_id] => Ok(external_data_id),
+            [] => anyhow::bail!("Onshape translation completed without external data"),
+            _ => anyhow::bail!(
+                "Onshape translation returned {} downloadable results; expected exactly one",
+                self.result_external_data_ids.len()
+            ),
+        }
     }
 }
 
@@ -299,10 +331,20 @@ impl OnshapeClient {
         &self,
         request: &CanonicalExportRequest,
     ) -> anyhow::Result<Vec<u8>> {
-        let translation_id = self.start_export_request(request).await?;
-        let external_data_id = self
-            .poll_translation(request.document_id()?, &translation_id)
+        let started = self.start_export_request(request).await?;
+        let polled = self
+            .poll_translation(request.document_id()?, &started.translation_id)
             .await?;
+        anyhow::ensure!(
+            polled.state == "DONE",
+            "Onshape translation {} failed: {}",
+            started.translation_id,
+            polled
+                .failure_reason
+                .as_deref()
+                .unwrap_or(&polled.final_response_json)
+        );
+        let external_data_id = polled.single_external_data_id()?;
         self.download_external_data(request.document_id()?, &external_data_id)
             .await
     }
@@ -388,10 +430,10 @@ impl OnshapeClient {
         }
     }
 
-    async fn start_export_request(
+    pub async fn start_export_request(
         &self,
         request: &CanonicalExportRequest,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<StartedTranslation> {
         anyhow::ensure!(
             self.has_credentials(),
             "Onshape credentials are not configured"
@@ -419,20 +461,14 @@ impl OnshapeClient {
             .send()
             .await?;
         let response: Value = onshape_response(response).await?.json().await?;
-
-        first_string(&response, &["id", "translationId"]).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Onshape {} response did not include a translation id",
-                request.operation
-            )
-        })
+        parse_started_translation(&response, &request.operation)
     }
 
-    async fn poll_translation(
+    pub async fn poll_translation(
         &self,
         document_id: &str,
         translation_id: &str,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<PolledTranslation> {
         let path = format!("/api/translations/{translation_id}");
         let delays = [2, 4, 8, 15, 30, 30, 30, 30];
         for delay in delays {
@@ -444,25 +480,21 @@ impl OnshapeClient {
             headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
             let response = self.client.get(url).headers(headers).send().await?;
             let response: Value = onshape_response(response).await?.json().await?;
+            let polled = parse_polled_translation(&response)?;
 
-            match first_string(&response, &["requestState", "state"]).as_deref() {
-                Some("DONE") => {
-                    return first_array_string(&response, "resultExternalDataIds")
-                        .ok_or_else(|| anyhow::anyhow!("Onshape translation completed without external data for document {document_id}"));
-                }
-                Some("FAILED") => {
-                    return Err(anyhow::anyhow!(
-                        "Onshape GLB translation failed: {response}"
-                    ));
-                }
+            match polled.state.as_str() {
+                "DONE" => return Ok(polled),
+                "FAILED" => return Ok(polled),
                 _ => tokio::time::sleep(Duration::from_secs(delay)).await,
             }
         }
 
-        Err(anyhow::anyhow!("Onshape GLB translation timed out"))
+        Err(anyhow::anyhow!(
+            "Onshape translation timed out for document {document_id}"
+        ))
     }
 
-    async fn download_external_data(
+    pub async fn download_external_data(
         &self,
         document_id: &str,
         external_data_id: &str,
@@ -572,6 +604,44 @@ fn parse_configuration_encoding_response(
     })
 }
 
+fn parse_started_translation(
+    response: &Value,
+    operation: &str,
+) -> anyhow::Result<StartedTranslation> {
+    let translation_id = first_string(response, &["id", "translationId"]).ok_or_else(|| {
+        anyhow::anyhow!("Onshape {operation} response did not include a translation id")
+    })?;
+    let state =
+        first_string(response, &["requestState", "state"]).unwrap_or_else(|| "ACTIVE".to_owned());
+    Ok(StartedTranslation {
+        translation_id,
+        state,
+        response_json: serde_json::to_string(response)?,
+    })
+}
+
+fn parse_polled_translation(response: &Value) -> anyhow::Result<PolledTranslation> {
+    let state = first_string(response, &["requestState", "state"]).ok_or_else(|| {
+        anyhow::anyhow!("Onshape translation poll response did not include a state")
+    })?;
+    let final_response_json = serde_json::to_string(response)?;
+    let result_external_data_ids = array_strings(response, "resultExternalDataIds");
+    let result_element_ids = array_strings(response, "resultElementIds");
+    let failure_reason = first_string(
+        response,
+        &["failureReason", "failureMessage", "message", "errorMessage"],
+    );
+    Ok(PolledTranslation {
+        state,
+        poll_state_json: final_response_json.clone(),
+        response_hash: cache_key::hex_sha256(final_response_json.as_bytes()),
+        final_response_json,
+        result_external_data_ids,
+        result_element_ids,
+        failure_reason,
+    })
+}
+
 fn element_collection(source: &OnshapeSource) -> &'static str {
     match source.element_kind {
         ElementKind::PartStudio => "partstudios",
@@ -593,6 +663,16 @@ fn first_array_string(value: &Value, name: &str) -> Option<String> {
         .as_array()?
         .iter()
         .find_map(|value| value.as_str().map(ToOwned::to_owned))
+}
+
+fn array_strings(value: &Value, name: &str) -> Vec<String> {
+    value
+        .get(name)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+        .collect()
 }
 
 async fn onshape_response(response: reqwest::Response) -> anyhow::Result<reqwest::Response> {
@@ -868,5 +948,63 @@ mod tests {
         assert_eq!(parsed.encoded_id, "enc-123");
         assert_eq!(parsed.query_param, "configuration=enc-123");
         assert!(parse_configuration_encoding_response(&json!({"encodedId": "enc"})).is_err());
+    }
+
+    #[test]
+    fn parse_started_translation_accepts_id_and_default_state() {
+        let parsed = parse_started_translation(&json!({"id": "tid"}), "create-preview").unwrap();
+
+        assert_eq!(parsed.translation_id, "tid");
+        assert_eq!(parsed.state, "ACTIVE");
+        assert_eq!(parsed.response_json, r#"{"id":"tid"}"#);
+    }
+
+    #[test]
+    fn parse_started_translation_requires_translation_id() {
+        assert!(parse_started_translation(&json!({"state": "ACTIVE"}), "create-preview").is_err());
+    }
+
+    #[test]
+    fn parse_polled_translation_collects_results_and_failure_reason() {
+        let parsed = parse_polled_translation(&json!({
+            "requestState": "DONE",
+            "resultExternalDataIds": ["fid"],
+            "resultElementIds": ["eid"]
+        }))
+        .unwrap();
+
+        assert_eq!(parsed.state, "DONE");
+        assert_eq!(parsed.result_external_data_ids, ["fid"]);
+        assert_eq!(parsed.result_element_ids, ["eid"]);
+        assert_eq!(parsed.single_external_data_id().unwrap(), "fid");
+    }
+
+    #[test]
+    fn parse_polled_translation_requires_state() {
+        assert!(parse_polled_translation(&json!({"resultExternalDataIds": ["fid"]})).is_err());
+    }
+
+    #[test]
+    fn polled_translation_rejects_missing_or_multiple_download_results() {
+        let missing = parse_polled_translation(&json!({"requestState": "DONE"})).unwrap();
+        assert!(missing.single_external_data_id().is_err());
+
+        let multiple = parse_polled_translation(&json!({
+            "requestState": "DONE",
+            "resultExternalDataIds": ["a", "b"]
+        }))
+        .unwrap();
+        assert!(multiple.single_external_data_id().is_err());
+    }
+
+    #[test]
+    fn parse_polled_translation_captures_failed_reason() {
+        let parsed = parse_polled_translation(&json!({
+            "state": "FAILED",
+            "failureReason": "bad geometry"
+        }))
+        .unwrap();
+
+        assert_eq!(parsed.failure_reason.as_deref(), Some("bad geometry"));
     }
 }

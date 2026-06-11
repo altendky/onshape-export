@@ -36,7 +36,10 @@ use crate::{
     cache_model::{EncodedConfigurationIdentity, ResolvedOnshapeSourceIdentity},
     catalog::Catalog,
     config::Config,
-    db::{ArtifactUpsert, Database, ExportRequestInsert},
+    db::{
+        ArtifactUpsert, Database, ExportRequestInsert, TranslationFinalUpdate,
+        TranslationStartInsert,
+    },
     onshape::OnshapeClient,
     storage::StorageClient,
 };
@@ -2361,6 +2364,165 @@ async fn render_downloads_for_values(
     }
 }
 
+async fn execute_staged_export_request(
+    state: &AppState,
+    request_hash: &str,
+    request: &onshape::CanonicalExportRequest,
+) -> anyhow::Result<Vec<u8>> {
+    if let Some(translation) = state
+        .db
+        .latest_completed_translation_for_request(request_hash)
+        .await?
+    {
+        return download_translation_result(state, request, &translation).await;
+    }
+
+    if let Some(translation) = state
+        .db
+        .latest_translation_for_request(request_hash)
+        .await?
+    {
+        if translation.final_response_json.is_some() {
+            return start_and_download_translation(state, request_hash, request).await;
+        }
+
+        let polled = state
+            .onshape
+            .poll_translation(request.document_id()?, &translation.translation_id)
+            .await?;
+        state
+            .db
+            .update_translation_final(TranslationFinalUpdate {
+                translation_id: &translation.translation_id,
+                state: &polled.state,
+                final_response_json: &polled.final_response_json,
+                poll_state_json: &polled.poll_state_json,
+                result_external_data_ids_json: &serde_json::to_string(
+                    &polled.result_external_data_ids,
+                )?,
+                result_element_ids_json: &serde_json::to_string(&polled.result_element_ids)?,
+                response_hash: Some(&polled.response_hash),
+                failure_reason: polled.failure_reason.as_deref(),
+            })
+            .await?;
+        anyhow::ensure!(
+            polled.state == "DONE",
+            "Onshape translation {} failed: {}",
+            translation.translation_id,
+            polled
+                .failure_reason
+                .as_deref()
+                .unwrap_or(&polled.final_response_json)
+        );
+        return state
+            .onshape
+            .download_external_data(request.document_id()?, polled.single_external_data_id()?)
+            .await;
+    }
+
+    start_and_download_translation(state, request_hash, request).await
+}
+
+async fn start_and_download_translation(
+    state: &AppState,
+    request_hash: &str,
+    request: &onshape::CanonicalExportRequest,
+) -> anyhow::Result<Vec<u8>> {
+    let started = state.onshape.start_export_request(request).await?;
+    state
+        .db
+        .insert_translation_start(TranslationStartInsert {
+            translation_id: &started.translation_id,
+            request_hash,
+            state: &started.state,
+            start_response_json: &started.response_json,
+        })
+        .await?;
+
+    let polled = state
+        .onshape
+        .poll_translation(request.document_id()?, &started.translation_id)
+        .await?;
+    state
+        .db
+        .update_translation_final(TranslationFinalUpdate {
+            translation_id: &started.translation_id,
+            state: &polled.state,
+            final_response_json: &polled.final_response_json,
+            poll_state_json: &polled.poll_state_json,
+            result_external_data_ids_json: &serde_json::to_string(
+                &polled.result_external_data_ids,
+            )?,
+            result_element_ids_json: &serde_json::to_string(&polled.result_element_ids)?,
+            response_hash: Some(&polled.response_hash),
+            failure_reason: polled.failure_reason.as_deref(),
+        })
+        .await?;
+    anyhow::ensure!(
+        polled.state == "DONE",
+        "Onshape translation {} failed: {}",
+        started.translation_id,
+        polled
+            .failure_reason
+            .as_deref()
+            .unwrap_or(&polled.final_response_json)
+    );
+    state
+        .onshape
+        .download_external_data(request.document_id()?, polled.single_external_data_id()?)
+        .await
+}
+
+async fn download_translation_result(
+    state: &AppState,
+    request: &onshape::CanonicalExportRequest,
+    translation: &db::TranslationRecord,
+) -> anyhow::Result<Vec<u8>> {
+    anyhow::ensure!(
+        translation.state == "DONE",
+        "persisted Onshape translation {} is not resumable: {}{}",
+        translation.translation_id,
+        translation.state,
+        translation
+            .failure_reason
+            .as_deref()
+            .map(|reason| format!(": {reason}"))
+            .unwrap_or_default()
+    );
+    let external_data_id = persisted_result_external_data_id(translation)?;
+    state
+        .onshape
+        .download_external_data(request.document_id()?, &external_data_id)
+        .await
+}
+
+fn persisted_result_external_data_id(
+    translation: &db::TranslationRecord,
+) -> anyhow::Result<String> {
+    let external_data_ids = parse_json_string_vec(
+        translation
+            .result_external_data_ids_json
+            .as_deref()
+            .unwrap_or("[]"),
+    )?;
+    match external_data_ids.as_slice() {
+        [external_data_id] => Ok(external_data_id.clone()),
+        [] => anyhow::bail!(
+            "persisted Onshape translation {} completed without external data",
+            translation.translation_id
+        ),
+        _ => anyhow::bail!(
+            "persisted Onshape translation {} returned {} downloadable results; expected exactly one",
+            translation.translation_id,
+            external_data_ids.len()
+        ),
+    }
+}
+
+fn parse_json_string_vec(json: &str) -> anyhow::Result<Vec<String>> {
+    Ok(serde_json::from_str(json)?)
+}
+
 async fn refresh_preview(
     state: &AppState,
     model: &catalog::Model,
@@ -2378,10 +2540,8 @@ async fn refresh_preview(
             "queued preview request hash no longer matches the canonical export request"
         );
     }
-    let bytes = state
-        .onshape
-        .execute_export_request(&prepared.request)
-        .await?;
+    let bytes =
+        execute_staged_export_request(state, &prepared.request_hash, &prepared.request).await?;
     let preview_artifact =
         preview_artifact_from_onshape_bytes(source_hash, model, config_hash, bytes)?;
     let sha256 = cache_key::hex_sha256(&preview_artifact.bytes);
@@ -2665,10 +2825,8 @@ async fn refresh_download(
             "queued download request hash no longer matches the canonical export request"
         );
     }
-    let bytes = state
-        .onshape
-        .execute_export_request(&prepared.request)
-        .await?;
+    let bytes =
+        execute_staged_export_request(state, &prepared.request_hash, &prepared.request).await?;
     let object_key = download_object_key(source_hash, model, config_hash, format);
     let filename = download_filename(model, format);
     let content_disposition = format!("attachment; filename=\"{filename}\"");
