@@ -2193,6 +2193,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configuration_selections_round_trip_typed_values() {
+        let db = test_database().await;
+        db.upsert_configuration_selection(ConfigurationSelectionUpsert {
+            source_hash: "sourcehash",
+            config_hash: "confighash",
+            values_json: r#"{"enabled":{"kind":"boolean","value":true}}"#,
+            validation_json: r#"{"parameterSchemaVersion":2,"requestValues":{"enabled":"true"}}"#,
+        })
+        .await
+        .unwrap();
+
+        let record = db
+            .configuration_selection("sourcehash", "confighash")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(record.values_json.contains(r#""kind":"boolean""#));
+        assert!(record.validation_json.contains("parameterSchemaVersion"));
+    }
+
+    #[tokio::test]
     async fn export_requests_dedupe_by_request_hash() {
         let db = test_database().await;
         let inserted = db

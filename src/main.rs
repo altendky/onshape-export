@@ -29,8 +29,8 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::parameters::{
-    ParameterKind, ParameterSchema, ParameterVisibilityCondition, SCHEMA_VERSION, apply_overrides,
-    normalize_configuration, validate_values,
+    ParameterKind, ParameterSchema, ParameterVisibilityCondition, SCHEMA_VERSION,
+    ValidatedConfiguration, apply_overrides, normalize_configuration, validate_values,
 };
 use crate::{
     cache_model::ResolvedOnshapeSourceIdentity,
@@ -45,6 +45,7 @@ const EXPORTER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MANIFEST_SCHEMA_VERSION: u32 = 1;
 const PREVIEW_OPTIONS_VERSION: &str = "mesh-grouped-v2";
 const DOWNLOAD_OPTIONS_VERSION: &str = "default-v1";
+const CONFIG_HASH_JOB_VERSION: u32 = 1;
 const RETRY_BACKOFF_BASE_SECONDS: i64 = 30;
 const RETRY_BACKOFF_CAP_SECONDS: i64 = 5 * 60;
 const ALLOW_PARTIAL_MULTI_GLTF_PREVIEW_FALLBACK: bool = false;
@@ -65,10 +66,18 @@ enum JobPayload {
     },
     PreviewGlb {
         model_slug: String,
+        #[serde(default)]
+        config_hash: String,
+        #[serde(default)]
+        config_hash_version: Option<u32>,
         values: HashMap<String, String>,
     },
     DownloadExport {
         model_slug: String,
+        #[serde(default)]
+        config_hash: String,
+        #[serde(default)]
+        config_hash_version: Option<u32>,
         values: HashMap<String, String>,
         format: catalog::DownloadFormat,
     },
@@ -84,7 +93,7 @@ enum OutputFormat {
 struct SelectedParameterSet {
     slug: String,
     label: String,
-    values: HashMap<String, String>,
+    validated: ValidatedConfiguration,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -284,7 +293,8 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
                     selected_parameter_sets(&state, model, parameter_selector).await?
                 {
                     let object_key =
-                        generate_preview_for_values(&state, model, &parameter_set.values).await?;
+                        generate_preview_for_values(&state, model, &parameter_set.validated)
+                            .await?;
                     println!(
                         "preview ready for {} [{} - {}]: {object_key}",
                         model.slug, parameter_set.slug, parameter_set.label
@@ -307,7 +317,7 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
                         match generate_download_for_values(
                             &state,
                             model,
-                            &parameter_set.values,
+                            &parameter_set.validated,
                             *format,
                         )
                         .await?
@@ -713,10 +723,10 @@ fn selected_formats(
 async fn generate_preview_for_values(
     state: &AppState,
     model: &catalog::Model,
-    values: &HashMap<String, String>,
+    validated: &ValidatedConfiguration,
 ) -> anyhow::Result<String> {
     let source_hash = resolve_source_hash(state, model).await?;
-    let config_hash = configuration_hash(&source_hash, values)?;
+    let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
     let artifact_key = preview_artifact_key(&source_hash, model, &config_hash);
 
     if let Some(record) = state.db.artifact(&artifact_key).await? {
@@ -727,7 +737,7 @@ async fn generate_preview_for_values(
         state,
         model,
         &source_hash,
-        values,
+        &validated.values,
         &config_hash,
         &artifact_key,
         None,
@@ -771,13 +781,15 @@ async fn enqueue_parameter_refresh_with_force(
 async fn enqueue_preview(
     state: &AppState,
     model: &catalog::Model,
-    values: &HashMap<String, String>,
+    validated: &ValidatedConfiguration,
 ) -> anyhow::Result<bool> {
     let source_hash = resolve_source_hash(state, model).await?;
-    let config_hash = configuration_hash(&source_hash, values)?;
+    let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
     let payload = JobPayload::PreviewGlb {
         model_slug: model.slug.clone(),
-        values: values.clone(),
+        config_hash: config_hash.clone(),
+        config_hash_version: Some(CONFIG_HASH_JOB_VERSION),
+        values: validated.values.clone(),
     };
     enqueue_job(
         state,
@@ -792,14 +804,16 @@ async fn enqueue_preview(
 async fn enqueue_download(
     state: &AppState,
     model: &catalog::Model,
-    values: &HashMap<String, String>,
+    validated: &ValidatedConfiguration,
     format: catalog::DownloadFormat,
 ) -> anyhow::Result<bool> {
     let source_hash = resolve_source_hash(state, model).await?;
-    let config_hash = configuration_hash(&source_hash, values)?;
+    let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
     let payload = JobPayload::DownloadExport {
         model_slug: model.slug.clone(),
-        values: values.clone(),
+        config_hash: config_hash.clone(),
+        config_hash_version: Some(CONFIG_HASH_JOB_VERSION),
+        values: validated.values.clone(),
         format,
     };
     enqueue_job(
@@ -836,11 +850,11 @@ async fn enqueue_job(
 async fn generate_download_for_values(
     state: &AppState,
     model: &catalog::Model,
-    values: &HashMap<String, String>,
+    validated: &ValidatedConfiguration,
     format: catalog::DownloadFormat,
 ) -> anyhow::Result<Option<String>> {
     let source_hash = resolve_source_hash(state, model).await?;
-    let config_hash = configuration_hash(&source_hash, values)?;
+    let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
     let artifact_key = download_artifact_key(&source_hash, model, &config_hash, format);
 
     if let Some(record) = state.db.artifact(&artifact_key).await? {
@@ -851,7 +865,7 @@ async fn generate_download_for_values(
         state,
         model,
         &source_hash,
-        values,
+        &validated.values,
         &config_hash,
         &artifact_key,
         format,
@@ -919,7 +933,7 @@ fn validated_parameter_set(
     Ok(SelectedParameterSet {
         slug,
         label,
-        values: validated.values,
+        validated,
     })
 }
 
@@ -1440,7 +1454,7 @@ async fn generate_preview(
             }
         };
     let source_hash = resolve_source_hash(&state, model).await?;
-    let config_hash = configuration_hash(&source_hash, &validated.values)?;
+    let config_hash = persist_configuration_selection(&state, &source_hash, &validated).await?;
     let artifact_key = preview_artifact_key(&source_hash, model, &config_hash);
 
     if let Some(record) = state.db.artifact(&artifact_key).await? {
@@ -1449,7 +1463,7 @@ async fn generate_preview(
             render_clean_model_url_script(model)?,
             render_preview_result(&state, &record.object_key)
         );
-        let downloads = render_downloads_for_values(&state, model, &validated.values).await?;
+        let downloads = render_downloads_for_values(&state, model, &validated).await?;
         return Ok(render_model_html(
             model,
             &parameter_controls,
@@ -1458,7 +1472,7 @@ async fn generate_preview(
         ));
     }
 
-    enqueue_preview(&state, model, &validated.values).await?;
+    enqueue_preview(&state, model, &validated).await?;
     let status_url = preview_status_path(model, &config_hash);
     let preview = format!(
         "{}{}",
@@ -1516,14 +1530,14 @@ async fn generate_download(
             }
         };
     let source_hash = resolve_source_hash(&state, model).await?;
-    let config_hash = configuration_hash(&source_hash, &validated.values)?;
+    let config_hash = persist_configuration_selection(&state, &source_hash, &validated).await?;
     let artifact_key = download_artifact_key(&source_hash, model, &config_hash, format);
 
     if let Some(record) = state.db.artifact(&artifact_key).await? {
         let preview = format!(
             "{}{}",
             render_clean_model_url_script(model)?,
-            render_preview_for_values(&state, model, &validated.values).await?
+            render_preview_for_values(&state, model, &validated).await?
         );
         let downloads = render_download_result(&state, format, &record.object_key);
         return Ok(render_model_html(
@@ -1534,11 +1548,11 @@ async fn generate_download(
         ));
     }
 
-    enqueue_download(&state, model, &validated.values, format).await?;
+    enqueue_download(&state, model, &validated, format).await?;
     let preview = format!(
         "{}{}",
         render_clean_model_url_script(model)?,
-        render_preview_for_values(&state, model, &validated.values).await?
+        render_preview_for_values(&state, model, &validated).await?
     );
     let status_url = download_status_path(model, format, &config_hash);
     Ok(render_model_html(
@@ -1824,23 +1838,23 @@ async fn enqueue_scheduled_rebuild(state: &AppState) -> anyhow::Result<()> {
             enqueued += 1;
         }
 
-        let Some(values) = cached_default_parameter_values(state, model).await? else {
+        let Some(validated) = cached_default_parameter_values(state, model).await? else {
             tracing::debug!(model = %model.slug, "default artifact rebuild skipped until parameter metadata is cached");
             continue;
         };
 
         let source_hash = resolve_source_hash(state, model).await?;
-        let config_hash = configuration_hash(&source_hash, &values)?;
+        let config_hash = persist_configuration_selection(state, &source_hash, &validated).await?;
         let preview_artifact_key = preview_artifact_key(&source_hash, model, &config_hash);
         if state.db.artifact(&preview_artifact_key).await?.is_none()
-            && enqueue_preview(state, model, &values).await?
+            && enqueue_preview(state, model, &validated).await?
         {
             enqueued += 1;
         }
         for format in &model.exports.downloads {
             let artifact_key = download_artifact_key(&source_hash, model, &config_hash, *format);
             if state.db.artifact(&artifact_key).await?.is_none()
-                && enqueue_download(state, model, &values, *format).await?
+                && enqueue_download(state, model, &validated, *format).await?
             {
                 enqueued += 1;
             }
@@ -1854,7 +1868,7 @@ async fn enqueue_scheduled_rebuild(state: &AppState) -> anyhow::Result<()> {
 async fn cached_default_parameter_values(
     state: &AppState,
     model: &catalog::Model,
-) -> anyhow::Result<Option<HashMap<String, String>>> {
+) -> anyhow::Result<Option<ValidatedConfiguration>> {
     let source_hash = resolve_source_hash(state, model).await?;
     let Some(record) = state.db.parameter_metadata(&source_hash).await? else {
         return Ok(None);
@@ -1870,7 +1884,7 @@ async fn cached_default_parameter_values(
         &HashMap::new(),
         model.parameter_policy.allow_unknown,
     ) {
-        Ok(validated) => Ok(Some(validated.values)),
+        Ok(validated) => Ok(Some(validated)),
         Err(errors) => {
             tracing::warn!(model = %model.slug, errors = ?errors, "scheduled default parameter validation failed");
             Ok(None)
@@ -1977,7 +1991,12 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                 .ok_or_else(|| anyhow::anyhow!("unknown model slug: {model_slug}"))?;
             refresh_parameters(state, model).await?;
         }
-        JobPayload::PreviewGlb { model_slug, values } => {
+        JobPayload::PreviewGlb {
+            model_slug,
+            config_hash,
+            config_hash_version,
+            values,
+        } => {
             anyhow::ensure!(
                 job.job_kind == "preview_export",
                 "unexpected preview job kind"
@@ -1986,15 +2005,39 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                 .catalog
                 .find(&model_slug)
                 .ok_or_else(|| anyhow::anyhow!("unknown model slug: {model_slug}"))?;
+            let parameters = load_or_refresh_parameters(state, model)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("parameter metadata refresh is still queued"))?;
+            let validated =
+                validate_values(&parameters, &values, model.parameter_policy.allow_unknown)
+                    .map_err(|errors| {
+                        anyhow::anyhow!(
+                            "{} preview parameters are invalid: {}",
+                            model.slug,
+                            errors.join(", ")
+                        )
+                    })?;
             let source_hash = resolve_source_hash(state, model).await?;
-            let config_hash = configuration_hash(&source_hash, &values)?;
+            let recomputed_config_hash = configuration_hash(&source_hash, &validated)?;
+            if config_hash_version == Some(CONFIG_HASH_JOB_VERSION) && !config_hash.is_empty() {
+                anyhow::ensure!(
+                    recomputed_config_hash == config_hash,
+                    "queued preview config hash no longer matches current parameter schema"
+                );
+            }
+            let config_hash = if config_hash.is_empty() {
+                recomputed_config_hash
+            } else {
+                config_hash
+            };
+            persist_configuration_selection(state, &source_hash, &validated).await?;
             let artifact_key = preview_artifact_key(&source_hash, model, &config_hash);
             if state.db.artifact(&artifact_key).await?.is_none() {
                 refresh_preview(
                     state,
                     model,
                     &source_hash,
-                    &values,
+                    &validated.values,
                     &config_hash,
                     &artifact_key,
                     Some(&job.work_key),
@@ -2004,6 +2047,8 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
         }
         JobPayload::DownloadExport {
             model_slug,
+            config_hash,
+            config_hash_version,
             values,
             format,
         } => {
@@ -2021,15 +2066,39 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                 model.slug,
                 format.label()
             );
+            let parameters = load_or_refresh_parameters(state, model)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("parameter metadata refresh is still queued"))?;
+            let validated =
+                validate_values(&parameters, &values, model.parameter_policy.allow_unknown)
+                    .map_err(|errors| {
+                        anyhow::anyhow!(
+                            "{} download parameters are invalid: {}",
+                            model.slug,
+                            errors.join(", ")
+                        )
+                    })?;
             let source_hash = resolve_source_hash(state, model).await?;
-            let config_hash = configuration_hash(&source_hash, &values)?;
+            let recomputed_config_hash = configuration_hash(&source_hash, &validated)?;
+            if config_hash_version == Some(CONFIG_HASH_JOB_VERSION) && !config_hash.is_empty() {
+                anyhow::ensure!(
+                    recomputed_config_hash == config_hash,
+                    "queued download config hash no longer matches current parameter schema"
+                );
+            }
+            let config_hash = if config_hash.is_empty() {
+                recomputed_config_hash
+            } else {
+                config_hash
+            };
+            persist_configuration_selection(state, &source_hash, &validated).await?;
             let artifact_key = download_artifact_key(&source_hash, model, &config_hash, format);
             if state.db.artifact(&artifact_key).await?.is_none() {
                 refresh_download(
                     state,
                     model,
                     &source_hash,
-                    &values,
+                    &validated.values,
                     &config_hash,
                     &artifact_key,
                     format,
@@ -2091,17 +2160,17 @@ async fn render_cached_preview(
         return Ok("<p>Choose parameters and generate a preview.</p>".to_owned());
     };
     let source_hash = resolve_source_hash(state, model).await?;
-    let config_hash = configuration_hash(&source_hash, &validated.values)?;
+    let config_hash = persist_configuration_selection(state, &source_hash, &validated).await?;
     render_preview_for_hash(state, model, &config_hash, "default parameters").await
 }
 
 async fn render_preview_for_values(
     state: &AppState,
     model: &catalog::Model,
-    values: &HashMap<String, String>,
+    validated: &ValidatedConfiguration,
 ) -> Result<String, AppError> {
     let source_hash = resolve_source_hash(state, model).await?;
-    let config_hash = configuration_hash(&source_hash, values)?;
+    let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
     render_preview_for_hash(state, model, &config_hash, "these parameters").await
 }
 
@@ -2132,16 +2201,16 @@ async fn render_cached_downloads(
         return Ok(render_download_prompt(model));
     };
 
-    render_downloads_for_values(state, model, &validated.values).await
+    render_downloads_for_values(state, model, &validated).await
 }
 
 async fn render_downloads_for_values(
     state: &AppState,
     model: &catalog::Model,
-    values: &HashMap<String, String>,
+    validated: &ValidatedConfiguration,
 ) -> Result<String, AppError> {
     let source_hash = resolve_source_hash(state, model).await?;
-    let config_hash = configuration_hash(&source_hash, values)?;
+    let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
     let mut items = String::new();
     for format in &model.exports.downloads {
         let artifact_key = download_artifact_key(&source_hash, model, &config_hash, *format);
@@ -2833,15 +2902,46 @@ fn safe_filename_stem(value: &str) -> String {
 
 fn configuration_hash(
     source_hash: &str,
-    values: &HashMap<String, String>,
+    validated: &ValidatedConfiguration,
 ) -> anyhow::Result<String> {
-    cache_model::config_hash(source_hash, SCHEMA_VERSION, values)
+    cache_model::config_hash(source_hash, SCHEMA_VERSION, &validated.typed_values)
 }
 
 fn config_values_json(values: &HashMap<String, String>) -> anyhow::Result<String> {
     Ok(serde_json::to_string(&cache_model::canonical_values(
         values,
     ))?)
+}
+
+fn typed_config_values_json(validated: &ValidatedConfiguration) -> anyhow::Result<String> {
+    Ok(serde_json::to_string(&validated.typed_values)?)
+}
+
+fn configuration_validation_json(validated: &ValidatedConfiguration) -> anyhow::Result<String> {
+    Ok(serde_json::to_string(&serde_json::json!({
+        "parameterSchemaVersion": SCHEMA_VERSION,
+        "requestValues": cache_model::canonical_values(&validated.values),
+    }))?)
+}
+
+async fn persist_configuration_selection(
+    state: &AppState,
+    source_hash: &str,
+    validated: &ValidatedConfiguration,
+) -> anyhow::Result<String> {
+    let config_hash = configuration_hash(source_hash, validated)?;
+    let values_json = typed_config_values_json(validated)?;
+    let validation_json = configuration_validation_json(validated)?;
+    state
+        .db
+        .upsert_configuration_selection(db::ConfigurationSelectionUpsert {
+            source_hash,
+            config_hash: &config_hash,
+            values_json: &values_json,
+            validation_json: &validation_json,
+        })
+        .await?;
+    Ok(config_hash)
 }
 
 fn parameter_schema_hash(schema: &ParameterSchema) -> anyhow::Result<String> {
@@ -3469,16 +3569,18 @@ mod tests {
         ]);
         let model = test_model();
         let source_hash = resolved_source_hash_for_test_model(&model);
+        let first_validated = validated_configuration_for_test_values(first);
+        let second_validated = validated_configuration_for_test_values(second);
 
         assert_eq!(
-            configuration_hash(&source_hash, &first).unwrap(),
-            configuration_hash(&source_hash, &second).unwrap()
+            configuration_hash(&source_hash, &first_validated).unwrap(),
+            configuration_hash(&source_hash, &second_validated).unwrap()
         );
     }
 
     #[test]
     fn config_hash_ignores_catalog_export_options() {
-        let values = HashMap::new();
+        let values = validated_configuration_for_test_values(HashMap::new());
         let first = test_model();
         let mut second = test_model();
         let first_source_hash = resolved_source_hash_for_test_model(&first);
@@ -3525,8 +3627,16 @@ mod tests {
         let download_options_hash = download_options_hash(&first, catalog::DownloadFormat::Step);
 
         assert_eq!(
-            configuration_hash(&source_hash, &HashMap::new()).unwrap(),
-            configuration_hash(&source_hash, &HashMap::new()).unwrap()
+            configuration_hash(
+                &source_hash,
+                &validated_configuration_for_test_values(HashMap::new())
+            )
+            .unwrap(),
+            configuration_hash(
+                &source_hash,
+                &validated_configuration_for_test_values(HashMap::new())
+            )
+            .unwrap()
         );
         assert_eq!(
             preview_artifact_key(&source_hash, &first, config_hash),
@@ -4012,6 +4122,49 @@ mod tests {
             link_document_id: model.onshape.link_document_id.clone(),
         })
         .unwrap()
+    }
+
+    fn validated_configuration_for_test_values(
+        submitted: HashMap<String, String>,
+    ) -> ValidatedConfiguration {
+        let schema = ParameterSchema {
+            schema_version: SCHEMA_VERSION,
+            source: test_model().onshape,
+            parameters: vec![
+                parameters::Parameter {
+                    id: "a".to_owned(),
+                    label: "A".to_owned(),
+                    description: None,
+                    kind: ParameterKind::Number,
+                    required: false,
+                    default_value: None,
+                    options: Vec::new(),
+                    hidden: false,
+                    visibility_condition: None,
+                    precision: None,
+                    widget: None,
+                    units: None,
+                    raw: Value::Null,
+                },
+                parameters::Parameter {
+                    id: "b".to_owned(),
+                    label: "B".to_owned(),
+                    description: None,
+                    kind: ParameterKind::Number,
+                    required: false,
+                    default_value: None,
+                    options: Vec::new(),
+                    hidden: false,
+                    visibility_condition: None,
+                    precision: None,
+                    widget: None,
+                    units: None,
+                    raw: Value::Null,
+                },
+            ],
+        };
+
+        validate_values(&schema, &submitted, false).unwrap()
     }
 
     fn test_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {

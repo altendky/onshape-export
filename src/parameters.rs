@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -77,6 +77,30 @@ pub enum ParameterVisibilityCondition {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ValidatedConfiguration {
     pub values: HashMap<String, String>,
+    pub typed_values: BTreeMap<String, CanonicalParameterValue>,
+}
+
+#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum CanonicalParameterValue {
+    Text {
+        value: String,
+    },
+    Number {
+        expression: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        units: Option<String>,
+    },
+    Boolean {
+        value: bool,
+    },
+    Enum {
+        value: String,
+    },
 }
 
 pub fn normalize_configuration(source: &OnshapeSource, raw: &Value) -> ParameterSchema {
@@ -147,6 +171,7 @@ pub fn validate_values(
     }
 
     let mut values = HashMap::new();
+    let mut typed_values = BTreeMap::new();
     for parameter in &schema.parameters {
         let value = submitted
             .get(&parameter.id)
@@ -157,22 +182,46 @@ pub fn validate_values(
             Some(value) => match parameter.kind {
                 ParameterKind::Text => {
                     values.insert(parameter.id.clone(), value.clone());
+                    typed_values.insert(
+                        parameter.id.clone(),
+                        CanonicalParameterValue::Text {
+                            value: value.clone(),
+                        },
+                    );
                 }
                 ParameterKind::Number => {
-                    let valid = if parameter.units.is_some() {
-                        !value.trim().is_empty()
+                    let canonical = if parameter.units.is_some() {
+                        canonicalize_dimensioned_number(parameter, value)
                     } else {
-                        value.parse::<f64>().is_ok()
+                        canonical_number_string(value).map(|expression| {
+                            CanonicalParameterValue::Number {
+                                expression,
+                                units: None,
+                            }
+                        })
                     };
-                    if valid {
-                        values.insert(parameter.id.clone(), parameter.configuration_value(value));
+                    if let Some(canonical) = canonical {
+                        let request_value = if parameter.units.is_some() {
+                            number_request_value(parameter, value)
+                        } else {
+                            value.clone()
+                        };
+                        values.insert(parameter.id.clone(), request_value);
+                        typed_values.insert(parameter.id.clone(), canonical);
                     } else {
                         errors.push(format!("{} must be a number", parameter.label));
                     }
                 }
                 ParameterKind::Boolean => match value.as_str() {
                     "true" | "false" | "on" | "0" | "1" => {
-                        values.insert(parameter.id.clone(), normalize_bool(value).to_owned());
+                        let normalized = normalize_bool(value);
+                        values.insert(parameter.id.clone(), normalized.to_owned());
+                        typed_values.insert(
+                            parameter.id.clone(),
+                            CanonicalParameterValue::Boolean {
+                                value: normalized == "true",
+                            },
+                        );
                     }
                     _ => errors.push(format!("{} must be a boolean", parameter.label)),
                 },
@@ -183,6 +232,12 @@ pub fn validate_values(
                         .any(|option| option.value == *value)
                     {
                         values.insert(parameter.id.clone(), value.clone());
+                        typed_values.insert(
+                            parameter.id.clone(),
+                            CanonicalParameterValue::Enum {
+                                value: value.clone(),
+                            },
+                        );
                     } else {
                         errors.push(format!("{} has an invalid option", parameter.label));
                     }
@@ -193,8 +248,27 @@ pub fn validate_values(
         }
     }
 
+    if allow_unknown {
+        for (name, value) in submitted {
+            if known.contains(name.as_str()) || value.is_empty() {
+                continue;
+            }
+
+            values.insert(name.clone(), value.clone());
+            typed_values.insert(
+                name.clone(),
+                CanonicalParameterValue::Text {
+                    value: value.clone(),
+                },
+            );
+        }
+    }
+
     if errors.is_empty() {
-        Ok(ValidatedConfiguration { values })
+        Ok(ValidatedConfiguration {
+            values,
+            typed_values,
+        })
     } else {
         Err(errors)
     }
@@ -295,6 +369,90 @@ impl Parameter {
             None => value.to_owned(),
         }
     }
+}
+
+fn canonicalize_dimensioned_number(
+    parameter: &Parameter,
+    value: &str,
+) -> Option<CanonicalParameterValue> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let expression = if let Some(number) = canonical_number_string(trimmed) {
+        parameter.configuration_value(&number)
+    } else if is_supported_quantity_expression(trimmed) {
+        trimmed.to_owned()
+    } else {
+        return None;
+    };
+
+    Some(CanonicalParameterValue::Number {
+        expression,
+        units: parameter.units.clone(),
+    })
+}
+
+fn canonical_number_string(value: &str) -> Option<String> {
+    let number = value.trim().parse::<f64>().ok()?;
+    if !number.is_finite() {
+        return None;
+    }
+    Some(number.to_string())
+}
+
+fn number_request_value(parameter: &Parameter, value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.parse::<f64>().is_ok() {
+        parameter.configuration_value(trimmed)
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+fn is_supported_quantity_expression(value: &str) -> bool {
+    let Some((unit_start, unit)) = trailing_quantity_unit(value) else {
+        return false;
+    };
+    let prefix = &value[..unit_start];
+    prefix.chars().any(|character| character.is_ascii_digit())
+        && !prefix
+            .chars()
+            .any(|character| character.is_ascii_alphabetic())
+        && is_supported_quantity_unit(unit)
+}
+
+fn trailing_quantity_unit(value: &str) -> Option<(usize, &str)> {
+    let end = value.trim_end().len();
+    let trimmed = &value[..end];
+    let start = trimmed
+        .char_indices()
+        .rev()
+        .find(|(_, character)| !character.is_ascii_alphabetic())
+        .map(|(index, character)| index + character.len_utf8())
+        .unwrap_or(0);
+    let unit = &trimmed[start..];
+    (!unit.is_empty()).then_some((start, unit))
+}
+
+fn is_supported_quantity_unit(unit: &str) -> bool {
+    matches!(
+        unit,
+        "mm" | "cm"
+            | "m"
+            | "in"
+            | "ft"
+            | "deg"
+            | "rad"
+            | "millimeter"
+            | "centimeter"
+            | "meter"
+            | "inch"
+            | "foot"
+            | "degree"
+            | "radian"
+    )
 }
 
 fn range_and_default_message(message: &serde_json::Map<String, Value>) -> Option<&Value> {
@@ -756,6 +914,13 @@ mod tests {
         let validated = validate_values(&schema, &submitted, false).unwrap();
 
         assert_eq!(validated.values["wallThickness"], "1.5 mm");
+        assert_eq!(
+            validated.typed_values["wallThickness"],
+            CanonicalParameterValue::Number {
+                expression: "1.5 mm".to_owned(),
+                units: Some("millimeter".to_owned()),
+            }
+        );
     }
 
     #[test]
@@ -788,6 +953,148 @@ mod tests {
             Some("1.5 mm")
         );
         assert_eq!(validated.values["wallThickness"], "0.125 in");
+        assert_eq!(
+            validated.typed_values["wallThickness"],
+            CanonicalParameterValue::Number {
+                expression: "0.125 in".to_owned(),
+                units: Some("millimeter".to_owned()),
+            }
+        );
+
+        let compact = validate_values(
+            &schema,
+            &HashMap::from([("wallThickness".to_owned(), "0.125in".to_owned())]),
+            false,
+        )
+        .unwrap();
+        assert_eq!(compact.values["wallThickness"], "0.125in");
+    }
+
+    #[test]
+    fn canonicalizes_boolean_aliases_and_numeric_strings() {
+        let schema = ParameterSchema {
+            schema_version: SCHEMA_VERSION,
+            source: source(),
+            parameters: vec![
+                Parameter {
+                    id: "enabled".to_owned(),
+                    label: "Enabled".to_owned(),
+                    description: None,
+                    kind: ParameterKind::Boolean,
+                    required: true,
+                    default_value: None,
+                    options: Vec::new(),
+                    hidden: false,
+                    visibility_condition: None,
+                    precision: None,
+                    widget: None,
+                    units: None,
+                    raw: Value::Null,
+                },
+                Parameter {
+                    id: "count".to_owned(),
+                    label: "Count".to_owned(),
+                    description: None,
+                    kind: ParameterKind::Number,
+                    required: true,
+                    default_value: None,
+                    options: Vec::new(),
+                    hidden: false,
+                    visibility_condition: None,
+                    precision: None,
+                    widget: None,
+                    units: None,
+                    raw: Value::Null,
+                },
+            ],
+        };
+
+        let first = validate_values(
+            &schema,
+            &HashMap::from([
+                ("enabled".to_owned(), "on".to_owned()),
+                ("count".to_owned(), "01.0".to_owned()),
+            ]),
+            false,
+        )
+        .unwrap();
+        let second = validate_values(
+            &schema,
+            &HashMap::from([
+                ("enabled".to_owned(), "true".to_owned()),
+                ("count".to_owned(), "1".to_owned()),
+            ]),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(first.values["enabled"], "true");
+        assert_eq!(first.values["count"], "01.0");
+        assert_eq!(first.typed_values, second.typed_values);
+    }
+
+    #[test]
+    fn rejects_invalid_unit_bearing_numbers_and_preserves_unknowns_when_allowed() {
+        let schema = ParameterSchema {
+            schema_version: SCHEMA_VERSION,
+            source: source(),
+            parameters: vec![Parameter {
+                id: "wallThickness".to_owned(),
+                label: "Wall Thickness".to_owned(),
+                description: None,
+                kind: ParameterKind::Number,
+                required: true,
+                default_value: None,
+                options: Vec::new(),
+                hidden: false,
+                visibility_condition: None,
+                precision: None,
+                widget: None,
+                units: Some("millimeter".to_owned()),
+                raw: Value::Null,
+            }],
+        };
+
+        let errors = validate_values(
+            &schema,
+            &HashMap::from([("wallThickness".to_owned(), "abc".to_owned())]),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(errors, vec!["Wall Thickness must be a number"]);
+
+        let errors = validate_values(
+            &schema,
+            &HashMap::from([("wallThickness".to_owned(), "1.5 bananas".to_owned())]),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(errors, vec!["Wall Thickness must be a number"]);
+
+        let errors = validate_values(
+            &schema,
+            &HashMap::from([("wallThickness".to_owned(), "foo 2 in bar".to_owned())]),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(errors, vec!["Wall Thickness must be a number"]);
+
+        let validated = validate_values(
+            &schema,
+            &HashMap::from([
+                ("wallThickness".to_owned(), "1.5 mm".to_owned()),
+                ("custom".to_owned(), "surprise".to_owned()),
+            ]),
+            true,
+        )
+        .unwrap();
+        assert_eq!(validated.values["custom"], "surprise");
+        assert_eq!(
+            validated.typed_values["custom"],
+            CanonicalParameterValue::Text {
+                value: "surprise".to_owned(),
+            }
+        );
     }
 
     #[test]

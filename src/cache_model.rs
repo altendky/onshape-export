@@ -2,7 +2,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::Serialize;
 
-use crate::{cache_key, catalog, parameters::ParameterSchema};
+use crate::{
+    cache_key, catalog,
+    parameters::{CanonicalParameterValue, ParameterSchema},
+};
 
 pub const RESPONSE_SHAPE_VERSION: u32 = 1;
 pub const ARTIFACT_SET_SCHEMA_VERSION: u32 = 1;
@@ -103,7 +106,7 @@ struct ConfigHashPayload<'a> {
     canonicalization_version: u32,
     source_hash: &'a str,
     parameter_schema_version: u32,
-    values: BTreeMap<String, String>,
+    typed_values: &'a BTreeMap<String, CanonicalParameterValue>,
 }
 
 #[derive(Serialize)]
@@ -138,7 +141,7 @@ pub fn source_hash(identity: &ResolvedOnshapeSourceIdentity) -> anyhow::Result<S
 pub fn config_hash(
     source_hash: &str,
     parameter_schema_version: u32,
-    values: &HashMap<String, String>,
+    typed_values: &BTreeMap<String, CanonicalParameterValue>,
 ) -> anyhow::Result<String> {
     cache_key::hash_json(
         "config-v2",
@@ -146,7 +149,7 @@ pub fn config_hash(
             canonicalization_version: cache_key::CANONICALIZATION_VERSION,
             source_hash,
             parameter_schema_version,
-            values: canonical_values(values),
+            typed_values,
         },
     )
 }
@@ -212,6 +215,7 @@ pub fn artifact_set_hash(identity: &ArtifactSetIdentity) -> anyhow::Result<Strin
 mod tests {
     use super::*;
     use crate::catalog::ElementKind;
+    use crate::parameters::CanonicalParameterValue;
     use serde_json::json;
 
     #[test]
@@ -253,13 +257,31 @@ mod tests {
     #[test]
     fn config_hash_uses_source_hash_and_canonical_values() {
         let source_hash = "source";
-        let first = HashMap::from([
-            ("b".to_owned(), "2".to_owned()),
-            ("a".to_owned(), "1".to_owned()),
+        let first = BTreeMap::from([
+            (
+                "a".to_owned(),
+                CanonicalParameterValue::Number {
+                    expression: "1".to_owned(),
+                    units: None,
+                },
+            ),
+            (
+                "b".to_owned(),
+                CanonicalParameterValue::Boolean { value: true },
+            ),
         ]);
-        let second = HashMap::from([
-            ("a".to_owned(), "1".to_owned()),
-            ("b".to_owned(), "2".to_owned()),
+        let second = BTreeMap::from([
+            (
+                "b".to_owned(),
+                CanonicalParameterValue::Boolean { value: true },
+            ),
+            (
+                "a".to_owned(),
+                CanonicalParameterValue::Number {
+                    expression: "1".to_owned(),
+                    units: None,
+                },
+            ),
         ]);
 
         assert_eq!(
@@ -269,6 +291,25 @@ mod tests {
         assert_ne!(
             config_hash(source_hash, 2, &first).unwrap(),
             config_hash("other", 2, &second).unwrap()
+        );
+    }
+
+    #[test]
+    fn config_hash_distinguishes_boolean_and_text_values() {
+        let boolean = BTreeMap::from([(
+            "enabled".to_owned(),
+            CanonicalParameterValue::Boolean { value: true },
+        )]);
+        let text = BTreeMap::from([(
+            "enabled".to_owned(),
+            CanonicalParameterValue::Text {
+                value: "true".to_owned(),
+            },
+        )]);
+
+        assert_ne!(
+            config_hash("source", 2, &boolean).unwrap(),
+            config_hash("source", 2, &text).unwrap()
         );
     }
 
