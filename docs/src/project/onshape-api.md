@@ -70,7 +70,9 @@ Request body shape from the OpenAPI schema:
 }
 ```
 
-Encoded configuration results should be cached by source identity, `config_hash`, and encoding request context. The encoding response is Onshape's request representation; it does not replace the application's canonical `configHash`.
+Encoded configuration results should be cached by source identity, `configHash`, and normalized encoding request context. The encoding response is Onshape's request representation; it does not replace the application's canonical `configHash`.
+
+The encoding request context should include only fields that can affect the encoding result, such as the endpoint/spec version when relevant, resolved source access context, `linkDocumentId`, and the canonical encoding request body. Normalize and hash that context into an `encodingContextHash`; avoid raw headers, user/session identifiers, or tenant data unless live testing proves they affect encoding. The cache key should combine `sourceHash`, `configHash`, and `encodingContextHash`, and obsolete context variants should be pruned or expired to avoid unbounded cache growth.
 
 ## Preview Export
 
