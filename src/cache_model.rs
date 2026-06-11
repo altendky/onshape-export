@@ -4,6 +4,9 @@ use serde::Serialize;
 
 use crate::{cache_key, catalog, parameters::ParameterSchema};
 
+pub const RESPONSE_SHAPE_VERSION: u32 = 1;
+pub const ARTIFACT_SET_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedOnshapeSourceIdentity {
@@ -13,6 +16,75 @@ pub struct ResolvedOnshapeSourceIdentity {
     pub element_id: String,
     pub element_kind: catalog::ElementKind,
     pub link_document_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EncodedConfigurationIdentity {
+    pub encoded_id: String,
+    pub query_param: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestIdentity<TPathParams, TQuery, TBody>
+where
+    TPathParams: Serialize,
+    TQuery: Serialize,
+    TBody: Serialize,
+{
+    pub api_host_class: String,
+    pub api_spec_version: Option<String>,
+    pub operation: String,
+    pub method: String,
+    pub path_template: String,
+    pub path_params: TPathParams,
+    pub query: TQuery,
+    pub body: TBody,
+    pub encoded_configuration: Option<EncodedConfigurationIdentity>,
+    pub defaults_policy_version: String,
+    pub request_builder_version: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResponseIdentity<TStartResponse, TFinalResponse, TPollState>
+where
+    TStartResponse: Serialize,
+    TFinalResponse: Serialize,
+    TPollState: Serialize,
+{
+    pub translation_id: String,
+    pub start_response: TStartResponse,
+    pub final_response: TFinalResponse,
+    pub poll_state: TPollState,
+    pub response_shape_version: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostprocessIdentity<TPolicy>
+where
+    TPolicy: Serialize,
+{
+    pub raw_payload_hash: String,
+    pub processor_name: String,
+    pub processor_version: String,
+    pub policy: TPolicy,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactSetIdentity {
+    pub artifact_set_schema_version: u32,
+    pub output_kind: String,
+    pub format: String,
+    pub source_hash: String,
+    pub config_hash: String,
+    pub options_hash: String,
+    pub request_hash: String,
+    pub raw_payload_hash: String,
+    pub postprocess_hash: String,
 }
 
 #[derive(Serialize)]
@@ -103,10 +175,44 @@ where
     )
 }
 
+pub fn request_hash<TPathParams, TQuery, TBody>(
+    identity: &RequestIdentity<TPathParams, TQuery, TBody>,
+) -> anyhow::Result<String>
+where
+    TPathParams: Serialize,
+    TQuery: Serialize,
+    TBody: Serialize,
+{
+    cache_key::hash_json("request-v2", identity)
+}
+
+pub fn response_hash<TStartResponse, TFinalResponse, TPollState>(
+    identity: &ResponseIdentity<TStartResponse, TFinalResponse, TPollState>,
+) -> anyhow::Result<String>
+where
+    TStartResponse: Serialize,
+    TFinalResponse: Serialize,
+    TPollState: Serialize,
+{
+    cache_key::hash_json("response-v2", identity)
+}
+
+pub fn postprocess_hash<TPolicy>(identity: &PostprocessIdentity<TPolicy>) -> anyhow::Result<String>
+where
+    TPolicy: Serialize,
+{
+    cache_key::hash_json("postprocess-v2", identity)
+}
+
+pub fn artifact_set_hash(identity: &ArtifactSetIdentity) -> anyhow::Result<String> {
+    cache_key::hash_json("artifact-set-v2", identity)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::catalog::ElementKind;
+    use serde_json::json;
 
     #[test]
     fn source_hash_ignores_version_id_once_microversion_is_resolved() {
@@ -163,6 +269,105 @@ mod tests {
         assert_ne!(
             config_hash(source_hash, 2, &first).unwrap(),
             config_hash("other", 2, &second).unwrap()
+        );
+    }
+
+    #[test]
+    fn request_hash_changes_when_defaults_policy_changes() {
+        let path_params = BTreeMap::from([
+            ("did".to_owned(), "document".to_owned()),
+            ("eid".to_owned(), "element".to_owned()),
+        ]);
+        let query = BTreeMap::<String, String>::new();
+        let body = json!({"formatName": "STEP"});
+        let first = RequestIdentity {
+            api_host_class: "cad.onshape.com".to_owned(),
+            api_spec_version: None,
+            operation: "createExport".to_owned(),
+            method: "POST".to_owned(),
+            path_template: "/api/elements/d/{did}/e/{eid}/translations".to_owned(),
+            path_params: path_params.clone(),
+            query: query.clone(),
+            body: body.clone(),
+            encoded_configuration: Some(EncodedConfigurationIdentity {
+                encoded_id: "encoded".to_owned(),
+                query_param: "configuration=encoded".to_owned(),
+            }),
+            defaults_policy_version: "defaults-v1".to_owned(),
+            request_builder_version: "builder-v1".to_owned(),
+        };
+        let second = RequestIdentity {
+            defaults_policy_version: "defaults-v2".to_owned(),
+            ..first.clone()
+        };
+
+        assert_ne!(
+            request_hash(&first).unwrap(),
+            request_hash(&second).unwrap()
+        );
+    }
+
+    #[test]
+    fn response_hash_changes_when_translation_id_changes() {
+        let first = ResponseIdentity {
+            translation_id: "translation-1".to_owned(),
+            start_response: json!({"id": "translation-1"}),
+            final_response: json!({"requestState": "DONE"}),
+            poll_state: json!({"attempt": 3}),
+            response_shape_version: RESPONSE_SHAPE_VERSION,
+        };
+        let second = ResponseIdentity {
+            translation_id: "translation-2".to_owned(),
+            start_response: json!({"id": "translation-2"}),
+            ..first.clone()
+        };
+
+        assert_ne!(
+            response_hash(&first).unwrap(),
+            response_hash(&second).unwrap()
+        );
+    }
+
+    #[test]
+    fn postprocess_hash_changes_when_policy_changes() {
+        let first = PostprocessIdentity {
+            raw_payload_hash: "raw".to_owned(),
+            processor_name: "preview-extract".to_owned(),
+            processor_version: "v1".to_owned(),
+            policy: json!({"acceptedInputShapes": ["direct_glb"]}),
+        };
+        let second = PostprocessIdentity {
+            policy: json!({"acceptedInputShapes": ["direct_glb", "zip_single_glb"]}),
+            ..first.clone()
+        };
+
+        assert_ne!(
+            postprocess_hash(&first).unwrap(),
+            postprocess_hash(&second).unwrap()
+        );
+    }
+
+    #[test]
+    fn artifact_set_hash_uses_request_and_postprocess_identity() {
+        let first = ArtifactSetIdentity {
+            artifact_set_schema_version: ARTIFACT_SET_SCHEMA_VERSION,
+            output_kind: "preview".to_owned(),
+            format: "glb".to_owned(),
+            source_hash: "source".to_owned(),
+            config_hash: "config".to_owned(),
+            options_hash: "options".to_owned(),
+            request_hash: "request-1".to_owned(),
+            raw_payload_hash: "raw".to_owned(),
+            postprocess_hash: "postprocess".to_owned(),
+        };
+        let second = ArtifactSetIdentity {
+            request_hash: "request-2".to_owned(),
+            ..first.clone()
+        };
+
+        assert_ne!(
+            artifact_set_hash(&first).unwrap(),
+            artifact_set_hash(&second).unwrap()
         );
     }
 }
