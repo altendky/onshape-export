@@ -14,6 +14,12 @@ pub struct StorageClient {
     public_base_url: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ObjectMetadata {
+    pub content_length: i64,
+    pub content_type: Option<String>,
+}
+
 impl StorageClient {
     pub async fn new(config: StorageConfig) -> anyhow::Result<Self> {
         let mut builder = Builder::new().region(Region::new(config.region.clone()));
@@ -117,6 +123,20 @@ impl StorageClient {
             .send()
             .await?;
         Ok(output.body.collect().await?.into_bytes().to_vec())
+    }
+
+    pub async fn head_object(&self, key: &str) -> anyhow::Result<ObjectMetadata> {
+        let output = self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await?;
+        Ok(ObjectMetadata {
+            content_length: output.content_length.unwrap_or_default(),
+            content_type: output.content_type,
+        })
     }
 
     pub fn public_url(&self, key: &str) -> Option<String> {

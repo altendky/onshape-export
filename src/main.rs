@@ -220,7 +220,6 @@ struct ArtifactStatusResponse {
 struct PreviewArtifact {
     logical_path: String,
     original_path: Option<String>,
-    object_key: String,
     content_type: &'static str,
     bytes: Vec<u8>,
     sidecars: Vec<PreviewAsset>,
@@ -231,7 +230,6 @@ struct PreviewAsset {
     role: &'static str,
     logical_path: String,
     original_path: Option<String>,
-    object_key: String,
     content_type: &'static str,
     bytes: Vec<u8>,
 }
@@ -276,7 +274,8 @@ struct DerivedArtifactFile<'a> {
     role: &'a str,
     logical_path: &'a str,
     original_path: Option<&'a str>,
-    object_key: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    object_key: Option<&'a str>,
     content_type: &'a str,
     byte_len: usize,
     sha256: String,
@@ -816,9 +815,8 @@ async fn generate_preview_for_values(
 ) -> anyhow::Result<String> {
     let source_hash = resolve_source_hash(state, model).await?;
     let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
-    let artifact_key = preview_artifact_key(&source_hash, model, &config_hash);
 
-    if let Some(record) = state.db.artifact(&artifact_key).await? {
+    if let Some(record) = ready_preview_artifact(state, model, &source_hash, &config_hash).await? {
         return Ok(record.object_key);
     }
 
@@ -828,7 +826,6 @@ async fn generate_preview_for_values(
         &source_hash,
         &validated.values,
         &config_hash,
-        &artifact_key,
         None,
         None,
     )
@@ -974,9 +971,10 @@ async fn generate_download_for_values(
 ) -> anyhow::Result<Option<String>> {
     let source_hash = resolve_source_hash(state, model).await?;
     let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
-    let artifact_key = download_artifact_key(&source_hash, model, &config_hash, format);
 
-    if let Some(record) = state.db.artifact(&artifact_key).await? {
+    if let Some(record) =
+        ready_download_artifact(state, model, &source_hash, &config_hash, format).await?
+    {
         return Ok(Some(record.object_key));
     }
 
@@ -986,7 +984,6 @@ async fn generate_download_for_values(
         &source_hash,
         &validated.values,
         &config_hash,
-        &artifact_key,
         format,
         None,
         None,
@@ -1575,9 +1572,8 @@ async fn generate_preview(
         };
     let source_hash = resolve_source_hash(&state, model).await?;
     let config_hash = persist_configuration_selection(&state, &source_hash, &validated).await?;
-    let artifact_key = preview_artifact_key(&source_hash, model, &config_hash);
 
-    if let Some(record) = state.db.artifact(&artifact_key).await? {
+    if let Some(record) = ready_preview_artifact(&state, model, &source_hash, &config_hash).await? {
         let preview = format!(
             "{}{}",
             render_clean_model_url_script(model)?,
@@ -1651,9 +1647,10 @@ async fn generate_download(
         };
     let source_hash = resolve_source_hash(&state, model).await?;
     let config_hash = persist_configuration_selection(&state, &source_hash, &validated).await?;
-    let artifact_key = download_artifact_key(&source_hash, model, &config_hash, format);
 
-    if let Some(record) = state.db.artifact(&artifact_key).await? {
+    if let Some(record) =
+        ready_download_artifact(&state, model, &source_hash, &config_hash, format).await?
+    {
         let preview = format!(
             "{}{}",
             render_clean_model_url_script(model)?,
@@ -1694,11 +1691,17 @@ async fn preview_status(
 ) -> Result<Json<ArtifactStatusResponse>, AppError> {
     let model = published_model(&state.catalog, &slug).ok_or(AppError::NotFound)?;
     let source_hash = resolve_source_hash(&state, model).await?;
-    let artifact_key = preview_artifact_key(&source_hash, model, &config_hash);
     let work_keys = preview_status_job_keys(&state, &source_hash, model, &config_hash).await?;
+    let artifact = ready_preview_artifact(&state, model, &source_hash, &config_hash).await?;
 
     Ok(Json(
-        artifact_status(&state, &artifact_key, &work_keys).await?,
+        artifact_status(
+            &state,
+            preview_lookup_key(&source_hash, model, &config_hash),
+            artifact,
+            &work_keys,
+        )
+        .await?,
     ))
 }
 
@@ -1712,23 +1715,31 @@ async fn download_status(
         return Err(AppError::NotFound);
     }
     let source_hash = resolve_source_hash(&state, model).await?;
-    let artifact_key = download_artifact_key(&source_hash, model, &config_hash, format);
     let work_keys =
         download_status_job_keys(&state, &source_hash, model, &config_hash, format).await?;
+    let artifact =
+        ready_download_artifact(&state, model, &source_hash, &config_hash, format).await?;
 
     Ok(Json(
-        artifact_status(&state, &artifact_key, &work_keys).await?,
+        artifact_status(
+            &state,
+            download_lookup_key(&source_hash, model, &config_hash, format),
+            artifact,
+            &work_keys,
+        )
+        .await?,
     ))
 }
 
 async fn artifact_status(
     state: &AppState,
-    artifact_key: &str,
+    lookup_key: String,
+    artifact: Option<db::ArtifactRecord>,
     work_keys: &[String],
 ) -> Result<ArtifactStatusResponse, AppError> {
-    if let Some(record) = state.db.artifact(artifact_key).await? {
+    if let Some(record) = artifact {
         return Ok(ArtifactStatusResponse {
-            artifact_key: artifact_key.to_owned(),
+            artifact_key: record.artifact_key.clone(),
             status: "ready".to_owned(),
             message: "Artifact is ready.".to_owned(),
             public_url: state.storage.public_url(&record.object_key),
@@ -1774,7 +1785,7 @@ async fn artifact_status(
             _ => "Generation status is unknown.",
         };
         return Ok(ArtifactStatusResponse {
-            artifact_key: artifact_key.to_owned(),
+            artifact_key: lookup_key,
             status: job.status,
             message: message.to_owned(),
             public_url: None,
@@ -1796,7 +1807,7 @@ async fn artifact_status(
     }
 
     Ok(ArtifactStatusResponse {
-        artifact_key: artifact_key.to_owned(),
+        artifact_key: lookup_key,
         status: "missing".to_owned(),
         message: "No cached artifact or queued generation was found.".to_owned(),
         public_url: None,
@@ -1981,15 +1992,17 @@ async fn enqueue_scheduled_rebuild(state: &AppState) -> anyhow::Result<()> {
 
         let source_hash = resolve_source_hash(state, model).await?;
         let config_hash = persist_configuration_selection(state, &source_hash, &validated).await?;
-        let preview_artifact_key = preview_artifact_key(&source_hash, model, &config_hash);
-        if state.db.artifact(&preview_artifact_key).await?.is_none()
+        if ready_preview_artifact(state, model, &source_hash, &config_hash)
+            .await?
+            .is_none()
             && enqueue_preview(state, model, &validated).await?
         {
             enqueued += 1;
         }
         for format in &model.exports.downloads {
-            let artifact_key = download_artifact_key(&source_hash, model, &config_hash, *format);
-            if state.db.artifact(&artifact_key).await?.is_none()
+            if ready_download_artifact(state, model, &source_hash, &config_hash, *format)
+                .await?
+                .is_none()
                 && enqueue_download(state, model, &validated, *format).await?
             {
                 enqueued += 1;
@@ -2193,15 +2206,16 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                 anyhow::ensure!(format == "glb", "unexpected queued preview export format");
             }
             persist_configuration_selection(state, &source_hash, &validated).await?;
-            let artifact_key = preview_artifact_key(&source_hash, model, &config_hash);
-            if state.db.artifact(&artifact_key).await?.is_none() {
+            if ready_preview_artifact(state, model, &source_hash, &config_hash)
+                .await?
+                .is_none()
+            {
                 refresh_preview(
                     state,
                     model,
                     &source_hash,
                     &validated.values,
                     &config_hash,
-                    &artifact_key,
                     Some(&job.work_key),
                     (!request_hash.is_empty()).then_some(request_hash.as_str()),
                 )
@@ -2284,15 +2298,16 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                 );
             }
             persist_configuration_selection(state, &source_hash, &validated).await?;
-            let artifact_key = download_artifact_key(&source_hash, model, &config_hash, format);
-            if state.db.artifact(&artifact_key).await?.is_none() {
+            if ready_download_artifact(state, model, &source_hash, &config_hash, format)
+                .await?
+                .is_none()
+            {
                 refresh_download(
                     state,
                     model,
                     &source_hash,
                     &validated.values,
                     &config_hash,
-                    &artifact_key,
                     format,
                     Some(&job.work_key),
                     (!request_hash.is_empty()).then_some(request_hash.as_str()),
@@ -2374,9 +2389,8 @@ async fn render_preview_for_hash(
     label: &str,
 ) -> Result<String, AppError> {
     let source_hash = resolve_source_hash(state, model).await?;
-    let artifact_key = preview_artifact_key(&source_hash, model, config_hash);
 
-    match state.db.artifact(&artifact_key).await? {
+    match ready_preview_artifact(state, model, &source_hash, config_hash).await? {
         Some(record) => Ok(render_preview_viewer(state, &record.object_key)),
         None => Ok(format!("<p>No cached preview for {label} yet.</p>")),
     }
@@ -2406,8 +2420,9 @@ async fn render_downloads_for_values(
     let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
     let mut items = String::new();
     for format in &model.exports.downloads {
-        let artifact_key = download_artifact_key(&source_hash, model, &config_hash, *format);
-        if let Some(record) = state.db.artifact(&artifact_key).await? {
+        if let Some(record) =
+            ready_download_artifact(state, model, &source_hash, &config_hash, *format).await?
+        {
             items.push_str(&format!(
                 "<li>{}</li>",
                 render_download_link(state, *format, &record.object_key)
@@ -2582,9 +2597,13 @@ async fn download_translation_result(
             .unwrap_or_default()
     );
     let external_data_id = persisted_result_external_data_id(translation)?;
-    if let Some(raw_payload) =
-        existing_raw_payload_for_source(state, request_hash, &translation.translation_id, &external_data_id)
-            .await?
+    if let Some(raw_payload) = existing_raw_payload_for_source(
+        state,
+        request_hash,
+        &translation.translation_id,
+        &external_data_id,
+    )
+    .await?
     {
         return Ok(raw_payload);
     }
@@ -2608,8 +2627,13 @@ async fn persisted_raw_payload_for_translation_result(
     translation: &db::TranslationRecord,
 ) -> anyhow::Result<Option<PersistedRawPayload>> {
     let external_data_id = persisted_result_external_data_id(translation)?;
-    existing_raw_payload_for_source(state, request_hash, &translation.translation_id, &external_data_id)
-        .await
+    existing_raw_payload_for_source(
+        state,
+        request_hash,
+        &translation.translation_id,
+        &external_data_id,
+    )
+    .await
 }
 
 async fn existing_raw_payload_for_source(
@@ -2735,9 +2759,7 @@ async fn persist_downloaded_raw_payload(
     if let Err(error) = zip_manifest_json {
         return Err(error).context("inspecting raw payload ZIP inventory");
     }
-    Ok(PersistedRawPayload {
-        raw_payload_hash,
-    })
+    Ok(PersistedRawPayload { raw_payload_hash })
 }
 
 async fn load_persisted_raw_payload(
@@ -2795,13 +2817,33 @@ fn zip_inventory_json(bytes: &[u8]) -> anyhow::Result<Option<String>> {
     Ok(Some(serde_json::to_string(&entries)?))
 }
 
+async fn verify_uploaded_object(
+    state: &AppState,
+    object_key: &str,
+    expected_content_type: &str,
+    expected_len: i64,
+) -> anyhow::Result<()> {
+    let metadata = state.storage.head_object(object_key).await?;
+    anyhow::ensure!(
+        metadata.content_length == expected_len,
+        "uploaded object length mismatch for {object_key}: expected {expected_len}, got {}",
+        metadata.content_length
+    );
+    if let Some(content_type) = metadata.content_type.as_deref() {
+        anyhow::ensure!(
+            content_type == expected_content_type,
+            "uploaded object content type mismatch for {object_key}: expected {expected_content_type}, got {content_type}"
+        );
+    }
+    Ok(())
+}
+
 async fn refresh_preview(
     state: &AppState,
     model: &catalog::Model,
     source_hash: &str,
     values: &HashMap<String, String>,
     config_hash: &str,
-    artifact_key: &str,
     producing_job_key: Option<&str>,
     expected_request_hash: Option<&str>,
 ) -> anyhow::Result<String> {
@@ -2815,78 +2857,83 @@ async fn refresh_preview(
     let raw_payload =
         execute_staged_export_request(state, &prepared.request_hash, &prepared.request).await?;
     let config_values_json = config_values_json(values)?;
-    let preview_artifact = match postprocess_preview_artifact(
-        state,
+    let preview_artifact =
+        match postprocess_preview_artifact(state, &raw_payload.raw_payload_hash).await {
+            Ok(preview_artifact) => preview_artifact,
+            Err(error) => {
+                tracing::warn!(
+                    request_hash = %prepared.request_hash,
+                    raw_payload_hash = %raw_payload.raw_payload_hash,
+                    error = %error,
+                    "preview post-processing failed"
+                );
+                return Err(error);
+            }
+        };
+    let artifact_key = preview_artifact_key(
         source_hash,
-        model,
         config_hash,
+        &prepared.options_hash,
+        if preview_artifact.content_type == "model/gltf-binary" {
+            "glb"
+        } else {
+            "gltf"
+        },
+        &prepared.request_hash,
         &raw_payload.raw_payload_hash,
-    )
-    .await
-    {
-        Ok(preview_artifact) => preview_artifact,
-        Err(error) => {
-            tracing::warn!(
-                request_hash = %prepared.request_hash,
-                raw_payload_hash = %raw_payload.raw_payload_hash,
-                error = %error,
-                "preview post-processing failed"
-            );
-            return Err(error);
-        }
-    };
+        &preview_artifact.postprocess_hash,
+    )?;
+    let primary_object_key =
+        preview_asset_object_key(&artifact_key, &preview_artifact.logical_path);
+    let sidecar_object_keys = preview_artifact
+        .sidecars
+        .iter()
+        .map(|sidecar| preview_asset_object_key(&artifact_key, &sidecar.logical_path))
+        .collect::<Vec<_>>();
     state
         .storage
         .put_bytes(
-            &preview_artifact.object_key,
+            &primary_object_key,
             preview_artifact.bytes.clone(),
             preview_artifact.content_type,
         )
         .await?;
-    for sidecar in &preview_artifact.sidecars {
+    verify_uploaded_object(
+        state,
+        &primary_object_key,
+        preview_artifact.content_type,
+        preview_artifact.bytes.len() as i64,
+    )
+    .await?;
+    for (sidecar, object_key) in preview_artifact
+        .sidecars
+        .iter()
+        .zip(sidecar_object_keys.iter())
+    {
         state
             .storage
-            .put_bytes(&sidecar.object_key, sidecar.bytes.clone(), sidecar.content_type)
+            .put_bytes(object_key, sidecar.bytes.clone(), sidecar.content_type)
             .await?;
+        verify_uploaded_object(
+            state,
+            object_key,
+            sidecar.content_type,
+            sidecar.bytes.len() as i64,
+        )
+        .await?;
     }
     let preview_sha256 = cache_key::hex_sha256(&preview_artifact.bytes);
-    state
-        .db
-        .upsert_artifact(ArtifactUpsert {
-            artifact_key,
-            model_slug: &model.slug,
-            config_hash,
-            output_kind: "preview_glb",
-            format: if preview_artifact.content_type == "model/gltf-binary" {
-                "glb"
-            } else {
-                "gltf"
-            },
-            object_key: &preview_artifact.object_key,
-            content_type: preview_artifact.content_type,
-            byte_len: preview_artifact.bytes.len() as i64,
-            sha256: &preview_sha256,
-            producing_job_key,
-            source_hash,
-            options_hash: &prepared.options_hash,
-            request_hash: Some(&prepared.request_hash),
-            raw_payload_hash: Some(&raw_payload.raw_payload_hash),
-            postprocess_hash: Some(&preview_artifact.postprocess_hash),
-            parameter_schema_version: SCHEMA_VERSION.into(),
-            config_values_json: &config_values_json,
-        })
-        .await?;
     let sidecar_sha256 = preview_artifact
         .sidecars
         .iter()
         .map(|sidecar| cache_key::hex_sha256(&sidecar.bytes))
         .collect::<Vec<_>>();
     let mut artifact_files = vec![db::ArtifactFileInsert {
-        artifact_set_hash: artifact_key,
+        artifact_set_hash: &artifact_key,
         role: "viewer_entry",
         logical_path: &preview_artifact.logical_path,
         original_path: preview_artifact.original_path.as_deref(),
-        object_key: &preview_artifact.object_key,
+        object_key: &primary_object_key,
         content_type: preview_artifact.content_type,
         byte_len: preview_artifact.bytes.len() as i64,
         sha256: &preview_sha256,
@@ -2896,13 +2943,14 @@ async fn refresh_preview(
         preview_artifact
             .sidecars
             .iter()
+            .zip(sidecar_object_keys.iter())
             .zip(sidecar_sha256.iter())
-            .map(|(sidecar, sha256)| db::ArtifactFileInsert {
-                artifact_set_hash: artifact_key,
+            .map(|((sidecar, object_key), sha256)| db::ArtifactFileInsert {
+                artifact_set_hash: &artifact_key,
                 role: sidecar.role,
                 logical_path: &sidecar.logical_path,
                 original_path: sidecar.original_path.as_deref(),
-                object_key: &sidecar.object_key,
+                object_key,
                 content_type: sidecar.content_type,
                 byte_len: sidecar.bytes.len() as i64,
                 sha256,
@@ -2911,25 +2959,55 @@ async fn refresh_preview(
     );
     state
         .db
-        .replace_artifact_files(artifact_key, &artifact_files)
+        .publish_artifact(
+            ArtifactUpsert {
+                artifact_key: &artifact_key,
+                model_slug: &model.slug,
+                config_hash,
+                output_kind: "preview_glb",
+                format: if preview_artifact.content_type == "model/gltf-binary" {
+                    "glb"
+                } else {
+                    "gltf"
+                },
+                object_key: &primary_object_key,
+                content_type: preview_artifact.content_type,
+                byte_len: preview_artifact.bytes.len() as i64,
+                sha256: &preview_sha256,
+                producing_job_key,
+                source_hash,
+                options_hash: &prepared.options_hash,
+                request_hash: Some(&prepared.request_hash),
+                raw_payload_hash: Some(&raw_payload.raw_payload_hash),
+                postprocess_hash: Some(&preview_artifact.postprocess_hash),
+                parameter_schema_version: SCHEMA_VERSION.into(),
+                config_values_json: &config_values_json,
+            },
+            &artifact_files,
+        )
+        .await?;
+    state
+        .db
+        .supersede_ready_artifacts_for_output(
+            source_hash,
+            config_hash,
+            &prepared.options_hash,
+            "preview_glb",
+            &artifact_key,
+            Some("replaced"),
+        )
         .await?;
     tracing::debug!(request_hash = %prepared.request_hash, raw_payload_hash = %raw_payload.raw_payload_hash, %artifact_key, "staged preview export request");
     rewrite_manifest(state, model, config_hash, Some(values)).await?;
-    Ok(preview_artifact.object_key)
+    Ok(primary_object_key)
 }
 
-fn preview_artifact_from_onshape_bytes(
-    source_hash: &str,
-    model: &catalog::Model,
-    config_hash: &str,
-    bytes: Vec<u8>,
-) -> anyhow::Result<PreviewArtifact> {
+fn preview_artifact_from_onshape_bytes(bytes: Vec<u8>) -> anyhow::Result<PreviewArtifact> {
     if bytes.starts_with(b"glTF") {
         validate_glb(&bytes).context("validating direct GLB preview export")?;
         return Ok(PreviewArtifact {
             logical_path: "preview.glb".to_owned(),
             original_path: None,
-            object_key: preview_glb_object_key(source_hash, model, config_hash),
             content_type: "model/gltf-binary",
             bytes,
             sidecars: Vec::new(),
@@ -2937,14 +3015,13 @@ fn preview_artifact_from_onshape_bytes(
     }
 
     if bytes.starts_with(b"PK\x03\x04") {
-        return preview_artifact_from_zip(source_hash, model, config_hash, bytes);
+        return preview_artifact_from_zip(bytes);
     }
 
     validate_gltf_json(&bytes).context("validating direct glTF preview export")?;
     Ok(PreviewArtifact {
         logical_path: "preview.gltf".to_owned(),
         original_path: None,
-        object_key: preview_gltf_object_key(source_hash, model, config_hash),
         content_type: "model/gltf+json",
         bytes,
         sidecars: Vec::new(),
@@ -2964,12 +3041,7 @@ fn validate_gltf_json(bytes: &[u8]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn preview_artifact_from_zip(
-    source_hash: &str,
-    model: &catalog::Model,
-    config_hash: &str,
-    bytes: Vec<u8>,
-) -> anyhow::Result<PreviewArtifact> {
+fn preview_artifact_from_zip(bytes: Vec<u8>) -> anyhow::Result<PreviewArtifact> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))?;
     let glb_entries = zip_entry_indices_with_extension(&mut archive, "glb")?;
     match glb_entries.as_slice() {
@@ -2979,13 +3051,12 @@ fn preview_artifact_from_zip(
             Ok(PreviewArtifact {
                 logical_path: "preview.glb".to_owned(),
                 original_path: Some(safe_zip_asset_name(archive.by_index(*index)?.name())?),
-                object_key: preview_glb_object_key(source_hash, model, config_hash),
                 content_type: "model/gltf-binary",
                 bytes,
                 sidecars: Vec::new(),
             })
         }
-        [] => preview_artifact_from_gltf_zip(source_hash, model, config_hash, archive),
+        [] => preview_artifact_from_gltf_zip(archive),
         _ => anyhow::bail!(
             "Onshape preview ZIP contained multiple GLB files; expected exactly one GLB preview artifact"
         ),
@@ -2993,9 +3064,6 @@ fn preview_artifact_from_zip(
 }
 
 fn preview_artifact_from_gltf_zip(
-    source_hash: &str,
-    model: &catalog::Model,
-    config_hash: &str,
     mut archive: zip::ZipArchive<Cursor<Vec<u8>>>,
 ) -> anyhow::Result<PreviewArtifact> {
     let gltf_entries = zip_entry_indices_with_extension(&mut archive, "gltf")?;
@@ -3029,7 +3097,6 @@ fn preview_artifact_from_gltf_zip(
             role: "sidecar",
             logical_path: asset_name.clone(),
             original_path: Some(asset_name.clone()),
-            object_key: preview_asset_object_key(source_hash, model, config_hash, &asset_name),
             content_type: preview_asset_content_type(&asset_name),
             bytes,
         });
@@ -3038,7 +3105,6 @@ fn preview_artifact_from_gltf_zip(
     Ok(PreviewArtifact {
         logical_path: primary_name.clone(),
         original_path: Some(primary_name.clone()),
-        object_key: preview_asset_object_key(source_hash, model, config_hash, &primary_name),
         content_type: "model/gltf+json",
         bytes: primary_bytes,
         sidecars,
@@ -3152,7 +3218,6 @@ async fn refresh_download(
     source_hash: &str,
     values: &HashMap<String, String>,
     config_hash: &str,
-    artifact_key: &str,
     format: catalog::DownloadFormat,
     producing_job_key: Option<&str>,
     expected_request_hash: Option<&str>,
@@ -3168,80 +3233,103 @@ async fn refresh_download(
     let raw_payload =
         execute_staged_export_request(state, &prepared.request_hash, &prepared.request).await?;
     let config_values_json = config_values_json(values)?;
-    let download_artifact = match postprocess_download_artifact(
-        state,
+    let download_artifact =
+        match postprocess_download_artifact(state, model, format, &raw_payload.raw_payload_hash)
+            .await
+        {
+            Ok(download_artifact) => download_artifact,
+            Err(error) => {
+                tracing::warn!(
+                    request_hash = %prepared.request_hash,
+                    raw_payload_hash = %raw_payload.raw_payload_hash,
+                    error = %error,
+                    "download post-processing failed"
+                );
+                return Err(error);
+            }
+        };
+    let artifact_key = download_artifact_key(
         source_hash,
-        model,
         config_hash,
-        format,
+        &prepared.options_hash,
+        format.slug(),
+        &prepared.request_hash,
         &raw_payload.raw_payload_hash,
-    )
-    .await
-    {
-        Ok(download_artifact) => download_artifact,
-        Err(error) => {
-            tracing::warn!(
-                request_hash = %prepared.request_hash,
-                raw_payload_hash = %raw_payload.raw_payload_hash,
-                error = %error,
-                "download post-processing failed"
-            );
-            return Err(error);
-        }
-    };
+        &download_artifact.postprocess_hash,
+    )?;
+    let object_key = download_object_key(&artifact_key, &download_artifact.logical_path);
+    let content_disposition = format!(
+        "attachment; filename=\"{}\"",
+        download_artifact.logical_path
+    );
     state
         .storage
         .put_bytes_with_headers(
-            &download_artifact.object_key,
+            &object_key,
             download_artifact.bytes.clone(),
             format.content_type(),
-            Some(&download_artifact.content_disposition),
+            Some(&content_disposition),
             Some("public, max-age=31536000, immutable"),
         )
         .await?;
+    verify_uploaded_object(
+        state,
+        &object_key,
+        format.content_type(),
+        download_artifact.bytes.len() as i64,
+    )
+    .await?;
     let download_sha256 = cache_key::hex_sha256(&download_artifact.bytes);
+    let artifact_files = [db::ArtifactFileInsert {
+        artifact_set_hash: &artifact_key,
+        role: "download",
+        logical_path: &download_artifact.logical_path,
+        original_path: Some(&download_artifact.logical_path),
+        object_key: &object_key,
+        content_type: format.content_type(),
+        byte_len: download_artifact.bytes.len() as i64,
+        sha256: &download_sha256,
+        metadata_json: "{}",
+    }];
     state
         .db
-        .upsert_artifact(ArtifactUpsert {
-            artifact_key,
-            model_slug: &model.slug,
-            config_hash,
-            output_kind: format.slug(),
-            format: format.slug(),
-            object_key: &download_artifact.object_key,
-            content_type: format.content_type(),
-            byte_len: download_artifact.bytes.len() as i64,
-            sha256: &download_sha256,
-            producing_job_key,
-            source_hash,
-            options_hash: &prepared.options_hash,
-            request_hash: Some(&prepared.request_hash),
-            raw_payload_hash: Some(&raw_payload.raw_payload_hash),
-            postprocess_hash: Some(&download_artifact.postprocess_hash),
-            parameter_schema_version: SCHEMA_VERSION.into(),
-            config_values_json: &config_values_json,
-        })
-        .await?;
-    state
-        .db
-        .replace_artifact_files(
-            artifact_key,
-            &[db::ArtifactFileInsert {
-                artifact_set_hash: artifact_key,
-                role: "download",
-                logical_path: &download_artifact.logical_path,
-                original_path: Some(&download_artifact.logical_path),
-                object_key: &download_artifact.object_key,
+        .publish_artifact(
+            ArtifactUpsert {
+                artifact_key: &artifact_key,
+                model_slug: &model.slug,
+                config_hash,
+                output_kind: format.slug(),
+                format: format.slug(),
+                object_key: &object_key,
                 content_type: format.content_type(),
                 byte_len: download_artifact.bytes.len() as i64,
                 sha256: &download_sha256,
-                metadata_json: "{}",
-            }],
+                producing_job_key,
+                source_hash,
+                options_hash: &prepared.options_hash,
+                request_hash: Some(&prepared.request_hash),
+                raw_payload_hash: Some(&raw_payload.raw_payload_hash),
+                postprocess_hash: Some(&download_artifact.postprocess_hash),
+                parameter_schema_version: SCHEMA_VERSION.into(),
+                config_values_json: &config_values_json,
+            },
+            &artifact_files,
+        )
+        .await?;
+    state
+        .db
+        .supersede_ready_artifacts_for_output(
+            source_hash,
+            config_hash,
+            &prepared.options_hash,
+            format.slug(),
+            &artifact_key,
+            Some("replaced"),
         )
         .await?;
     tracing::debug!(request_hash = %prepared.request_hash, raw_payload_hash = %raw_payload.raw_payload_hash, %artifact_key, "staged download export request");
     rewrite_manifest(state, model, config_hash, Some(values)).await?;
-    Ok(download_artifact.object_key)
+    Ok(object_key)
 }
 
 #[derive(Debug)]
@@ -3249,7 +3337,6 @@ struct PostprocessedPreviewArtifact {
     postprocess_hash: String,
     logical_path: String,
     original_path: Option<String>,
-    object_key: String,
     content_type: &'static str,
     bytes: Vec<u8>,
     sidecars: Vec<PreviewAsset>,
@@ -3259,20 +3346,20 @@ struct PostprocessedPreviewArtifact {
 struct PostprocessedDownloadArtifact {
     postprocess_hash: String,
     logical_path: String,
-    object_key: String,
-    content_disposition: String,
     bytes: Vec<u8>,
 }
 
 async fn postprocess_preview_artifact(
     state: &AppState,
-    source_hash: &str,
-    model: &catalog::Model,
-    config_hash: &str,
     raw_payload_hash: &str,
 ) -> anyhow::Result<PostprocessedPreviewArtifact> {
     let policy = PreviewPostprocessPolicy {
-        accepted_input_shapes: vec!["direct_glb", "direct_gltf_json", "zip_single_glb", "zip_single_gltf_asset_set"],
+        accepted_input_shapes: vec![
+            "direct_glb",
+            "direct_gltf_json",
+            "zip_single_glb",
+            "zip_single_gltf_asset_set",
+        ],
         allow_partial_multi_gltf_preview_fallback: ALLOW_PARTIAL_MULTI_GLTF_PREVIEW_FALLBACK,
     };
     let postprocess_hash = cache_model::postprocess_hash(&cache_model::PostprocessIdentity {
@@ -3297,9 +3384,10 @@ async fn postprocess_preview_artifact(
         .await?;
 
     let (_, bytes) = load_persisted_raw_payload(state, raw_payload_hash).await?;
-    match preview_artifact_from_onshape_bytes(source_hash, model, config_hash, bytes) {
+    match preview_artifact_from_onshape_bytes(bytes) {
         Ok(artifact) => {
-            let derived_files_json = serde_json::to_string(&preview_artifact_derived_files(&artifact))?;
+            let derived_files_json =
+                serde_json::to_string(&preview_artifact_derived_files(&artifact))?;
             let log_json = serde_json::to_string(&vec![PostprocessLogEntry {
                 level: "info",
                 message: "preview post-processing completed".to_owned(),
@@ -3317,7 +3405,6 @@ async fn postprocess_preview_artifact(
                 postprocess_hash,
                 logical_path: artifact.logical_path,
                 original_path: artifact.original_path,
-                object_key: artifact.object_key,
                 content_type: artifact.content_type,
                 bytes: artifact.bytes,
                 sidecars: artifact.sidecars,
@@ -3344,9 +3431,7 @@ async fn postprocess_preview_artifact(
 
 async fn postprocess_download_artifact(
     state: &AppState,
-    source_hash: &str,
     model: &catalog::Model,
-    config_hash: &str,
     format: catalog::DownloadFormat,
     raw_payload_hash: &str,
 ) -> anyhow::Result<PostprocessedDownloadArtifact> {
@@ -3378,13 +3463,11 @@ async fn postprocess_download_artifact(
 
     let (_, bytes) = load_persisted_raw_payload(state, raw_payload_hash).await?;
     let logical_path = download_filename(model, format);
-    let object_key = download_object_key(source_hash, model, config_hash, format);
-    let content_disposition = format!("attachment; filename=\"{logical_path}\"");
     let derived_files_json = serde_json::to_string(&vec![DerivedArtifactFile {
         role: "download",
         logical_path: &logical_path,
         original_path: Some(&logical_path),
-        object_key: &object_key,
+        object_key: None,
         content_type: format.content_type(),
         byte_len: bytes.len(),
         sha256: cache_key::hex_sha256(&bytes),
@@ -3406,20 +3489,16 @@ async fn postprocess_download_artifact(
     Ok(PostprocessedDownloadArtifact {
         postprocess_hash,
         logical_path,
-        object_key,
-        content_disposition,
         bytes,
     })
 }
 
-fn preview_artifact_derived_files(
-    artifact: &PreviewArtifact,
-) -> Vec<DerivedArtifactFile<'_>> {
+fn preview_artifact_derived_files(artifact: &PreviewArtifact) -> Vec<DerivedArtifactFile<'_>> {
     let mut files = vec![DerivedArtifactFile {
         role: "viewer_entry",
         logical_path: &artifact.logical_path,
         original_path: artifact.original_path.as_deref(),
-        object_key: &artifact.object_key,
+        object_key: None,
         content_type: artifact.content_type,
         byte_len: artifact.bytes.len(),
         sha256: cache_key::hex_sha256(&artifact.bytes),
@@ -3428,7 +3507,7 @@ fn preview_artifact_derived_files(
         role: sidecar.role,
         logical_path: &sidecar.logical_path,
         original_path: sidecar.original_path.as_deref(),
-        object_key: &sidecar.object_key,
+        object_key: None,
         content_type: sidecar.content_type,
         byte_len: sidecar.bytes.len(),
         sha256: cache_key::hex_sha256(&sidecar.bytes),
@@ -3677,15 +3756,6 @@ struct WorkKeyPayload {
     format: Option<&'static str>,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DownloadArtifactIdPayload<'a> {
-    source_hash: &'a str,
-    config_hash: &'a str,
-    options_hash: &'a str,
-    format: &'a str,
-}
-
 fn manifest_group_id(source_hash: &str, config_hash: &str) -> String {
     format!("group-v1:{source_hash}:{config_hash}")
 }
@@ -3826,70 +3896,118 @@ fn job_status_priority(status: &str) -> u8 {
     }
 }
 
-fn preview_artifact_key(source_hash: &str, model: &catalog::Model, config_hash: &str) -> String {
-    format!(
-        "artifact-v1:preview_glb:{}:{config_hash}:{}",
-        source_hash,
-        preview_options_hash(model),
-    )
-}
-
-fn preview_glb_object_key(source_hash: &str, model: &catalog::Model, config_hash: &str) -> String {
-    format!(
-        "previews/v1/{}/{}/{}/preview.glb",
-        source_hash,
-        config_hash,
-        preview_options_hash(model),
-    )
-}
-
-fn preview_gltf_object_key(source_hash: &str, model: &catalog::Model, config_hash: &str) -> String {
-    preview_asset_object_key(source_hash, model, config_hash, "preview.gltf")
-}
-
-fn preview_asset_object_key(
-    source_hash: &str,
+async fn ready_preview_artifact(
+    state: &AppState,
     model: &catalog::Model,
+    source_hash: &str,
     config_hash: &str,
-    asset_name: &str,
-) -> String {
+) -> sqlx::Result<Option<db::ArtifactRecord>> {
+    state
+        .db
+        .latest_ready_artifact_for_output(
+            source_hash,
+            config_hash,
+            &preview_options_hash(model),
+            "preview_glb",
+        )
+        .await
+}
+
+async fn ready_download_artifact(
+    state: &AppState,
+    model: &catalog::Model,
+    source_hash: &str,
+    config_hash: &str,
+    format: catalog::DownloadFormat,
+) -> sqlx::Result<Option<db::ArtifactRecord>> {
+    state
+        .db
+        .latest_ready_artifact_for_output(
+            source_hash,
+            config_hash,
+            &download_options_hash(model, format),
+            format.slug(),
+        )
+        .await
+}
+
+fn preview_lookup_key(source_hash: &str, model: &catalog::Model, config_hash: &str) -> String {
     format!(
-        "previews/v1/{}/{}/{}/{}",
+        "artifact-lookup-v2:preview_glb:{}:{config_hash}:{}",
         source_hash,
-        config_hash,
         preview_options_hash(model),
-        asset_name,
     )
+}
+
+fn preview_artifact_key(
+    source_hash: &str,
+    config_hash: &str,
+    options_hash: &str,
+    format: &str,
+    request_hash: &str,
+    raw_payload_hash: &str,
+    postprocess_hash: &str,
+) -> anyhow::Result<String> {
+    cache_model::artifact_set_hash(&cache_model::ArtifactSetIdentity {
+        artifact_set_schema_version: cache_model::ARTIFACT_SET_SCHEMA_VERSION,
+        output_kind: "preview_glb".to_owned(),
+        format: format.to_owned(),
+        source_hash: source_hash.to_owned(),
+        config_hash: config_hash.to_owned(),
+        options_hash: options_hash.to_owned(),
+        request_hash: request_hash.to_owned(),
+        raw_payload_hash: raw_payload_hash.to_owned(),
+        postprocess_hash: postprocess_hash.to_owned(),
+    })
+}
+
+#[cfg(test)]
+fn preview_glb_object_key(artifact_set_hash: &str) -> String {
+    preview_asset_object_key(artifact_set_hash, "preview.glb")
+}
+
+fn preview_asset_object_key(artifact_set_hash: &str, asset_name: &str) -> String {
+    format!("previews/v2/{artifact_set_hash}/{asset_name}")
 }
 
 fn download_artifact_key(
+    source_hash: &str,
+    config_hash: &str,
+    options_hash: &str,
+    format: &str,
+    request_hash: &str,
+    raw_payload_hash: &str,
+    postprocess_hash: &str,
+) -> anyhow::Result<String> {
+    cache_model::artifact_set_hash(&cache_model::ArtifactSetIdentity {
+        artifact_set_schema_version: cache_model::ARTIFACT_SET_SCHEMA_VERSION,
+        output_kind: format.to_owned(),
+        format: format.to_owned(),
+        source_hash: source_hash.to_owned(),
+        config_hash: config_hash.to_owned(),
+        options_hash: options_hash.to_owned(),
+        request_hash: request_hash.to_owned(),
+        raw_payload_hash: raw_payload_hash.to_owned(),
+        postprocess_hash: postprocess_hash.to_owned(),
+    })
+}
+
+fn download_lookup_key(
     source_hash: &str,
     model: &catalog::Model,
     config_hash: &str,
     format: catalog::DownloadFormat,
 ) -> String {
     format!(
-        "artifact-v1:download:{}:{}:{config_hash}:{}",
+        "artifact-lookup-v2:download:{}:{}:{config_hash}:{}",
         format.slug(),
         source_hash,
         download_options_hash(model, format),
     )
 }
 
-fn download_object_key(
-    source_hash: &str,
-    model: &catalog::Model,
-    config_hash: &str,
-    format: catalog::DownloadFormat,
-) -> String {
-    let options_hash = download_options_hash(model, format);
-    let artifact_id = download_artifact_id(source_hash, config_hash, &options_hash, format);
-    format!(
-        "artifacts/v1/{source_hash}/{config_hash}/{}/{options_hash}/{}.{}",
-        format.slug(),
-        artifact_id,
-        format.extension()
-    )
+fn download_object_key(artifact_set_hash: &str, filename: &str) -> String {
+    format!("artifacts/v2/{artifact_set_hash}/{filename}")
 }
 
 fn download_filename(model: &catalog::Model, format: catalog::DownloadFormat) -> String {
@@ -4125,24 +4243,6 @@ fn work_key(kind: &'static str, payload: &WorkKeyPayload) -> String {
         "work-v1:{kind}:{}",
         cache_key::hash_json("work-v1", payload).expect("work key payload serializes")
     )
-}
-
-fn download_artifact_id(
-    source_hash: &str,
-    config_hash: &str,
-    options_hash: &str,
-    format: catalog::DownloadFormat,
-) -> String {
-    cache_key::hash_json(
-        "artifact-v1",
-        &DownloadArtifactIdPayload {
-            source_hash,
-            config_hash,
-            options_hash,
-            format: format.slug(),
-        },
-    )
-    .expect("download artifact identity serializes")
 }
 
 fn render_preview_result(state: &AppState, object_key: &str) -> String {
@@ -4768,46 +4868,57 @@ mod tests {
             )
             .unwrap()
         );
-        assert_eq!(
-            preview_artifact_key(&source_hash, &first, config_hash),
-            preview_artifact_key(&source_hash, &second, config_hash)
-        );
+        let preview_artifact_hash = preview_artifact_key(
+            &source_hash,
+            config_hash,
+            &preview_options_hash,
+            "glb",
+            &preview_request_hash,
+            "rawhash",
+            "posthash",
+        )
+        .unwrap();
+        let other_preview_artifact_hash = preview_artifact_key(
+            &source_hash,
+            config_hash,
+            &preview_options_hash,
+            "glb",
+            &other_preview_request_hash,
+            "rawhash",
+            "posthash",
+        )
+        .unwrap();
+        let download_artifact_hash = download_artifact_key(
+            &source_hash,
+            config_hash,
+            &download_options_hash,
+            catalog::DownloadFormat::Step.slug(),
+            &download_request_hash,
+            "rawhash",
+            "posthash",
+        )
+        .unwrap();
+        let other_download_artifact_hash = download_artifact_key(
+            &source_hash,
+            config_hash,
+            &download_options_hash,
+            catalog::DownloadFormat::Step.slug(),
+            &other_download_request_hash,
+            "rawhash",
+            "posthash",
+        )
+        .unwrap();
+
+        assert_eq!(preview_artifact_hash, other_preview_artifact_hash);
         assert_eq!(
             preview_work_key(&source_hash, &first, config_hash),
             preview_work_key(&source_hash, &second, config_hash)
         );
         assert_eq!(
-            preview_glb_object_key(&source_hash, &first, config_hash),
-            preview_glb_object_key(&source_hash, &second, config_hash)
+            preview_glb_object_key(&preview_artifact_hash),
+            preview_glb_object_key(&other_preview_artifact_hash)
         );
-        assert_eq!(
-            download_artifact_key(
-                &source_hash,
-                &first,
-                config_hash,
-                catalog::DownloadFormat::Step
-            ),
-            download_artifact_key(
-                &source_hash,
-                &second,
-                config_hash,
-                catalog::DownloadFormat::Step
-            )
-        );
-        assert_eq!(
-            download_object_key(
-                &source_hash,
-                &first,
-                config_hash,
-                catalog::DownloadFormat::Step
-            ),
-            download_object_key(
-                &source_hash,
-                &second,
-                config_hash,
-                catalog::DownloadFormat::Step
-            )
-        );
+        assert_eq!(download_artifact_hash, other_download_artifact_hash);
         assert_eq!(
             download_work_key(
                 &source_hash,
@@ -4833,35 +4944,9 @@ mod tests {
             export_job_key(&other_download_request_hash)
         );
 
-        assert!(preview_artifact_key(&source_hash, &first, config_hash).contains(&source_hash));
-        assert!(
-            preview_artifact_key(&source_hash, &first, config_hash).contains(&preview_options_hash)
-        );
-        assert!(
-            preview_glb_object_key(&source_hash, &first, config_hash)
-                .contains(&preview_options_hash)
-        );
-        assert!(
-            download_artifact_key(
-                &source_hash,
-                &first,
-                config_hash,
-                catalog::DownloadFormat::Step
-            )
-            .contains(&download_options_hash)
-        );
-        assert!(
-            download_object_key(
-                &source_hash,
-                &first,
-                config_hash,
-                catalog::DownloadFormat::Step
-            )
-            .contains(&download_options_hash)
-        );
         assert_ne!(
             preview_work_key(&source_hash, &first, config_hash),
-            preview_artifact_key(&source_hash, &first, config_hash)
+            preview_lookup_key(&source_hash, &first, config_hash)
         );
         assert_ne!(
             export_job_key(&preview_request_hash),
@@ -4870,6 +4955,16 @@ mod tests {
         assert_ne!(
             download_filename(&first, catalog::DownloadFormat::Step),
             download_filename(&second, catalog::DownloadFormat::Step)
+        );
+        assert_ne!(
+            download_object_key(
+                &download_artifact_hash,
+                &download_filename(&first, catalog::DownloadFormat::Step)
+            ),
+            download_object_key(
+                &other_download_artifact_hash,
+                &download_filename(&second, catalog::DownloadFormat::Step)
+            )
         );
     }
 
@@ -4929,28 +5024,20 @@ mod tests {
 
     #[test]
     fn preserves_direct_glb_preview_exports() {
-        let model = test_model();
-        let source_hash = resolved_source_hash_for_test_model(&model);
         let bytes = valid_glb();
-        let artifact =
-            preview_artifact_from_onshape_bytes(&source_hash, &model, "abc", bytes.clone())
-                .unwrap();
+        let artifact = preview_artifact_from_onshape_bytes(bytes.clone()).unwrap();
 
-        assert!(artifact.object_key.ends_with("preview.glb"));
+        assert_eq!(artifact.logical_path, "preview.glb");
         assert_eq!(artifact.content_type, "model/gltf-binary");
         assert_eq!(artifact.bytes, bytes);
     }
 
     #[test]
     fn preserves_direct_gltf_preview_exports() {
-        let model = test_model();
-        let source_hash = resolved_source_hash_for_test_model(&model);
         let bytes = br#"{"asset":{"version":"2.0"}}"#.to_vec();
-        let artifact =
-            preview_artifact_from_onshape_bytes(&source_hash, &model, "abc", bytes.clone())
-                .unwrap();
+        let artifact = preview_artifact_from_onshape_bytes(bytes.clone()).unwrap();
 
-        assert!(artifact.object_key.ends_with("preview.gltf"));
+        assert_eq!(artifact.logical_path, "preview.gltf");
         assert_eq!(artifact.content_type, "model/gltf+json");
         assert_eq!(artifact.bytes, bytes);
         assert!(artifact.sidecars.is_empty());
@@ -4958,8 +5045,6 @@ mod tests {
 
     #[test]
     fn extracts_single_glb_from_zipped_preview_exports() {
-        let model = test_model();
-        let source_hash = resolved_source_hash_for_test_model(&model);
         let glb = valid_glb();
         let bytes = test_zip(&[
             ("scene.gltf", br#"{"asset":{"version":"2.0"}}"#.as_slice()),
@@ -4967,10 +5052,9 @@ mod tests {
             ("preview.glb", glb.as_slice()),
         ]);
 
-        let artifact =
-            preview_artifact_from_onshape_bytes(&source_hash, &model, "abc", bytes).unwrap();
+        let artifact = preview_artifact_from_onshape_bytes(bytes).unwrap();
 
-        assert!(artifact.object_key.ends_with("preview.glb"));
+        assert_eq!(artifact.logical_path, "preview.glb");
         assert_eq!(artifact.content_type, "model/gltf-binary");
         assert_eq!(artifact.bytes, glb);
         assert!(artifact.sidecars.is_empty());
@@ -4978,20 +5062,13 @@ mod tests {
 
     #[test]
     fn rejects_invalid_direct_glb_preview_exports() {
-        let model = test_model();
-        let source_hash = resolved_source_hash_for_test_model(&model);
-
-        let error =
-            preview_artifact_from_onshape_bytes(&source_hash, &model, "abc", b"glTFbytes".to_vec())
-                .unwrap_err();
+        let error = preview_artifact_from_onshape_bytes(b"glTFbytes".to_vec()).unwrap_err();
 
         assert!(error.to_string().contains("validating direct GLB"));
     }
 
     #[test]
     fn extracts_gltf_asset_set_from_zipped_preview_exports() {
-        let model = test_model();
-        let source_hash = resolved_source_hash_for_test_model(&model);
         let bytes = test_zip(&[
             (
                 "scene.gltf",
@@ -5000,55 +5077,46 @@ mod tests {
             ("scene.bin", b"loose buffer".as_slice()),
         ]);
 
-        let artifact =
-            preview_artifact_from_onshape_bytes(&source_hash, &model, "abc", bytes).unwrap();
+        let artifact = preview_artifact_from_onshape_bytes(bytes).unwrap();
 
-        assert!(artifact.object_key.ends_with("scene.gltf"));
+        assert_eq!(artifact.logical_path, "scene.gltf");
         assert_eq!(artifact.content_type, "model/gltf+json");
         assert_eq!(artifact.sidecars.len(), 1);
         assert!(
             artifact
                 .sidecars
                 .iter()
-                .any(|sidecar| sidecar.object_key.ends_with("scene.bin"))
+                .any(|sidecar| sidecar.logical_path == "scene.bin")
         );
     }
 
     #[test]
     fn rejects_multiple_gltf_zipped_preview_exports() {
-        let model = test_model();
-        let source_hash = resolved_source_hash_for_test_model(&model);
         let bytes = test_zip(&[
             ("first.gltf", br#"{"asset":{"version":"2.0"}}"#.as_slice()),
             ("second.gltf", br#"{"asset":{"version":"2.0"}}"#.as_slice()),
             ("scene.bin", b"loose buffer".as_slice()),
         ]);
 
-        let error =
-            preview_artifact_from_onshape_bytes(&source_hash, &model, "abc", bytes).unwrap_err();
+        let error = preview_artifact_from_onshape_bytes(bytes).unwrap_err();
 
         assert!(error.to_string().contains("multiple glTF files"));
     }
 
     #[test]
     fn rejects_unsafe_gltf_zip_asset_paths() {
-        let model = test_model();
-        let source_hash = resolved_source_hash_for_test_model(&model);
         let bytes = test_zip(&[
             ("scene.gltf", br#"{"asset":{"version":"2.0"}}"#.as_slice()),
             ("../scene.bin", b"loose buffer".as_slice()),
         ]);
 
-        let error =
-            preview_artifact_from_onshape_bytes(&source_hash, &model, "abc", bytes).unwrap_err();
+        let error = preview_artifact_from_onshape_bytes(bytes).unwrap_err();
 
         assert!(error.to_string().contains("not safe"));
     }
 
     #[test]
     fn rejects_multiple_glbs_in_zipped_preview_exports() {
-        let model = test_model();
-        let source_hash = resolved_source_hash_for_test_model(&model);
         let first = valid_glb();
         let second = valid_glb();
         let bytes = test_zip(&[
@@ -5056,20 +5124,16 @@ mod tests {
             ("second.glb", second.as_slice()),
         ]);
 
-        let error =
-            preview_artifact_from_onshape_bytes(&source_hash, &model, "abc", bytes).unwrap_err();
+        let error = preview_artifact_from_onshape_bytes(bytes).unwrap_err();
 
         assert!(error.to_string().contains("multiple GLB files"));
     }
 
     #[test]
     fn rejects_invalid_zipped_glb_preview_exports() {
-        let model = test_model();
-        let source_hash = resolved_source_hash_for_test_model(&model);
         let bytes = test_zip(&[("preview.glb", b"glTFzip".as_slice())]);
 
-        let error =
-            preview_artifact_from_onshape_bytes(&source_hash, &model, "abc", bytes).unwrap_err();
+        let error = preview_artifact_from_onshape_bytes(bytes).unwrap_err();
 
         assert!(error.to_string().contains("validating zipped GLB"));
     }

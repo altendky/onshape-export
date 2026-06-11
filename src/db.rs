@@ -1146,6 +1146,43 @@ impl Database {
         Ok(result.rows_affected() == 1)
     }
 
+    pub async fn supersede_ready_artifacts_for_output(
+        &self,
+        source_hash: &str,
+        config_hash: &str,
+        options_hash: &str,
+        output_kind: &str,
+        retained_artifact_set_hash: &str,
+        supersession_reason: Option<&str>,
+    ) -> sqlx::Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE artifact_sets
+            SET status = 'superseded',
+                superseded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                superseded_by = ?,
+                supersession_reason = ?,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE source_hash = ?
+              AND config_hash = ?
+              AND options_hash = ?
+              AND output_kind = ?
+              AND status = 'ready'
+              AND artifact_set_hash <> ?
+            "#,
+        )
+        .bind(retained_artifact_set_hash)
+        .bind(supersession_reason)
+        .bind(source_hash)
+        .bind(config_hash)
+        .bind(options_hash)
+        .bind(output_kind)
+        .bind(retained_artifact_set_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn enqueue_job(
         &self,
         work_key: &str,
@@ -1432,11 +1469,57 @@ impl Database {
         .map(|rows| rows.into_iter().map(artifact_record_from_v2_row).collect())
     }
 
+    pub async fn latest_ready_artifact_for_output(
+        &self,
+        source_hash: &str,
+        config_hash: &str,
+        options_hash: &str,
+        output_kind: &str,
+    ) -> sqlx::Result<Option<ArtifactRecord>> {
+        sqlx::query(
+            r#"
+            SELECT artifact_sets.artifact_set_hash AS artifact_key,
+                   artifact_sets.config_hash,
+                   artifact_sets.output_kind,
+                   artifact_sets.status,
+                   artifact_sets.primary_object_key AS object_key,
+                   artifact_sets.source_hash,
+                   artifact_sets.options_hash,
+                   artifact_sets.metadata_json,
+                   artifact_sets.created_at,
+                   artifact_sets.superseded_at,
+                   artifact_files.content_type,
+                   artifact_files.byte_len,
+                   artifact_files.sha256
+            FROM artifact_sets
+            LEFT JOIN artifact_files ON artifact_files.object_key = artifact_sets.primary_object_key
+            WHERE artifact_sets.source_hash = ?
+              AND artifact_sets.config_hash = ?
+              AND artifact_sets.options_hash = ?
+              AND artifact_sets.output_kind = ?
+              AND artifact_sets.status = 'ready'
+            ORDER BY artifact_sets.created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(source_hash)
+        .bind(config_hash)
+        .bind(options_hash)
+        .bind(output_kind)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(artifact_record_from_v2_row))
+    }
+
     pub async fn supersede_artifact(&self, artifact_key: &str) -> sqlx::Result<bool> {
         self.supersede_artifact_set(artifact_key, None, None).await
     }
 
-    pub async fn upsert_artifact(&self, artifact: ArtifactUpsert<'_>) -> sqlx::Result<()> {
+    pub async fn publish_artifact(
+        &self,
+        artifact: ArtifactUpsert<'_>,
+        files: &[ArtifactFileInsert<'_>],
+    ) -> sqlx::Result<()> {
         let metadata_json = serde_json::to_string(&ArtifactMetadata {
             model_slug: artifact.model_slug.to_owned(),
             producing_job_key: artifact.producing_job_key.map(ToOwned::to_owned),
@@ -1444,12 +1527,8 @@ impl Database {
             config_values_json: Some(artifact.config_values_json.to_owned()),
         })
         .expect("artifact metadata serializes");
-        let logical_path = artifact
-            .object_key
-            .rsplit('/')
-            .next()
-            .unwrap_or(artifact.object_key);
 
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             r#"
             INSERT INTO artifact_sets (
@@ -1488,10 +1567,65 @@ impl Database {
         .bind(artifact.format)
         .bind(artifact.object_key)
         .bind(&metadata_json)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-        self.replace_artifact_files(
-            artifact.artifact_key,
+
+        sqlx::query("DELETE FROM artifact_files WHERE artifact_set_hash = ?")
+            .bind(artifact.artifact_key)
+            .execute(&mut *tx)
+            .await?;
+
+        for file in files {
+            sqlx::query(
+                r#"
+                INSERT INTO artifact_files (
+                    artifact_set_hash, role, logical_path, original_path, object_key,
+                    content_type, byte_len, sha256, metadata_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(file.artifact_set_hash)
+            .bind(file.role)
+            .bind(file.logical_path)
+            .bind(file.original_path)
+            .bind(file.object_key)
+            .bind(file.content_type)
+            .bind(file.byte_len)
+            .bind(file.sha256)
+            .bind(file.metadata_json)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        sqlx::query(
+            r#"
+            UPDATE artifact_sets
+            SET status = 'ready',
+                primary_object_key = ?,
+                metadata_json = ?,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE artifact_set_hash = ?
+            "#,
+        )
+        .bind(artifact.object_key)
+        .bind(&metadata_json)
+        .bind(artifact.artifact_key)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn upsert_artifact(&self, artifact: ArtifactUpsert<'_>) -> sqlx::Result<()> {
+        let logical_path = artifact
+            .object_key
+            .rsplit('/')
+            .next()
+            .unwrap_or(artifact.object_key);
+        self.publish_artifact(
+            artifact,
             &[ArtifactFileInsert {
                 artifact_set_hash: artifact.artifact_key,
                 role: if artifact.output_kind == "preview_glb" {
@@ -1508,10 +1642,7 @@ impl Database {
                 metadata_json: "{}",
             }],
         )
-        .await?;
-        self.mark_artifact_set_ready(artifact.artifact_key, artifact.object_key, &metadata_json)
-            .await?;
-        Ok(())
+        .await
     }
 
     pub async fn failed_jobs(&self, limit: i64) -> sqlx::Result<Vec<JobRecord>> {
@@ -1999,6 +2130,80 @@ mod tests {
 
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].artifact_key, "old");
+    }
+
+    #[tokio::test]
+    async fn latest_ready_artifact_for_output_uses_logical_output_identity() {
+        let db = test_database().await;
+        db.upsert_artifact(test_artifact_upsert(
+            "first-set",
+            "abc",
+            "step",
+            "artifacts/v2/first-set/demo-step.step",
+            "model/step",
+            10,
+        ))
+        .await
+        .unwrap();
+        db.upsert_artifact(test_artifact_upsert(
+            "second-set",
+            "abc",
+            "step",
+            "artifacts/v2/second-set/demo-step.step",
+            "model/step",
+            12,
+        ))
+        .await
+        .unwrap();
+
+        let artifact = db
+            .latest_ready_artifact_for_output("sourcehash", "abc", "optionshash", "step")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(artifact.artifact_key, "second-set");
+        assert_eq!(
+            artifact.object_key,
+            "artifacts/v2/second-set/demo-step.step"
+        );
+    }
+
+    #[tokio::test]
+    async fn supersede_ready_artifacts_for_output_retires_all_other_ready_sets() {
+        let db = test_database().await;
+        for artifact_key in ["first-set", "second-set", "kept-set"] {
+            db.upsert_artifact(test_artifact_upsert(
+                artifact_key,
+                "abc",
+                "step",
+                &format!("artifacts/v2/{artifact_key}/demo-step.step"),
+                "model/step",
+                10,
+            ))
+            .await
+            .unwrap();
+        }
+
+        let superseded = db
+            .supersede_ready_artifacts_for_output(
+                "sourcehash",
+                "abc",
+                "optionshash",
+                "step",
+                "kept-set",
+                Some("replaced"),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(superseded, 2);
+        assert_eq!(
+            db.artifact("kept-set").await.unwrap().unwrap().status,
+            "ready"
+        );
+        assert!(db.artifact("first-set").await.unwrap().is_none());
+        assert!(db.artifact("second-set").await.unwrap().is_none());
     }
 
     #[tokio::test]
