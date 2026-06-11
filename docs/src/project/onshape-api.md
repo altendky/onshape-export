@@ -13,6 +13,8 @@ Workspaces are intentionally out of scope for the first version.
 
 For the v2 cache model, catalog entries may remain version-based, but the service should resolve the version to its immutable document microversion before computing `sourceHash`. Store the version-to-microversion mapping for diagnostics and traceability.
 
+Resolution must complete before writing source-scoped cache records or artifacts. Transient resolution failures should follow the Onshape retry/backoff policy and record diagnostics or `failureReason`; terminal failures should abort the export before any partial cache artifacts are published. If a previously stored `versionId` to `microversionId` mapping later resolves differently or becomes inconsistent, compute a new `sourceHash` from the new microversion and mark the old mapping/cache state stale or orphaned for reconciliation diagnostics instead of mutating existing artifacts in place.
+
 ## Authentication
 
 The MVP assumes server-owned Onshape API keys configured as deployment secrets. The Rust service signs requests server-side, and credentials are never exposed to browsers.
