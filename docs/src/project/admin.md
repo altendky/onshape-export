@@ -64,9 +64,9 @@ The updated main plan expects several behaviors that are not implemented yet:
 - Catalog validation against live Onshape metadata for a no-cache `catalog validate` mode.
 - Content disposition in SQLite artifact metadata.
 
-Future v2 repair behavior should distinguish repair from semantic supersession. If raw payload bytes are missing or corrupt, try to re-download from stored translation result IDs before starting a new Onshape translation. If public artifact files are missing or corrupt and the raw payload exists, repair by re-running the same post-processing recipe and restoring the intended artifact-set object keys. Overwriting object keys should be allowed only for repair of intended bytes, not for normal cache invalidation.
+Future v2 repair behavior should distinguish repair from semantic supersession. If raw payload bytes are missing or corrupt, try to re-download from stored translation result IDs before starting a new Onshape translation; this repair path is available only after translation result IDs and polling state are persisted. If public artifact files are missing or corrupt and the raw payload exists, repair by re-running the same post-processing recipe and restoring the intended artifact-set object keys. Intended bytes are bytes that match recorded metadata and hashes for the same raw payload, or a verifiable derivation from the same persisted translation result. Overwriting object keys should be allowed only for verified repair of intended bytes, not for normal cache invalidation or post-processing semantic changes that should create a superseding artifact set.
 
-Follow-up ticket: reconsider v2 repair and overwrite semantics before production use, including raw payload repair, public artifact repair, DB/object drift, corrupt-but-public objects, missing sidecars, partial uploads, concurrent repair races, CDN behavior, and cases that should supersede instead of overwrite.
+Follow-up ticket: reconsider v2 repair and overwrite semantics before production use, including translation result ID persistence, intended-byte verification, raw payload repair, public artifact repair, DB/object drift, corrupt-but-public objects, missing sidecars, partial uploads, concurrent repair races, CDN behavior, and cases that should supersede instead of overwrite.
 
 ## Web Admin Deferral
 
