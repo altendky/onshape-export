@@ -688,6 +688,36 @@ impl Database {
         Ok(result.rows_affected() == 1)
     }
 
+    pub async fn latest_export_request_for_output(
+        &self,
+        source_hash: &str,
+        config_hash: &str,
+        options_hash: &str,
+        output_kind: &str,
+        format: &str,
+    ) -> sqlx::Result<Option<ExportRequestRecord>> {
+        sqlx::query(
+            r#"
+            SELECT request_hash, source_hash, config_hash, options_hash, output_kind, format,
+                   endpoint, method, path, request_json, defaults_policy_version,
+                   request_builder_version, status, created_at, updated_at
+            FROM export_requests
+            WHERE source_hash = ? AND config_hash = ? AND options_hash = ?
+              AND output_kind = ? AND format = ?
+            ORDER BY updated_at DESC, created_at DESC, request_hash DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(source_hash)
+        .bind(config_hash)
+        .bind(options_hash)
+        .bind(output_kind)
+        .bind(format)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(export_request_record_from_row))
+    }
+
     pub async fn translation(
         &self,
         translation_id: &str,
@@ -2296,6 +2326,110 @@ mod tests {
             .await
             .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn latest_export_request_for_output_prefers_newest_request() {
+        let db = test_database().await;
+
+        db.insert_export_request_if_absent(ExportRequestInsert {
+            request_hash: "older-requesthash",
+            source_hash: "sourcehash",
+            config_hash: "confighash",
+            options_hash: "optionshash",
+            output_kind: "preview",
+            format: "glb",
+            endpoint: "createPartStudioExportGltf",
+            method: "POST",
+            path: "/api/partstudios/d/did/v/vid/e/eid/export/gltf",
+            request_json: "{}",
+            defaults_policy_version: "v1",
+            request_builder_version: "v1",
+            status: "staged",
+        })
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE export_requests SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day') WHERE request_hash = 'older-requesthash'",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        db.insert_export_request_if_absent(ExportRequestInsert {
+            request_hash: "newer-requesthash",
+            source_hash: "sourcehash",
+            config_hash: "confighash",
+            options_hash: "optionshash-2",
+            output_kind: "preview",
+            format: "glb",
+            endpoint: "createPartStudioExportGltf",
+            method: "POST",
+            path: "/api/partstudios/d/did/v/vid/e/eid/export/gltf",
+            request_json: "{}",
+            defaults_policy_version: "v2",
+            request_builder_version: "v2",
+            status: "staged",
+        })
+        .await
+        .unwrap();
+
+        let record = db
+            .latest_export_request_for_output(
+                "sourcehash",
+                "confighash",
+                "optionshash-2",
+                "preview",
+                "glb",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(record.request_hash, "newer-requesthash");
+        assert_eq!(record.request_builder_version, "v2");
+    }
+
+    #[tokio::test]
+    async fn latest_export_request_for_output_filters_by_options_hash() {
+        let db = test_database().await;
+
+        for (request_hash, options_hash) in [
+            ("preview-old", "optionshash-1"),
+            ("preview-new", "optionshash-2"),
+        ] {
+            db.insert_export_request_if_absent(ExportRequestInsert {
+                request_hash,
+                source_hash: "sourcehash",
+                config_hash: "confighash",
+                options_hash,
+                output_kind: "preview",
+                format: "glb",
+                endpoint: "createPartStudioExportGltf",
+                method: "POST",
+                path: "/api/partstudios/d/did/v/vid/e/eid/export/gltf",
+                request_json: "{}",
+                defaults_policy_version: "v1",
+                request_builder_version: "v1",
+                status: "staged",
+            })
+            .await
+            .unwrap();
+        }
+
+        let record = db
+            .latest_export_request_for_output(
+                "sourcehash",
+                "confighash",
+                "optionshash-2",
+                "preview",
+                "glb",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(record.request_hash, "preview-new");
     }
 
     #[tokio::test]

@@ -68,7 +68,17 @@ enum JobPayload {
     PreviewGlb {
         model_slug: String,
         #[serde(default)]
+        request_hash: String,
+        #[serde(default)]
+        source_hash: String,
+        #[serde(default)]
         config_hash: String,
+        #[serde(default)]
+        options_hash: String,
+        #[serde(default)]
+        output_kind: String,
+        #[serde(default)]
+        format: String,
         #[serde(default)]
         config_hash_version: Option<u32>,
         values: HashMap<String, String>,
@@ -76,7 +86,17 @@ enum JobPayload {
     DownloadExport {
         model_slug: String,
         #[serde(default)]
+        request_hash: String,
+        #[serde(default)]
+        source_hash: String,
+        #[serde(default)]
         config_hash: String,
+        #[serde(default)]
+        options_hash: String,
+        #[serde(default)]
+        output_kind: String,
+        #[serde(default)]
+        export_format: String,
         #[serde(default)]
         config_hash_version: Option<u32>,
         values: HashMap<String, String>,
@@ -199,6 +219,13 @@ struct PreviewAsset {
     object_key: String,
     content_type: &'static str,
     bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedExportRequest {
+    options_hash: String,
+    request_hash: String,
+    request: onshape::CanonicalExportRequest,
 }
 
 #[tokio::main]
@@ -742,6 +769,7 @@ async fn generate_preview_for_values(
         &config_hash,
         &artifact_key,
         None,
+        None,
     )
     .await
 }
@@ -786,15 +814,26 @@ async fn enqueue_preview(
 ) -> anyhow::Result<bool> {
     let source_hash = resolve_source_hash(state, model).await?;
     let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
+    let legacy_work_key = preview_work_key(&source_hash, model, &config_hash);
+    if should_defer_to_legacy_export_job(state.db.job(&legacy_work_key).await?.as_ref()) {
+        return Ok(false);
+    }
+    let prepared =
+        prepare_preview_export(state, model, &source_hash, &validated.values, &config_hash).await?;
     let payload = JobPayload::PreviewGlb {
         model_slug: model.slug.clone(),
+        request_hash: prepared.request_hash.clone(),
+        source_hash: source_hash.clone(),
         config_hash: config_hash.clone(),
+        options_hash: prepared.options_hash,
+        output_kind: "preview".to_owned(),
+        format: "glb".to_owned(),
         config_hash_version: Some(CONFIG_HASH_JOB_VERSION),
         values: validated.values.clone(),
     };
     enqueue_job(
         state,
-        &preview_work_key(&source_hash, model, &config_hash),
+        &export_job_key(&prepared.request_hash),
         "preview_export",
         &payload,
         false,
@@ -810,16 +849,34 @@ async fn enqueue_download(
 ) -> anyhow::Result<bool> {
     let source_hash = resolve_source_hash(state, model).await?;
     let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
+    let legacy_work_key = download_work_key(&source_hash, model, &config_hash, format);
+    if should_defer_to_legacy_export_job(state.db.job(&legacy_work_key).await?.as_ref()) {
+        return Ok(false);
+    }
+    let prepared = prepare_download_export(
+        state,
+        model,
+        &source_hash,
+        &validated.values,
+        &config_hash,
+        format,
+    )
+    .await?;
     let payload = JobPayload::DownloadExport {
         model_slug: model.slug.clone(),
+        request_hash: prepared.request_hash.clone(),
+        source_hash: source_hash.clone(),
         config_hash: config_hash.clone(),
+        options_hash: prepared.options_hash,
+        output_kind: "download".to_owned(),
+        export_format: format.slug().to_owned(),
         config_hash_version: Some(CONFIG_HASH_JOB_VERSION),
         values: validated.values.clone(),
         format,
     };
     enqueue_job(
         state,
-        &download_work_key(&source_hash, model, &config_hash, format),
+        &export_job_key(&prepared.request_hash),
         "download_export",
         &payload,
         false,
@@ -870,6 +927,7 @@ async fn generate_download_for_values(
         &config_hash,
         &artifact_key,
         format,
+        None,
         None,
     )
     .await
@@ -1576,10 +1634,10 @@ async fn preview_status(
     let model = published_model(&state.catalog, &slug).ok_or(AppError::NotFound)?;
     let source_hash = resolve_source_hash(&state, model).await?;
     let artifact_key = preview_artifact_key(&source_hash, model, &config_hash);
-    let work_key = preview_work_key(&source_hash, model, &config_hash);
+    let work_keys = preview_status_job_keys(&state, &source_hash, model, &config_hash).await?;
 
     Ok(Json(
-        artifact_status(&state, &artifact_key, &work_key).await?,
+        artifact_status(&state, &artifact_key, &work_keys).await?,
     ))
 }
 
@@ -1594,17 +1652,18 @@ async fn download_status(
     }
     let source_hash = resolve_source_hash(&state, model).await?;
     let artifact_key = download_artifact_key(&source_hash, model, &config_hash, format);
-    let work_key = download_work_key(&source_hash, model, &config_hash, format);
+    let work_keys =
+        download_status_job_keys(&state, &source_hash, model, &config_hash, format).await?;
 
     Ok(Json(
-        artifact_status(&state, &artifact_key, &work_key).await?,
+        artifact_status(&state, &artifact_key, &work_keys).await?,
     ))
 }
 
 async fn artifact_status(
     state: &AppState,
     artifact_key: &str,
-    work_key: &str,
+    work_keys: &[String],
 ) -> Result<ArtifactStatusResponse, AppError> {
     if let Some(record) = state.db.artifact(artifact_key).await? {
         return Ok(ArtifactStatusResponse {
@@ -1629,7 +1688,22 @@ async fn artifact_status(
         });
     }
 
-    if let Some(job) = state.db.job(work_key).await? {
+    let mut selected_job = None;
+    for work_key in work_keys {
+        if let Some(job) = state.db.job(work_key).await? {
+            if selected_job
+                .as_ref()
+                .map(|current: &db::JobRecord| {
+                    job_status_priority(&job.status) > job_status_priority(&current.status)
+                })
+                .unwrap_or(true)
+            {
+                selected_job = Some(job);
+            }
+        }
+    }
+
+    if let Some(job) = selected_job {
         let message = match job.status.as_str() {
             "queued" => "Generation is queued.",
             "running" => "Generation is running.",
@@ -1647,7 +1721,7 @@ async fn artifact_status(
             content_type: None,
             size_bytes: None,
             sha256: None,
-            job_id: Some(work_key.to_owned()),
+            job_id: Some(job.work_key),
             source_hash: None,
             config_hash: None,
             options_hash: None,
@@ -1994,7 +2068,12 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
         }
         JobPayload::PreviewGlb {
             model_slug,
+            request_hash,
+            source_hash: queued_source_hash,
             config_hash,
+            options_hash,
+            output_kind,
+            format,
             config_hash_version,
             values,
         } => {
@@ -2031,6 +2110,27 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
             } else {
                 config_hash
             };
+            if !queued_source_hash.is_empty() {
+                anyhow::ensure!(
+                    queued_source_hash == source_hash,
+                    "queued preview source hash no longer matches resolved source"
+                );
+            }
+            if !options_hash.is_empty() {
+                anyhow::ensure!(
+                    options_hash == preview_options_hash(model),
+                    "queued preview options hash no longer matches current export options"
+                );
+            }
+            if !output_kind.is_empty() {
+                anyhow::ensure!(
+                    output_kind == "preview",
+                    "unexpected queued preview output kind"
+                );
+            }
+            if !format.is_empty() {
+                anyhow::ensure!(format == "glb", "unexpected queued preview export format");
+            }
             persist_configuration_selection(state, &source_hash, &validated).await?;
             let artifact_key = preview_artifact_key(&source_hash, model, &config_hash);
             if state.db.artifact(&artifact_key).await?.is_none() {
@@ -2042,13 +2142,19 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                     &config_hash,
                     &artifact_key,
                     Some(&job.work_key),
+                    (!request_hash.is_empty()).then_some(request_hash.as_str()),
                 )
                 .await?;
             }
         }
         JobPayload::DownloadExport {
             model_slug,
+            request_hash,
+            source_hash: queued_source_hash,
             config_hash,
+            options_hash,
+            output_kind,
+            export_format: queued_format,
             config_hash_version,
             values,
             format,
@@ -2092,6 +2198,30 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
             } else {
                 config_hash
             };
+            if !queued_source_hash.is_empty() {
+                anyhow::ensure!(
+                    queued_source_hash == source_hash,
+                    "queued download source hash no longer matches resolved source"
+                );
+            }
+            if !options_hash.is_empty() {
+                anyhow::ensure!(
+                    options_hash == download_options_hash(model, format),
+                    "queued download options hash no longer matches current export options"
+                );
+            }
+            if !output_kind.is_empty() {
+                anyhow::ensure!(
+                    output_kind == "download",
+                    "unexpected queued download output kind"
+                );
+            }
+            if !queued_format.is_empty() {
+                anyhow::ensure!(
+                    queued_format == format.slug(),
+                    "queued download format no longer matches current export format"
+                );
+            }
             persist_configuration_selection(state, &source_hash, &validated).await?;
             let artifact_key = download_artifact_key(&source_hash, model, &config_hash, format);
             if state.db.artifact(&artifact_key).await?.is_none() {
@@ -2104,6 +2234,7 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                     &artifact_key,
                     format,
                     Some(&job.work_key),
+                    (!request_hash.is_empty()).then_some(request_hash.as_str()),
                 )
                 .await?;
             }
@@ -2238,29 +2369,19 @@ async fn refresh_preview(
     config_hash: &str,
     artifact_key: &str,
     producing_job_key: Option<&str>,
+    expected_request_hash: Option<&str>,
 ) -> anyhow::Result<String> {
-    let configuration =
-        resolve_configuration_encoding(state, model, source_hash, config_hash, values).await?;
-    let options_hash = preview_options_hash(model);
-    let request = state.onshape.build_preview_glb_export_request(
-        &model.onshape,
-        &EncodedConfigurationIdentity {
-            encoded_id: configuration.encoded_id.clone(),
-            query_param: configuration.query_param.clone(),
-        },
-        &model.exports.preview_options,
-    );
-    let request_hash = persist_export_request(
-        state,
-        source_hash,
-        config_hash,
-        &options_hash,
-        "preview",
-        "glb",
-        &request,
-    )
-    .await?;
-    let bytes = state.onshape.execute_export_request(&request).await?;
+    let prepared = prepare_preview_export(state, model, source_hash, values, config_hash).await?;
+    if let Some(expected_request_hash) = expected_request_hash {
+        anyhow::ensure!(
+            prepared.request_hash == expected_request_hash,
+            "queued preview request hash no longer matches the canonical export request"
+        );
+    }
+    let bytes = state
+        .onshape
+        .execute_export_request(&prepared.request)
+        .await?;
     let preview_artifact =
         preview_artifact_from_onshape_bytes(source_hash, model, config_hash, bytes)?;
     let sha256 = cache_key::hex_sha256(&preview_artifact.bytes);
@@ -2292,12 +2413,12 @@ async fn refresh_preview(
             sha256: &sha256,
             producing_job_key,
             source_hash,
-            options_hash: &options_hash,
+            options_hash: &prepared.options_hash,
             parameter_schema_version: SCHEMA_VERSION.into(),
             config_values_json: &config_values_json,
         })
         .await?;
-    tracing::debug!(%request_hash, %artifact_key, "staged preview export request");
+    tracing::debug!(request_hash = %prepared.request_hash, %artifact_key, "staged preview export request");
     rewrite_manifest(state, model, config_hash, Some(values)).await?;
     Ok(preview_artifact.object_key)
 }
@@ -2534,30 +2655,20 @@ async fn refresh_download(
     artifact_key: &str,
     format: catalog::DownloadFormat,
     producing_job_key: Option<&str>,
+    expected_request_hash: Option<&str>,
 ) -> anyhow::Result<String> {
-    let configuration =
-        resolve_configuration_encoding(state, model, source_hash, config_hash, values).await?;
-    let options_hash = download_options_hash(model, format);
-    let request = state.onshape.build_download_export_request(
-        &model.onshape,
-        &EncodedConfigurationIdentity {
-            encoded_id: configuration.encoded_id.clone(),
-            query_param: configuration.query_param.clone(),
-        },
-        format,
-        &model.exports.download_options,
-    );
-    let request_hash = persist_export_request(
-        state,
-        source_hash,
-        config_hash,
-        &options_hash,
-        "download",
-        format.slug(),
-        &request,
-    )
-    .await?;
-    let bytes = state.onshape.execute_export_request(&request).await?;
+    let prepared =
+        prepare_download_export(state, model, source_hash, values, config_hash, format).await?;
+    if let Some(expected_request_hash) = expected_request_hash {
+        anyhow::ensure!(
+            prepared.request_hash == expected_request_hash,
+            "queued download request hash no longer matches the canonical export request"
+        );
+    }
+    let bytes = state
+        .onshape
+        .execute_export_request(&prepared.request)
+        .await?;
     let object_key = download_object_key(source_hash, model, config_hash, format);
     let filename = download_filename(model, format);
     let content_disposition = format!("attachment; filename=\"{filename}\"");
@@ -2586,14 +2697,86 @@ async fn refresh_download(
             sha256: &sha256,
             producing_job_key,
             source_hash,
-            options_hash: &options_hash,
+            options_hash: &prepared.options_hash,
             parameter_schema_version: SCHEMA_VERSION.into(),
             config_values_json: &config_values_json,
         })
         .await?;
-    tracing::debug!(%request_hash, %artifact_key, "staged download export request");
+    tracing::debug!(request_hash = %prepared.request_hash, %artifact_key, "staged download export request");
     rewrite_manifest(state, model, config_hash, Some(values)).await?;
     Ok(object_key)
+}
+
+async fn prepare_preview_export(
+    state: &AppState,
+    model: &catalog::Model,
+    source_hash: &str,
+    values: &HashMap<String, String>,
+    config_hash: &str,
+) -> anyhow::Result<PreparedExportRequest> {
+    let configuration =
+        resolve_configuration_encoding(state, model, source_hash, config_hash, values).await?;
+    let options_hash = preview_options_hash(model);
+    let request = state.onshape.build_preview_glb_export_request(
+        &model.onshape,
+        &EncodedConfigurationIdentity {
+            encoded_id: configuration.encoded_id,
+            query_param: configuration.query_param,
+        },
+        &model.exports.preview_options,
+    );
+    let request_hash = persist_export_request(
+        state,
+        source_hash,
+        config_hash,
+        &options_hash,
+        "preview",
+        "glb",
+        &request,
+    )
+    .await?;
+    Ok(PreparedExportRequest {
+        options_hash,
+        request_hash,
+        request,
+    })
+}
+
+async fn prepare_download_export(
+    state: &AppState,
+    model: &catalog::Model,
+    source_hash: &str,
+    values: &HashMap<String, String>,
+    config_hash: &str,
+    format: catalog::DownloadFormat,
+) -> anyhow::Result<PreparedExportRequest> {
+    let configuration =
+        resolve_configuration_encoding(state, model, source_hash, config_hash, values).await?;
+    let options_hash = download_options_hash(model, format);
+    let request = state.onshape.build_download_export_request(
+        &model.onshape,
+        &EncodedConfigurationIdentity {
+            encoded_id: configuration.encoded_id,
+            query_param: configuration.query_param,
+        },
+        format,
+        &model.exports.download_options,
+    );
+    let request_hash = persist_export_request(
+        state,
+        source_hash,
+        config_hash,
+        &options_hash,
+        "download",
+        format.slug(),
+        &request,
+    )
+    .await?;
+    Ok(PreparedExportRequest {
+        options_hash,
+        request_hash,
+        request,
+    })
 }
 
 async fn persist_export_request(
@@ -2797,6 +2980,10 @@ fn parameter_refresh_work_key(source_hash: &str) -> String {
     )
 }
 
+fn export_job_key(request_hash: &str) -> String {
+    format!("work-v2:export:{request_hash}")
+}
+
 fn preview_work_key(source_hash: &str, model: &catalog::Model, config_hash: &str) -> String {
     work_key(
         "preview_export",
@@ -2824,6 +3011,90 @@ fn download_work_key(
             format: Some(format.slug()),
         },
     )
+}
+
+async fn preview_status_job_keys(
+    state: &AppState,
+    source_hash: &str,
+    model: &catalog::Model,
+    config_hash: &str,
+) -> Result<Vec<String>, AppError> {
+    export_status_job_keys(
+        state,
+        source_hash,
+        config_hash,
+        &preview_options_hash(model),
+        "preview",
+        "glb",
+        preview_work_key(source_hash, model, config_hash),
+    )
+    .await
+}
+
+async fn download_status_job_keys(
+    state: &AppState,
+    source_hash: &str,
+    model: &catalog::Model,
+    config_hash: &str,
+    format: catalog::DownloadFormat,
+) -> Result<Vec<String>, AppError> {
+    export_status_job_keys(
+        state,
+        source_hash,
+        config_hash,
+        &download_options_hash(model, format),
+        "download",
+        format.slug(),
+        download_work_key(source_hash, model, config_hash, format),
+    )
+    .await
+}
+
+async fn export_status_job_keys(
+    state: &AppState,
+    source_hash: &str,
+    config_hash: &str,
+    options_hash: &str,
+    output_kind: &str,
+    format: &str,
+    legacy_work_key: String,
+) -> Result<Vec<String>, AppError> {
+    let mut work_keys = Vec::with_capacity(2);
+    if let Some(request) = state
+        .db
+        .latest_export_request_for_output(
+            source_hash,
+            config_hash,
+            options_hash,
+            output_kind,
+            format,
+        )
+        .await?
+    {
+        work_keys.push(export_job_key(&request.request_hash));
+    }
+    if !work_keys.iter().any(|key| key == &legacy_work_key) {
+        work_keys.push(legacy_work_key);
+    }
+    Ok(work_keys)
+}
+
+fn should_defer_to_legacy_export_job(legacy_job: Option<&db::JobRecord>) -> bool {
+    matches!(
+        legacy_job.map(|job| job.status.as_str()),
+        Some("queued" | "running" | "ready")
+    )
+}
+
+fn job_status_priority(status: &str) -> u8 {
+    match status {
+        "running" => 5,
+        "queued" => 4,
+        "ready" => 3,
+        "failed" => 2,
+        "superseded" => 1,
+        _ => 0,
+    }
 }
 
 fn preview_artifact_key(source_hash: &str, model: &catalog::Model, config_hash: &str) -> String {
@@ -3832,6 +4103,14 @@ mod tests {
         );
         assert_eq!(preview_request_hash, other_preview_request_hash);
         assert_eq!(download_request_hash, other_download_request_hash);
+        assert_eq!(
+            export_job_key(&preview_request_hash),
+            export_job_key(&other_preview_request_hash)
+        );
+        assert_eq!(
+            export_job_key(&download_request_hash),
+            export_job_key(&other_download_request_hash)
+        );
 
         assert!(preview_artifact_key(&source_hash, &first, config_hash).contains(&source_hash));
         assert!(
@@ -3864,9 +4143,36 @@ mod tests {
             preview_artifact_key(&source_hash, &first, config_hash)
         );
         assert_ne!(
+            export_job_key(&preview_request_hash),
+            preview_work_key(&source_hash, &first, config_hash)
+        );
+        assert_ne!(
             download_filename(&first, catalog::DownloadFormat::Step),
             download_filename(&second, catalog::DownloadFormat::Step)
         );
+    }
+
+    #[test]
+    fn legacy_failed_jobs_do_not_block_request_hash_enqueue() {
+        let failed_job = db::JobRecord {
+            work_key: "legacy".to_owned(),
+            job_kind: "preview_export".to_owned(),
+            status: "failed".to_owned(),
+            error_summary: Some("boom".to_owned()),
+            attempt: 3,
+            max_attempts: 3,
+            next_retry_at: None,
+            created_at: "now".to_owned(),
+            updated_at: "now".to_owned(),
+        };
+
+        assert!(!should_defer_to_legacy_export_job(Some(&failed_job)));
+    }
+
+    #[test]
+    fn prefers_active_job_status_over_stale_failed_status() {
+        assert!(job_status_priority("running") > job_status_priority("failed"));
+        assert!(job_status_priority("queued") > job_status_priority("superseded"));
     }
 
     #[test]
