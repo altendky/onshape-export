@@ -47,13 +47,15 @@ Configuration values may be represented as an Onshape configuration string:
 parameterId=value;other=value
 ```
 
-Current code may hand-build this string for simple cases. The v2 cache model should always use Onshape's encoding endpoint after local validation and typed canonicalization:
+Current v1 code may hand-build this string for simple cases. The v2 cache model should always use Onshape's encoding endpoint after local validation and typed canonicalization:
 
 ```text
 POST /api/elements/d/{did}/e/{eid}/configurationencodings?versionId={vid}
 ```
 
 Use `linkDocumentId` as well if the versioned element must be accessed through a linked document context.
+
+Local validation should confirm that every submitted parameter is supported by the normalized schema and that every value can be represented as a typed canonical value before any network call. Typed canonicalization should normalize those values into the same application payload that produces `configHash`. A v2 export must not fall back to hand-built configuration strings if encoding fails; retry transient endpoint failures through the normal Onshape retry policy, record malformed or terminal responses in diagnostics, and surface the export as failed until a valid Onshape encoding is available. The hand-built path remains v1 compatibility only.
 
 Request body shape from the OpenAPI schema:
 
