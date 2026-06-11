@@ -80,7 +80,7 @@ Plan review TODOs that are not implemented yet:
 - Persist Onshape translation IDs and polling state for crash recovery.
 - Honor Onshape `Retry-After` once the client exposes it.
 - Materialize missing outputs, replacement pointers, and full supersession history in manifests.
-- Reconcile the current v1 cache implementation with the v2 cache model as a clean cut: request-hash export dedupe, resolved microversion source identity, private raw payload retention, artifact sets, DB-first metadata, and public manifests deferred.
+- Reconcile the current v1 cache implementation with the v2 cache model as a clean cut, following [Forward-Looking Cache Model](cache-model.md): do not merge v1 artifact records into v2 identity; resolve microversion source identity before hashing; dedupe export work by `requestHash`; retain private raw payloads before post-processing; create artifact sets from DB-first metadata; and keep public manifests deferred to DB/status-derived responses until a later explicit materialization feature.
 
 ## Phase 0: Documentation And Decisions
 
