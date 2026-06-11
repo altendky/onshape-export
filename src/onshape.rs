@@ -10,8 +10,11 @@ use reqwest::Url;
 use serde_json::{Value, json};
 use sha2::Sha256;
 
-use crate::catalog::{DownloadFormat, DownloadOptions, ElementKind, OnshapeSource, PreviewOptions};
 use crate::config::OnshapeConfig;
+use crate::{
+    cache_model::ResolvedOnshapeSourceIdentity,
+    catalog::{DownloadFormat, DownloadOptions, ElementKind, OnshapeSource, PreviewOptions},
+};
 
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -74,6 +77,58 @@ impl OnshapeClient {
         let response =
             onshape_response(self.client.get(url).headers(headers).send().await?).await?;
         Ok(response.json().await?)
+    }
+
+    pub async fn resolve_version_microversion(
+        &self,
+        source: &OnshapeSource,
+    ) -> anyhow::Result<ResolvedOnshapeSourceIdentity> {
+        anyhow::ensure!(
+            self.has_credentials(),
+            "Onshape credentials are not configured"
+        );
+
+        let path = format!(
+            "/api/documents/d/{}/versions/{}",
+            source.document_id, source.version_id
+        );
+        let mut url = self.base_url.clone();
+        url.set_path(&path);
+        match &source.link_document_id {
+            Some(link_document_id) => {
+                url.set_query(Some(&format!("linkDocumentId={link_document_id}")))
+            }
+            None => url.set_query(None),
+        }
+
+        let mut headers = signed_headers(
+            Method::GET,
+            url.path(),
+            url.query().unwrap_or_default(),
+            self.access_key.as_deref().expect("checked credentials"),
+            self.secret_key.as_deref().expect("checked credentials"),
+        )?;
+        headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+
+        let response: Value = onshape_response(self.client.get(url).headers(headers).send().await?)
+            .await?
+            .json()
+            .await?;
+        let microversion_id = first_string(&response, &["microversion", "microversionId"])
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Onshape version response did not include a microversion id: {response}"
+                )
+            })?;
+
+        Ok(ResolvedOnshapeSourceIdentity {
+            document_id: source.document_id.clone(),
+            version_id: source.version_id.clone(),
+            microversion_id,
+            element_id: source.element_id.clone(),
+            element_kind: source.element_kind.clone(),
+            link_document_id: source.link_document_id.clone(),
+        })
     }
 
     pub async fn export_glb(

@@ -1,4 +1,5 @@
 mod cache_key;
+mod cache_model;
 mod catalog;
 mod config;
 mod db;
@@ -32,6 +33,7 @@ use crate::parameters::{
     normalize_configuration, validate_values,
 };
 use crate::{
+    cache_model::ResolvedOnshapeSourceIdentity,
     catalog::Catalog,
     config::Config,
     db::{ArtifactUpsert, Database},
@@ -1671,7 +1673,8 @@ async fn load_or_refresh_parameters(
     state: &AppState,
     model: &catalog::Model,
 ) -> Result<Option<ParameterSchema>, AppError> {
-    if let Some(record) = state.db.parameter_metadata(&model.slug).await? {
+    let source_hash = resolve_source_hash(state, model).await?;
+    if let Some(record) = state.db.parameter_metadata(&source_hash).await? {
         let schema = state
             .storage
             .get_json::<ParameterSchema>(&record.normalized_object_key)
@@ -1740,9 +1743,19 @@ async fn rebuild_normalized_parameters_from_raw(
     let mut schema = normalize_configuration(&model.onshape, &raw);
     validate_parameter_overrides(model, &schema)?;
     apply_overrides(&mut schema, &model.parameter_overrides);
+    let source_hash = resolve_source_hash(state, model).await?;
+    let schema_hash = parameter_schema_hash(&schema)?;
+    let normalized_key = parameter_normalized_key(&source_hash, &schema_hash);
+    state.storage.put_json(&normalized_key, &schema).await?;
     state
-        .storage
-        .put_json(&parameter_normalized_key(model), &schema)
+        .db
+        .upsert_parameter_metadata(
+            &source_hash,
+            raw_key,
+            &normalized_key,
+            &schema_hash,
+            SCHEMA_VERSION.into(),
+        )
         .await?;
     Ok(Some(schema))
 }
@@ -1817,7 +1830,8 @@ async fn cached_default_parameter_values(
     state: &AppState,
     model: &catalog::Model,
 ) -> anyhow::Result<Option<HashMap<String, String>>> {
-    let Some(record) = state.db.parameter_metadata(&model.slug).await? else {
+    let source_hash = resolve_source_hash(state, model).await?;
+    let Some(record) = state.db.parameter_metadata(&source_hash).await? else {
         return Ok(None);
     };
     let schema = state
@@ -2003,36 +2017,37 @@ async fn refresh_parameters(
     state: &AppState,
     model: &catalog::Model,
 ) -> anyhow::Result<ParameterSchema> {
+    let source_hash = resolve_source_hash(state, model).await?;
     let raw = state.onshape.fetch_configuration(&model.onshape).await?;
     let mut schema = normalize_configuration(&model.onshape, &raw);
     validate_parameter_overrides(model, &schema)?;
     apply_overrides(&mut schema, &model.parameter_overrides);
-    let raw_key = parameter_raw_key(model);
-    let normalized_key = parameter_normalized_key(model);
+    let schema_hash = parameter_schema_hash(&schema)?;
+    let raw_key = parameter_raw_key(&source_hash);
+    let normalized_key = parameter_normalized_key(&source_hash, &schema_hash);
 
     state.storage.put_json(&raw_key, &raw).await?;
     state.storage.put_json(&normalized_key, &schema).await?;
     state
         .db
-        .upsert_parameter_metadata(&model.slug, &raw_key, &normalized_key)
+        .upsert_parameter_metadata(
+            &source_hash,
+            &raw_key,
+            &normalized_key,
+            &schema_hash,
+            SCHEMA_VERSION.into(),
+        )
         .await?;
 
     Ok(schema)
 }
 
-fn parameter_raw_key(model: &catalog::Model) -> String {
-    format!(
-        "onshape/v1/{}/configuration.raw.json",
-        source_hash(&model.onshape)
-    )
+fn parameter_raw_key(source_hash: &str) -> String {
+    format!("onshape/source/v1/{source_hash}/configuration.raw.json")
 }
 
-fn parameter_normalized_key(model: &catalog::Model) -> String {
-    format!(
-        "onshape/v1/{}/parameters.normalized/schema-v{}.json",
-        source_hash(&model.onshape),
-        SCHEMA_VERSION
-    )
+fn parameter_normalized_key(source_hash: &str, schema_hash: &str) -> String {
+    format!("onshape/source/v1/{source_hash}/parameters.normalized/{schema_hash}.json")
 }
 
 async fn render_cached_preview(
@@ -2131,7 +2146,7 @@ async fn refresh_preview(
         .await?;
     let preview_artifact = preview_artifact_from_onshape_bytes(model, config_hash, bytes)?;
     let sha256 = cache_key::hex_sha256(&preview_artifact.bytes);
-    let source_hash = source_hash(&model.onshape);
+    let source_hash = resolve_source_hash(state, model).await?;
     let options_hash = preview_options_hash(model);
     let config_values_json = config_values_json(values)?;
     state
@@ -2413,7 +2428,7 @@ async fn refresh_download(
     let filename = download_filename(model, format);
     let content_disposition = format!("attachment; filename=\"{filename}\"");
     let sha256 = cache_key::hex_sha256(&bytes);
-    let source_hash = source_hash(&model.onshape);
+    let source_hash = resolve_source_hash(state, model).await?;
     let options_hash = download_options_hash(model, format);
     let config_values_json = config_values_json(values)?;
     state
@@ -2802,7 +2817,68 @@ fn canonical_values(values: &HashMap<String, String>) -> BTreeMap<String, String
 }
 
 fn config_values_json(values: &HashMap<String, String>) -> anyhow::Result<String> {
-    Ok(serde_json::to_string(&canonical_values(values))?)
+    Ok(serde_json::to_string(&cache_model::canonical_values(
+        values,
+    ))?)
+}
+
+fn parameter_schema_hash(schema: &ParameterSchema) -> anyhow::Result<String> {
+    cache_model::parameter_schema_hash(schema)
+}
+
+async fn resolve_source_hash(state: &AppState, model: &catalog::Model) -> anyhow::Result<String> {
+    let identity = resolve_source_identity(state, model).await?;
+    cache_model::source_hash(&identity)
+}
+
+async fn resolve_source_identity(
+    state: &AppState,
+    model: &catalog::Model,
+) -> anyhow::Result<ResolvedOnshapeSourceIdentity> {
+    let source = &model.onshape;
+    if let Some(record) = state
+        .db
+        .source_resolution_for_version(
+            &source.document_id,
+            &source.version_id,
+            &source.element_id,
+            source.element_kind.key(),
+            source.link_document_id.as_deref(),
+        )
+        .await?
+    {
+        return Ok(ResolvedOnshapeSourceIdentity {
+            document_id: record.document_id,
+            version_id: record.version_id,
+            microversion_id: record.microversion_id,
+            element_id: record.element_id,
+            element_kind: source.element_kind.clone(),
+            link_document_id: record.link_document_id,
+        });
+    }
+
+    let identity = state.onshape.resolve_version_microversion(source).await?;
+    let source_hash = cache_model::source_hash(&identity)?;
+    let diagnostics_json = serde_json::to_string(&serde_json::json!({
+        "documentId": identity.document_id,
+        "versionId": identity.version_id,
+        "microversionId": identity.microversion_id,
+    }))?;
+    state
+        .db
+        .upsert_source_resolution(db::SourceResolutionUpsert {
+            source_hash: &source_hash,
+            model_slug: &model.slug,
+            document_id: &identity.document_id,
+            version_id: &identity.version_id,
+            microversion_id: &identity.microversion_id,
+            element_id: &identity.element_id,
+            element_kind: identity.element_kind.key(),
+            link_document_id: identity.link_document_id.as_deref(),
+            diagnostics_json: &diagnostics_json,
+        })
+        .await?;
+    Ok(identity)
 }
 
 fn onshape_configuration_string(values: &HashMap<String, String>) -> String {
