@@ -11,6 +11,8 @@ version id: vid
 
 Workspaces are intentionally out of scope for the first version.
 
+For the v2 cache model, catalog entries may remain version-based, but the service should resolve the version to its immutable document microversion before computing `sourceHash`. Store the version-to-microversion mapping for diagnostics and traceability.
+
 ## Authentication
 
 The MVP assumes server-owned Onshape API keys configured as deployment secrets. The Rust service signs requests server-side, and credentials are never exposed to browsers.
@@ -43,7 +45,7 @@ Configuration values may be represented as an Onshape configuration string:
 parameterId=value;other=value
 ```
 
-If hand-building this string is insufficient for some parameter types, use Onshape's encoding endpoint:
+Current code may hand-build this string for simple cases. The v2 cache model should always use Onshape's encoding endpoint after local validation and typed canonicalization:
 
 ```text
 POST /api/elements/d/{did}/e/{eid}/configurationencodings?versionId={vid}
@@ -64,7 +66,7 @@ Request body shape from the OpenAPI schema:
 }
 ```
 
-Encoded configuration results should be cached by source identity and `config_hash`.
+Encoded configuration results should be cached by source identity, `config_hash`, and encoding request context. The encoding response is Onshape's request representation; it does not replace the application's canonical `configHash`.
 
 ## Preview Export
 
@@ -85,9 +87,9 @@ POST /api/assemblies/d/{did}/v/{vid}/e/{eid}/export/gltf
 
 The async GLB path is more consistent across Part Studios and Assemblies. The synchronous Part Studio endpoint may be useful later if it proves faster and reliable.
 
-Preferred preview requirement: even if Onshape endpoint names use `gltf`, request grouped output and cache GLB when Onshape provides it. If Onshape returns direct glTF JSON, publish it as the viewer artifact. If Onshape returns a ZIP with exactly one glTF viewer asset instead, extract and publish the `.gltf` plus sidecars under the same preview identity and retain the original ZIP as an operational sidecar.
+Preferred preview requirement: even if Onshape endpoint names use `gltf`, request grouped output and cache GLB when Onshape provides it. If Onshape returns direct glTF JSON, publish it as the viewer artifact. If Onshape returns a ZIP with exactly one glTF viewer asset instead, extract and publish the `.gltf` plus sidecars under the same preview identity and retain the original ZIP as an operational sidecar. Target cache language should model this as a preview artifact set.
 
-Current branch status: zipped Onshape preview responses use exactly one valid `.glb` when present. Otherwise, the largest `.gltf` entry becomes the viewer object and safe sidecar files are uploaded beside it.
+Current branch status: zipped Onshape preview responses use exactly one valid `.glb` when present. Otherwise, a ZIP with exactly one `.gltf` entry publishes that viewer object and safe sidecar files beside it. ZIPs with multiple `.gltf` entries are rejected until a real merge path exists.
 
 Async GLB body shape should include the configuration under `advancedParams.configuration`:
 
@@ -106,7 +108,7 @@ Async GLB body shape should include the configuration under `advancedParams.conf
 }
 ```
 
-Preview cache identity must include all preview-affecting options, including mesh settings, orientation flags such as `isYAxisUp`, grouping behavior, fallback/merge policy, and exporter version.
+Preview cache identity must keep cache layers separate. Logical Onshape export intent such as mesh settings, orientation flags such as `isYAxisUp`, and grouping behavior belongs in `optionsHash`. Exact request defaults and builder changes belong in `requestHash` through fields such as `defaultsPolicyVersion` and `requestBuilderVersion`. Local extraction, fallback, merge, packing, validation, and tool versions belong in `postprocessHash`.
 
 ## Download Exports
 

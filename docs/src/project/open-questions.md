@@ -18,12 +18,15 @@
 - Are format-specific endpoints better than generic translation endpoints for STEP and GLB in practice?
 - Does synchronous Part Studio glTF/GLB export produce suitable single-file GLB previews faster than async export?
 - Do Assemblies and Part Studios need different default export options?
-- How should multiple `resultExternalDataIds` be represented and served?
+- Which exports return multiple `resultExternalDataIds` in practice, and which should initial v2 reject as unsupported multi-result shapes?
+- Does Onshape expose a reliable version-to-microversion resolution path for every versioned Part Studio and Assembly source we need?
+- Which download response headers are reliable enough for diagnostics or conditional requests, such as `ETag`, `Last-Modified`, `Content-Disposition`, and content length?
 
 ## Parameter Handling
 
 - Which Onshape configuration parameter types appear in target models?
-- Can all parameter types be encoded safely without calling `configurationencodings`?
+- What exact typed canonical form should v2 use for each supported Onshape parameter type?
+- Does `configurationencodings` behave consistently for default, explicit-default, and non-default values across Part Studios and Assemblies?
 - What numeric precision or step rules should each model expose?
 - How should hidden or conditionally visible parameters be handled?
 - Which unsupported Onshape parameter types need explicit `unsupportedReason` metadata?
@@ -38,13 +41,13 @@
 
 - How long should failed jobs suppress retries?
 - Should admin rebuilds generate all formats or only missing artifacts?
-- What exact manifest/index fields should mark superseded artifacts after exporter version changes?
-- Which current deletion-based cleanup commands should remain after normal invalidation moves to supersession?
+- What exact v2 database schema names and relationships should represent requests, translations, raw payloads, post-processing, artifact sets, artifact files, and failure events?
+- When should future public object-store manifests be materialized from DB state, and how much metadata should they expose?
+- Reconsider v2 repair and overwrite semantics before production use: raw payload repair, public artifact repair, DB/object drift, corrupt-but-public objects, missing sidecars, partial uploads, concurrent repair races, CDN behavior, and supersede-versus-repair boundaries.
+- What live experiments must pass before locking v2 request defaults, result cardinality, raw payload retention, and post-processing behavior?
 
 ## Plan Gaps
 
-- How should RFC 8785 canonical JSON be introduced without breaking existing cache keys?
-- Should existing `catalog/models.json` data migrate directly to `catalog/v1/`, or should source changes land first?
 - What public status route shape should expose `jobId`, `groupId`, ready outputs, retry hints, and safe failure messages?
 
 ## Resolved Working Decisions

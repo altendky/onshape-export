@@ -42,7 +42,9 @@ GLB is a preview format for the MVP and is not a supported user-download format;
 
 **Decision:** Use GLB as the MVP browser preview artifact.
 
-GLB is generated as a separate Onshape export for the same selected configuration. It is not derived locally from STEP, STL, or 3MF in the MVP. Documentation may mention glTF only as the broader format family or Onshape translation terminology; cache keys, manifests, public URLs, and viewer behavior should treat preview output as one `.glb` artifact.
+GLB is generated as a separate Onshape export for the same selected configuration. It is not derived locally from STEP, STL, or 3MF in the MVP. Documentation may mention glTF only as the broader format family or Onshape translation terminology.
+
+Target cache language should treat preview output as a preview artifact set, not as one guaranteed `.glb` file. GLB remains the preferred/current single-file preview case.
 
 Current branch status: direct GLB responses are accepted after GLB header validation, and direct glTF JSON responses are accepted as browser viewer artifacts. Zipped Onshape preview responses use exactly one valid `.glb` when present; otherwise a ZIP with exactly one `.gltf` publishes that viewer asset, safe sidecars, and the original `source.zip` under the preview identity. ZIPs with multiple `.gltf` files are rejected rather than showing a partial preview.
 
