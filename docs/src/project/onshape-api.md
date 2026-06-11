@@ -114,7 +114,7 @@ Async GLB body shape should include the configuration under `advancedParams.conf
 }
 ```
 
-Preview cache identity must keep cache layers separate. Logical Onshape export intent such as mesh settings, orientation flags such as `isYAxisUp`, and grouping behavior belongs in `optionsHash`. Exact request defaults and builder changes belong in `requestHash` through fields such as `defaultsPolicyVersion` and `requestBuilderVersion`. Local extraction, fallback, merge, packing, validation, and tool versions belong in `postprocessHash`.
+Preview cache identity must keep cache layers separate. Logical Onshape export intent such as mesh settings, grouping behavior, and future orientation options belongs in `optionsHash`; `isYAxisUp` is an illustrative orientation option, not a currently implemented schema field. Exact request defaults and builder changes belong in `requestHash` through fields such as `defaultsPolicyVersion` and `requestBuilderVersion`, the camelCase field name for the request builder version described in the cache model. Local extraction, fallback, merge, packing, validation, and tool versions belong in `postprocessHash`.
 
 ## Download Exports
 
