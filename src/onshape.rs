@@ -12,7 +12,7 @@ use sha2::Sha256;
 
 use crate::config::OnshapeConfig;
 use crate::{
-    cache_model::ResolvedOnshapeSourceIdentity,
+    cache_model::{EncodedConfigurationIdentity, ResolvedOnshapeSourceIdentity},
     catalog::{DownloadFormat, DownloadOptions, ElementKind, OnshapeSource, PreviewOptions},
 };
 
@@ -24,6 +24,13 @@ pub struct OnshapeClient {
     base_url: Url,
     access_key: Option<String>,
     secret_key: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EncodedConfiguration {
+    pub identity: EncodedConfigurationIdentity,
+    pub request_json: String,
+    pub response_json: String,
 }
 
 impl OnshapeClient {
@@ -128,6 +135,44 @@ impl OnshapeClient {
             element_id: source.element_id.clone(),
             element_kind: source.element_kind.clone(),
             link_document_id: source.link_document_id.clone(),
+        })
+    }
+
+    pub async fn encode_configuration(
+        &self,
+        source: &OnshapeSource,
+        values: &std::collections::HashMap<String, String>,
+    ) -> anyhow::Result<EncodedConfiguration> {
+        anyhow::ensure!(
+            self.has_credentials(),
+            "Onshape credentials are not configured"
+        );
+
+        let (path, query, body) = configuration_encoding_request(source, values);
+        let request_json = serde_json::to_string(&body)?;
+        let mut url = self.base_url.clone();
+        url.set_path(&path);
+        url.set_query(Some(&query));
+
+        let mut headers = self.signed_json_headers(Method::POST, url.path(), &query)?;
+        headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+        let response: Value = onshape_response(
+            self.client
+                .post(url)
+                .headers(headers)
+                .json(&body)
+                .send()
+                .await?,
+        )
+        .await?
+        .json()
+        .await?;
+        let response_json = serde_json::to_string(&response)?;
+
+        Ok(EncodedConfiguration {
+            identity: parse_configuration_encoding_response(&response)?,
+            request_json,
+            response_json,
         })
     }
 
@@ -373,6 +418,49 @@ fn gltf_export_body(configuration: &str, options: &PreviewOptions) -> Value {
     })
 }
 
+fn configuration_encoding_request(
+    source: &OnshapeSource,
+    values: &std::collections::HashMap<String, String>,
+) -> (String, String, Value) {
+    let path = format!(
+        "/api/elements/d/{}/e/{}/configurationencodings",
+        source.document_id, source.element_id
+    );
+
+    let mut query = format!("versionId={}", source.version_id);
+    if let Some(link_document_id) = &source.link_document_id {
+        query.push_str("&linkDocumentId=");
+        query.push_str(link_document_id);
+    }
+
+    let mut keys = values.keys().collect::<Vec<_>>();
+    keys.sort();
+    let parameters = keys
+        .into_iter()
+        .map(|key| {
+            json!({
+                "parameterId": key,
+                "parameterValue": values[key],
+            })
+        })
+        .collect::<Vec<_>>();
+
+    (path, query, json!({ "parameters": parameters }))
+}
+
+fn parse_configuration_encoding_response(
+    response: &Value,
+) -> anyhow::Result<EncodedConfigurationIdentity> {
+    let encoded_id = first_string(response, &["encodedId"])
+        .ok_or_else(|| anyhow::anyhow!("Onshape encoding response did not include encodedId"))?;
+    let query_param = first_string(response, &["queryParam"])
+        .ok_or_else(|| anyhow::anyhow!("Onshape encoding response did not include queryParam"))?;
+    Ok(EncodedConfigurationIdentity {
+        encoded_id,
+        query_param,
+    })
+}
+
 fn element_collection(source: &OnshapeSource) -> &'static str {
     match source.element_kind {
         ElementKind::PartStudio => "partstudios",
@@ -465,6 +553,8 @@ fn nonce() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::ElementKind;
+    use std::collections::HashMap;
 
     #[test]
     fn gltf_export_body_requests_grouped_preview() {
@@ -481,5 +571,53 @@ mod tests {
         assert_eq!(body["storeInDocument"], false);
         assert_eq!(body["notifyUser"], false);
         assert_eq!(body["triggerAutoDownload"], false);
+    }
+
+    #[test]
+    fn configuration_encoding_request_uses_version_query_and_sorted_parameters() {
+        let source = OnshapeSource {
+            document_id: "did".to_owned(),
+            version_id: "vid".to_owned(),
+            element_id: "eid".to_owned(),
+            element_kind: ElementKind::PartStudio,
+            link_document_id: Some("ldid".to_owned()),
+        };
+        let values = HashMap::from([
+            ("width".to_owned(), "10 mm".to_owned()),
+            ("enabled".to_owned(), "true".to_owned()),
+        ]);
+
+        let (path, query, body) = configuration_encoding_request(&source, &values);
+
+        assert_eq!(path, "/api/elements/d/did/e/eid/configurationencodings");
+        assert_eq!(query, "versionId=vid&linkDocumentId=ldid");
+        assert_eq!(
+            body,
+            json!({
+                "parameters": [
+                    {
+                        "parameterId": "enabled",
+                        "parameterValue": "true",
+                    },
+                    {
+                        "parameterId": "width",
+                        "parameterValue": "10 mm",
+                    },
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn parse_configuration_encoding_response_requires_expected_fields() {
+        let parsed = parse_configuration_encoding_response(&json!({
+            "encodedId": "enc-123",
+            "queryParam": "configuration=enc-123",
+        }))
+        .unwrap();
+
+        assert_eq!(parsed.encoded_id, "enc-123");
+        assert_eq!(parsed.query_param, "configuration=enc-123");
+        assert!(parse_configuration_encoding_response(&json!({"encodedId": "enc"})).is_err());
     }
 }

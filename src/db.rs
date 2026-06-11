@@ -2214,6 +2214,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configuration_encodings_round_trip_by_source_and_config_hash() {
+        let db = test_database().await;
+        db.upsert_configuration_encoding(ConfigurationEncodingUpsert {
+            source_hash: "sourcehash",
+            config_hash: "confighash",
+            encoded_id: "encoded-1",
+            query_param: "configuration=encoded-1",
+            request_json: r#"{"parameters":[{"parameterId":"enabled","parameterValue":"true"}]}"#,
+            response_json: r#"{"encodedId":"encoded-1","queryParam":"configuration=encoded-1"}"#,
+        })
+        .await
+        .unwrap();
+
+        let record = db
+            .configuration_encoding("sourcehash", "confighash")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.encoded_id, "encoded-1");
+        assert_eq!(record.query_param, "configuration=encoded-1");
+
+        db.upsert_configuration_encoding(ConfigurationEncodingUpsert {
+            source_hash: "sourcehash",
+            config_hash: "confighash",
+            encoded_id: "encoded-2",
+            query_param: "configuration=encoded-2",
+            request_json: r#"{"parameters":[{"parameterId":"enabled","parameterValue":"false"}]}"#,
+            response_json: r#"{"encodedId":"encoded-2","queryParam":"configuration=encoded-2"}"#,
+        })
+        .await
+        .unwrap();
+
+        let updated = db
+            .configuration_encoding("sourcehash", "confighash")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.encoded_id, "encoded-2");
+        assert!(updated.request_json.contains("false"));
+    }
+
+    #[tokio::test]
     async fn export_requests_dedupe_by_request_hash() {
         let db = test_database().await;
         let inserted = db

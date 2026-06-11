@@ -33,7 +33,7 @@ use crate::parameters::{
     ValidatedConfiguration, apply_overrides, normalize_configuration, validate_values,
 };
 use crate::{
-    cache_model::ResolvedOnshapeSourceIdentity,
+    cache_model::{EncodedConfigurationIdentity, ResolvedOnshapeSourceIdentity},
     catalog::Catalog,
     config::Config,
     db::{ArtifactUpsert, Database},
@@ -2238,12 +2238,13 @@ async fn refresh_preview(
     artifact_key: &str,
     producing_job_key: Option<&str>,
 ) -> anyhow::Result<String> {
-    let configuration = onshape_configuration_string(values);
+    let configuration =
+        resolve_configuration_encoding(state, model, source_hash, config_hash, values).await?;
     let bytes = state
         .onshape
         .export_glb(
             &model.onshape,
-            &configuration,
+            &configuration.encoded_id,
             &model.exports.preview_options,
         )
         .await?;
@@ -2521,12 +2522,13 @@ async fn refresh_download(
     format: catalog::DownloadFormat,
     producing_job_key: Option<&str>,
 ) -> anyhow::Result<String> {
-    let configuration = onshape_configuration_string(values);
+    let configuration =
+        resolve_configuration_encoding(state, model, source_hash, config_hash, values).await?;
     let bytes = state
         .onshape
         .export_download(
             &model.onshape,
-            &configuration,
+            &configuration.encoded_id,
             format,
             &model.exports.download_options,
         )
@@ -2944,6 +2946,42 @@ async fn persist_configuration_selection(
     Ok(config_hash)
 }
 
+async fn resolve_configuration_encoding(
+    state: &AppState,
+    model: &catalog::Model,
+    source_hash: &str,
+    config_hash: &str,
+    values: &HashMap<String, String>,
+) -> anyhow::Result<EncodedConfigurationIdentity> {
+    if let Some(record) = state
+        .db
+        .configuration_encoding(source_hash, config_hash)
+        .await?
+    {
+        return Ok(EncodedConfigurationIdentity {
+            encoded_id: record.encoded_id,
+            query_param: record.query_param,
+        });
+    }
+
+    let encoded = state
+        .onshape
+        .encode_configuration(&model.onshape, values)
+        .await?;
+    state
+        .db
+        .upsert_configuration_encoding(db::ConfigurationEncodingUpsert {
+            source_hash,
+            config_hash,
+            encoded_id: &encoded.identity.encoded_id,
+            query_param: &encoded.identity.query_param,
+            request_json: &encoded.request_json,
+            response_json: &encoded.response_json,
+        })
+        .await?;
+    Ok(encoded.identity)
+}
+
 fn parameter_schema_hash(schema: &ParameterSchema) -> anyhow::Result<String> {
     cache_model::parameter_schema_hash(schema)
 }
@@ -3001,15 +3039,6 @@ async fn resolve_source_identity(
         })
         .await?;
     Ok(identity)
-}
-
-fn onshape_configuration_string(values: &HashMap<String, String>) -> String {
-    let mut keys = values.keys().collect::<Vec<_>>();
-    keys.sort();
-    keys.into_iter()
-        .map(|key| format!("{}={}", key, values[key]))
-        .collect::<Vec<_>>()
-        .join(";")
 }
 
 fn preview_options_hash(model: &catalog::Model) -> String {
