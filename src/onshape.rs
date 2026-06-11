@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
@@ -12,11 +13,18 @@ use sha2::Sha256;
 
 use crate::config::OnshapeConfig;
 use crate::{
-    cache_model::{EncodedConfigurationIdentity, ResolvedOnshapeSourceIdentity},
+    cache_model::{EncodedConfigurationIdentity, RequestIdentity, ResolvedOnshapeSourceIdentity},
     catalog::{DownloadFormat, DownloadOptions, ElementKind, OnshapeSource, PreviewOptions},
 };
 
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+const API_SPEC_VERSION: Option<&str> = None;
+const PREVIEW_GLTF_DEFAULTS_POLICY_VERSION: &str = "preview-gltf-defaults-v1";
+const PREVIEW_GLTF_REQUEST_BUILDER_VERSION: &str = "preview-gltf-request-v1";
+const STEP_EXPORT_DEFAULTS_POLICY_VERSION: &str = "step-export-defaults-v1";
+const STEP_EXPORT_REQUEST_BUILDER_VERSION: &str = "step-export-request-v1";
+const TRANSLATION_EXPORT_DEFAULTS_POLICY_VERSION: &str = "translation-export-defaults-v1";
+const TRANSLATION_EXPORT_REQUEST_BUILDER_VERSION: &str = "translation-export-request-v1";
 
 #[derive(Debug, Clone)]
 pub struct OnshapeClient {
@@ -31,6 +39,32 @@ pub struct EncodedConfiguration {
     pub identity: EncodedConfigurationIdentity,
     pub request_json: String,
     pub response_json: String,
+}
+
+type CanonicalRequestPathParams = BTreeMap<String, String>;
+type CanonicalRequestQuery = BTreeMap<String, String>;
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalExportRequest {
+    pub operation: String,
+    pub method: String,
+    pub path: String,
+    pub identity: RequestIdentity<CanonicalRequestPathParams, CanonicalRequestQuery, Value>,
+}
+
+impl CanonicalExportRequest {
+    pub fn request_json(&self) -> anyhow::Result<String> {
+        Ok(serde_json::to_string(&self.identity)?)
+    }
+
+    fn document_id(&self) -> anyhow::Result<&str> {
+        self.identity
+            .path_params
+            .get("did")
+            .map(String::as_str)
+            .ok_or_else(|| anyhow::anyhow!("canonical export request did not include document id"))
+    }
 }
 
 impl OnshapeClient {
@@ -182,11 +216,15 @@ impl OnshapeClient {
         configuration: &str,
         options: &PreviewOptions,
     ) -> anyhow::Result<Vec<u8>> {
-        let translation_id = self
-            .start_glb_export(source, configuration, options)
-            .await?;
-        let external_data_id = self.poll_translation(source, &translation_id).await?;
-        self.download_external_data(source, &external_data_id).await
+        let request = self.build_preview_glb_export_request(
+            source,
+            &EncodedConfigurationIdentity {
+                encoded_id: configuration.to_owned(),
+                query_param: format!("configuration={configuration}"),
+            },
+            options,
+        );
+        self.execute_export_request(&request).await
     }
 
     pub async fn export_download(
@@ -196,72 +234,85 @@ impl OnshapeClient {
         format: DownloadFormat,
         options: &DownloadOptions,
     ) -> anyhow::Result<Vec<u8>> {
-        let translation_id = match format {
-            DownloadFormat::Step => {
-                self.start_step_export(source, configuration, options)
-                    .await?
-            }
-            DownloadFormat::Stl | DownloadFormat::ThreeMf => {
-                self.start_translation_export(source, configuration, format)
-                    .await?
-            }
-        };
-        let external_data_id = self.poll_translation(source, &translation_id).await?;
-        self.download_external_data(source, &external_data_id).await
+        let request = self.build_download_export_request(
+            source,
+            &EncodedConfigurationIdentity {
+                encoded_id: configuration.to_owned(),
+                query_param: format!("configuration={configuration}"),
+            },
+            format,
+            options,
+        );
+        self.execute_export_request(&request).await
     }
 
-    async fn start_glb_export(
+    pub fn build_preview_glb_export_request(
         &self,
         source: &OnshapeSource,
-        configuration: &str,
+        configuration: &EncodedConfigurationIdentity,
         options: &PreviewOptions,
-    ) -> anyhow::Result<String> {
-        anyhow::ensure!(
-            self.has_credentials(),
-            "Onshape credentials are not configured"
-        );
-
-        let collection = match source.element_kind {
-            ElementKind::PartStudio => "partstudios",
-            ElementKind::Assembly => "assemblies",
-        };
+    ) -> CanonicalExportRequest {
+        let collection = element_collection(source);
         let path = format!(
             "/api/{collection}/d/{}/v/{}/e/{}/export/gltf",
             source.document_id, source.version_id, source.element_id
         );
-        let body = gltf_export_body(configuration, options);
-        let mut url = self.base_url.clone();
-        url.set_path(&path);
-        url.set_query(None);
+        let operation = format!("create-{}-gltf-export", source.element_kind.key());
+        let body = gltf_export_body(&configuration.encoded_id, options);
 
-        let mut headers =
-            self.signed_json_headers(Method::POST, url.path(), url.query().unwrap_or_default())?;
-        headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
-        let response = self
-            .client
-            .post(url)
-            .headers(headers)
-            .json(&body)
-            .send()
-            .await?;
-        let response: Value = onshape_response(response).await?.json().await?;
-
-        first_string(&response, &["id", "translationId"]).ok_or_else(|| {
-            anyhow::anyhow!("Onshape GLB export response did not include a translation id")
-        })
+        CanonicalExportRequest {
+            operation: operation.clone(),
+            method: Method::POST.as_str().to_owned(),
+            path,
+            identity: RequestIdentity {
+                api_host_class: api_host_class(&self.base_url),
+                api_spec_version: API_SPEC_VERSION.map(str::to_owned),
+                operation,
+                method: Method::POST.as_str().to_owned(),
+                path_template: "/api/{collection}/d/{did}/v/{vid}/e/{eid}/export/gltf".to_owned(),
+                path_params: export_path_params(collection, source),
+                query: CanonicalRequestQuery::new(),
+                body,
+                encoded_configuration: Some(configuration.clone()),
+                defaults_policy_version: PREVIEW_GLTF_DEFAULTS_POLICY_VERSION.to_owned(),
+                request_builder_version: PREVIEW_GLTF_REQUEST_BUILDER_VERSION.to_owned(),
+            },
+        }
     }
 
-    async fn start_step_export(
+    pub fn build_download_export_request(
         &self,
         source: &OnshapeSource,
-        configuration: &str,
+        configuration: &EncodedConfigurationIdentity,
+        format: DownloadFormat,
         options: &DownloadOptions,
-    ) -> anyhow::Result<String> {
-        anyhow::ensure!(
-            self.has_credentials(),
-            "Onshape credentials are not configured"
-        );
+    ) -> CanonicalExportRequest {
+        match format {
+            DownloadFormat::Step => self.build_step_export_request(source, configuration, options),
+            DownloadFormat::Stl | DownloadFormat::ThreeMf => {
+                self.build_translation_export_request(source, configuration, format)
+            }
+        }
+    }
 
+    pub async fn execute_export_request(
+        &self,
+        request: &CanonicalExportRequest,
+    ) -> anyhow::Result<Vec<u8>> {
+        let translation_id = self.start_export_request(request).await?;
+        let external_data_id = self
+            .poll_translation(request.document_id()?, &translation_id)
+            .await?;
+        self.download_external_data(request.document_id()?, &external_data_id)
+            .await
+    }
+
+    fn build_step_export_request(
+        &self,
+        source: &OnshapeSource,
+        configuration: &EncodedConfigurationIdentity,
+        options: &DownloadOptions,
+    ) -> CanonicalExportRequest {
         let collection = element_collection(source);
         let path = format!(
             "/api/{collection}/d/{}/v/{}/e/{}/export/step",
@@ -269,73 +320,117 @@ impl OnshapeClient {
         );
         let body = json!({
             "advancedParams": {
-                "configuration": configuration,
+                "configuration": configuration.encoded_id,
             },
             "stepVersionString": options.step_version_string.as_deref().unwrap_or("AP242"),
             "storeInDocument": false,
             "notifyUser": false,
             "triggerAutoDownload": false,
         });
-        self.start_json_translation(&path, body, "STEP").await
+
+        CanonicalExportRequest {
+            operation: "create-step-export".to_owned(),
+            method: Method::POST.as_str().to_owned(),
+            path,
+            identity: RequestIdentity {
+                api_host_class: api_host_class(&self.base_url),
+                api_spec_version: API_SPEC_VERSION.map(str::to_owned),
+                operation: "create-step-export".to_owned(),
+                method: Method::POST.as_str().to_owned(),
+                path_template: "/api/{collection}/d/{did}/v/{vid}/e/{eid}/export/step".to_owned(),
+                path_params: export_path_params(collection, source),
+                query: CanonicalRequestQuery::new(),
+                body,
+                encoded_configuration: Some(configuration.clone()),
+                defaults_policy_version: STEP_EXPORT_DEFAULTS_POLICY_VERSION.to_owned(),
+                request_builder_version: STEP_EXPORT_REQUEST_BUILDER_VERSION.to_owned(),
+            },
+        }
     }
 
-    async fn start_translation_export(
+    fn build_translation_export_request(
         &self,
         source: &OnshapeSource,
-        configuration: &str,
+        configuration: &EncodedConfigurationIdentity,
         format: DownloadFormat,
-    ) -> anyhow::Result<String> {
-        anyhow::ensure!(
-            self.has_credentials(),
-            "Onshape credentials are not configured"
-        );
-
+    ) -> CanonicalExportRequest {
         let collection = element_collection(source);
         let path = format!(
             "/api/{collection}/d/{}/v/{}/e/{}/translations",
             source.document_id, source.version_id, source.element_id
         );
+        let format_label = format.label().to_owned();
         let body = json!({
-            "formatName": format.label(),
+            "formatName": format_label,
             "storeInDocument": false,
             "notifyUser": false,
             "triggerAutoDownload": false,
-            "configuration": configuration,
+            "configuration": configuration.encoded_id,
         });
-        self.start_json_translation(&path, body, format.label())
-            .await
+
+        CanonicalExportRequest {
+            operation: format!("create-{}-translation", format.slug()),
+            method: Method::POST.as_str().to_owned(),
+            path,
+            identity: RequestIdentity {
+                api_host_class: api_host_class(&self.base_url),
+                api_spec_version: API_SPEC_VERSION.map(str::to_owned),
+                operation: format!("create-{}-translation", format.slug()),
+                method: Method::POST.as_str().to_owned(),
+                path_template: "/api/{collection}/d/{did}/v/{vid}/e/{eid}/translations".to_owned(),
+                path_params: export_path_params(collection, source),
+                query: CanonicalRequestQuery::new(),
+                body,
+                encoded_configuration: Some(configuration.clone()),
+                defaults_policy_version: TRANSLATION_EXPORT_DEFAULTS_POLICY_VERSION.to_owned(),
+                request_builder_version: TRANSLATION_EXPORT_REQUEST_BUILDER_VERSION.to_owned(),
+            },
+        }
     }
 
-    async fn start_json_translation(
+    async fn start_export_request(
         &self,
-        path: &str,
-        body: Value,
-        label: &str,
+        request: &CanonicalExportRequest,
     ) -> anyhow::Result<String> {
+        anyhow::ensure!(
+            self.has_credentials(),
+            "Onshape credentials are not configured"
+        );
+        let method = Method::from_bytes(request.method.as_bytes())?;
         let mut url = self.base_url.clone();
-        url.set_path(path);
-        url.set_query(None);
+        url.set_path(&request.path);
+        if request.identity.query.is_empty() {
+            url.set_query(None);
+        } else {
+            let mut query = url.query_pairs_mut();
+            for (key, value) in &request.identity.query {
+                query.append_pair(key, value);
+            }
+        }
 
         let mut headers =
-            self.signed_json_headers(Method::POST, url.path(), url.query().unwrap_or_default())?;
+            self.signed_json_headers(method.clone(), url.path(), url.query().unwrap_or_default())?;
         headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
         let response = self
             .client
-            .post(url)
+            .request(method, url)
             .headers(headers)
-            .json(&body)
+            .json(&request.identity.body)
             .send()
             .await?;
         let response: Value = onshape_response(response).await?.json().await?;
 
         first_string(&response, &["id", "translationId"]).ok_or_else(|| {
-            anyhow::anyhow!("Onshape {label} export response did not include a translation id")
+            anyhow::anyhow!(
+                "Onshape {} response did not include a translation id",
+                request.operation
+            )
         })
     }
 
     async fn poll_translation(
         &self,
-        source: &OnshapeSource,
+        document_id: &str,
         translation_id: &str,
     ) -> anyhow::Result<String> {
         let path = format!("/api/translations/{translation_id}");
@@ -353,7 +448,7 @@ impl OnshapeClient {
             match first_string(&response, &["requestState", "state"]).as_deref() {
                 Some("DONE") => {
                     return first_array_string(&response, "resultExternalDataIds")
-                        .ok_or_else(|| anyhow::anyhow!("Onshape translation completed without external data for document {}", source.document_id));
+                        .ok_or_else(|| anyhow::anyhow!("Onshape translation completed without external data for document {document_id}"));
                 }
                 Some("FAILED") => {
                     return Err(anyhow::anyhow!(
@@ -369,12 +464,12 @@ impl OnshapeClient {
 
     async fn download_external_data(
         &self,
-        source: &OnshapeSource,
+        document_id: &str,
         external_data_id: &str,
     ) -> anyhow::Result<Vec<u8>> {
         let path = format!(
             "/api/documents/d/{}/externaldata/{}",
-            source.document_id, external_data_id
+            document_id, external_data_id
         );
         let mut url = self.base_url.clone();
         url.set_path(&path);
@@ -416,6 +511,22 @@ fn gltf_export_body(configuration: &str, options: &PreviewOptions) -> Value {
         "notifyUser": false,
         "triggerAutoDownload": false,
     })
+}
+
+fn export_path_params(
+    source_collection: &str,
+    source: &OnshapeSource,
+) -> CanonicalRequestPathParams {
+    BTreeMap::from([
+        ("collection".to_owned(), source_collection.to_owned()),
+        ("did".to_owned(), source.document_id.clone()),
+        ("vid".to_owned(), source.version_id.clone()),
+        ("eid".to_owned(), source.element_id.clone()),
+    ])
+}
+
+fn api_host_class(base_url: &Url) -> String {
+    base_url.host_str().unwrap_or_default().to_owned()
 }
 
 fn configuration_encoding_request(
@@ -571,6 +682,144 @@ mod tests {
         assert_eq!(body["storeInDocument"], false);
         assert_eq!(body["notifyUser"], false);
         assert_eq!(body["triggerAutoDownload"], false);
+    }
+
+    #[test]
+    fn preview_export_request_uses_encoded_configuration_and_versions() {
+        let client = OnshapeClient::new(OnshapeConfig {
+            base_url: "https://cad.onshape.com".to_owned(),
+            access_key: None,
+            secret_key: None,
+        })
+        .unwrap();
+        let source = OnshapeSource {
+            document_id: "did".to_owned(),
+            version_id: "vid".to_owned(),
+            element_id: "eid".to_owned(),
+            element_kind: ElementKind::PartStudio,
+            link_document_id: None,
+        };
+        let request = client.build_preview_glb_export_request(
+            &source,
+            &EncodedConfigurationIdentity {
+                encoded_id: "enc-123".to_owned(),
+                query_param: "configuration=enc-123".to_owned(),
+            },
+            &PreviewOptions {
+                resolution: Some("FINE".to_owned()),
+            },
+        );
+
+        assert_eq!(request.operation, "create-part_studio-gltf-export");
+        assert_eq!(
+            request.path,
+            "/api/partstudios/d/did/v/vid/e/eid/export/gltf"
+        );
+        assert_eq!(
+            request.identity.path_template,
+            "/api/{collection}/d/{did}/v/{vid}/e/{eid}/export/gltf"
+        );
+        assert_eq!(request.identity.path_params["collection"], "partstudios");
+        assert_eq!(
+            request.identity.body["advancedParams"]["configuration"],
+            "enc-123"
+        );
+        assert_eq!(request.identity.body["meshParams"]["resolution"], "FINE");
+        assert_eq!(
+            request.identity.defaults_policy_version,
+            PREVIEW_GLTF_DEFAULTS_POLICY_VERSION
+        );
+        assert_eq!(
+            request.identity.request_builder_version,
+            PREVIEW_GLTF_REQUEST_BUILDER_VERSION
+        );
+    }
+
+    #[test]
+    fn step_export_request_uses_explicit_default_step_version() {
+        let client = OnshapeClient::new(OnshapeConfig {
+            base_url: "https://cad.onshape.com".to_owned(),
+            access_key: None,
+            secret_key: None,
+        })
+        .unwrap();
+        let source = OnshapeSource {
+            document_id: "did".to_owned(),
+            version_id: "vid".to_owned(),
+            element_id: "eid".to_owned(),
+            element_kind: ElementKind::PartStudio,
+            link_document_id: None,
+        };
+        let request = client.build_download_export_request(
+            &source,
+            &EncodedConfigurationIdentity {
+                encoded_id: "enc-123".to_owned(),
+                query_param: "configuration=enc-123".to_owned(),
+            },
+            DownloadFormat::Step,
+            &DownloadOptions::default(),
+        );
+
+        assert_eq!(request.operation, "create-step-export");
+        assert_eq!(
+            request.path,
+            "/api/partstudios/d/did/v/vid/e/eid/export/step"
+        );
+        assert_eq!(
+            request.identity.body["advancedParams"]["configuration"],
+            "enc-123"
+        );
+        assert_eq!(request.identity.body["stepVersionString"], "AP242");
+        assert_eq!(
+            request.identity.defaults_policy_version,
+            STEP_EXPORT_DEFAULTS_POLICY_VERSION
+        );
+        assert_eq!(
+            request.identity.request_builder_version,
+            STEP_EXPORT_REQUEST_BUILDER_VERSION
+        );
+    }
+
+    #[test]
+    fn translation_export_request_uses_format_specific_body() {
+        let client = OnshapeClient::new(OnshapeConfig {
+            base_url: "https://cad.onshape.com".to_owned(),
+            access_key: None,
+            secret_key: None,
+        })
+        .unwrap();
+        let source = OnshapeSource {
+            document_id: "did".to_owned(),
+            version_id: "vid".to_owned(),
+            element_id: "eid".to_owned(),
+            element_kind: ElementKind::Assembly,
+            link_document_id: None,
+        };
+        let request = client.build_download_export_request(
+            &source,
+            &EncodedConfigurationIdentity {
+                encoded_id: "enc-123".to_owned(),
+                query_param: "configuration=enc-123".to_owned(),
+            },
+            DownloadFormat::ThreeMf,
+            &DownloadOptions::default(),
+        );
+
+        assert_eq!(request.operation, "create-3mf-translation");
+        assert_eq!(
+            request.path,
+            "/api/assemblies/d/did/v/vid/e/eid/translations"
+        );
+        assert_eq!(request.identity.body["formatName"], "3MF");
+        assert_eq!(request.identity.body["configuration"], "enc-123");
+        assert_eq!(
+            request.identity.defaults_policy_version,
+            TRANSLATION_EXPORT_DEFAULTS_POLICY_VERSION
+        );
+        assert_eq!(
+            request.identity.request_builder_version,
+            TRANSLATION_EXPORT_REQUEST_BUILDER_VERSION
+        );
     }
 
     #[test]

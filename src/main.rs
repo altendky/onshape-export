@@ -36,7 +36,7 @@ use crate::{
     cache_model::{EncodedConfigurationIdentity, ResolvedOnshapeSourceIdentity},
     catalog::Catalog,
     config::Config,
-    db::{ArtifactUpsert, Database},
+    db::{ArtifactUpsert, Database, ExportRequestInsert},
     onshape::OnshapeClient,
     storage::StorageClient,
 };
@@ -49,6 +49,7 @@ const CONFIG_HASH_JOB_VERSION: u32 = 1;
 const RETRY_BACKOFF_BASE_SECONDS: i64 = 30;
 const RETRY_BACKOFF_CAP_SECONDS: i64 = 5 * 60;
 const ALLOW_PARTIAL_MULTI_GLTF_PREVIEW_FALLBACK: bool = false;
+const EXPORT_REQUEST_STATUS_STAGED: &str = "staged";
 
 #[derive(Clone)]
 struct AppState {
@@ -2240,18 +2241,29 @@ async fn refresh_preview(
 ) -> anyhow::Result<String> {
     let configuration =
         resolve_configuration_encoding(state, model, source_hash, config_hash, values).await?;
-    let bytes = state
-        .onshape
-        .export_glb(
-            &model.onshape,
-            &configuration.encoded_id,
-            &model.exports.preview_options,
-        )
-        .await?;
+    let options_hash = preview_options_hash(model);
+    let request = state.onshape.build_preview_glb_export_request(
+        &model.onshape,
+        &EncodedConfigurationIdentity {
+            encoded_id: configuration.encoded_id.clone(),
+            query_param: configuration.query_param.clone(),
+        },
+        &model.exports.preview_options,
+    );
+    let request_hash = persist_export_request(
+        state,
+        source_hash,
+        config_hash,
+        &options_hash,
+        "preview",
+        "glb",
+        &request,
+    )
+    .await?;
+    let bytes = state.onshape.execute_export_request(&request).await?;
     let preview_artifact =
         preview_artifact_from_onshape_bytes(source_hash, model, config_hash, bytes)?;
     let sha256 = cache_key::hex_sha256(&preview_artifact.bytes);
-    let options_hash = preview_options_hash(model);
     let config_values_json = config_values_json(values)?;
     state
         .storage
@@ -2285,6 +2297,7 @@ async fn refresh_preview(
             config_values_json: &config_values_json,
         })
         .await?;
+    tracing::debug!(%request_hash, %artifact_key, "staged preview export request");
     rewrite_manifest(state, model, config_hash, Some(values)).await?;
     Ok(preview_artifact.object_key)
 }
@@ -2524,20 +2537,31 @@ async fn refresh_download(
 ) -> anyhow::Result<String> {
     let configuration =
         resolve_configuration_encoding(state, model, source_hash, config_hash, values).await?;
-    let bytes = state
-        .onshape
-        .export_download(
-            &model.onshape,
-            &configuration.encoded_id,
-            format,
-            &model.exports.download_options,
-        )
-        .await?;
+    let options_hash = download_options_hash(model, format);
+    let request = state.onshape.build_download_export_request(
+        &model.onshape,
+        &EncodedConfigurationIdentity {
+            encoded_id: configuration.encoded_id.clone(),
+            query_param: configuration.query_param.clone(),
+        },
+        format,
+        &model.exports.download_options,
+    );
+    let request_hash = persist_export_request(
+        state,
+        source_hash,
+        config_hash,
+        &options_hash,
+        "download",
+        format.slug(),
+        &request,
+    )
+    .await?;
+    let bytes = state.onshape.execute_export_request(&request).await?;
     let object_key = download_object_key(source_hash, model, config_hash, format);
     let filename = download_filename(model, format);
     let content_disposition = format!("attachment; filename=\"{filename}\"");
     let sha256 = cache_key::hex_sha256(&bytes);
-    let options_hash = download_options_hash(model, format);
     let config_values_json = config_values_json(values)?;
     state
         .storage
@@ -2567,8 +2591,41 @@ async fn refresh_download(
             config_values_json: &config_values_json,
         })
         .await?;
+    tracing::debug!(%request_hash, %artifact_key, "staged download export request");
     rewrite_manifest(state, model, config_hash, Some(values)).await?;
     Ok(object_key)
+}
+
+async fn persist_export_request(
+    state: &AppState,
+    source_hash: &str,
+    config_hash: &str,
+    options_hash: &str,
+    output_kind: &str,
+    format: &str,
+    request: &onshape::CanonicalExportRequest,
+) -> anyhow::Result<String> {
+    let request_hash = cache_model::request_hash(&request.identity)?;
+    let request_json = request.request_json()?;
+    state
+        .db
+        .insert_export_request_if_absent(ExportRequestInsert {
+            request_hash: &request_hash,
+            source_hash,
+            config_hash,
+            options_hash,
+            output_kind,
+            format,
+            endpoint: &request.operation,
+            method: &request.method,
+            path: &request.path,
+            request_json: &request_json,
+            defaults_policy_version: &request.identity.defaults_policy_version,
+            request_builder_version: &request.identity.request_builder_version,
+            status: EXPORT_REQUEST_STATUS_STAGED,
+        })
+        .await?;
+    Ok(request_hash)
 }
 
 async fn rewrite_manifest(
@@ -3654,6 +3711,58 @@ mod tests {
         let source_hash = resolved_source_hash_for_test_model(&first);
         let preview_options_hash = preview_options_hash(&first);
         let download_options_hash = download_options_hash(&first, catalog::DownloadFormat::Step);
+        let onshape = OnshapeClient::new(config::OnshapeConfig {
+            base_url: "https://cad.onshape.com".to_owned(),
+            access_key: None,
+            secret_key: None,
+        })
+        .unwrap();
+        let encoded_configuration = EncodedConfigurationIdentity {
+            encoded_id: "enc-123".to_owned(),
+            query_param: "configuration=enc-123".to_owned(),
+        };
+        let preview_request_hash = cache_model::request_hash(
+            &onshape
+                .build_preview_glb_export_request(
+                    &first.onshape,
+                    &encoded_configuration,
+                    &first.exports.preview_options,
+                )
+                .identity,
+        )
+        .unwrap();
+        let other_preview_request_hash = cache_model::request_hash(
+            &onshape
+                .build_preview_glb_export_request(
+                    &second.onshape,
+                    &encoded_configuration,
+                    &second.exports.preview_options,
+                )
+                .identity,
+        )
+        .unwrap();
+        let download_request_hash = cache_model::request_hash(
+            &onshape
+                .build_download_export_request(
+                    &first.onshape,
+                    &encoded_configuration,
+                    catalog::DownloadFormat::Step,
+                    &first.exports.download_options,
+                )
+                .identity,
+        )
+        .unwrap();
+        let other_download_request_hash = cache_model::request_hash(
+            &onshape
+                .build_download_export_request(
+                    &second.onshape,
+                    &encoded_configuration,
+                    catalog::DownloadFormat::Step,
+                    &second.exports.download_options,
+                )
+                .identity,
+        )
+        .unwrap();
 
         assert_eq!(
             configuration_hash(
@@ -3721,6 +3830,8 @@ mod tests {
                 catalog::DownloadFormat::Step
             )
         );
+        assert_eq!(preview_request_hash, other_preview_request_hash);
+        assert_eq!(download_request_hash, other_download_request_hash);
 
         assert!(preview_artifact_key(&source_hash, &first, config_hash).contains(&source_hash));
         assert!(
