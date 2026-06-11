@@ -329,6 +329,7 @@ pub struct ArtifactUpsert<'a> {
     pub model_slug: &'a str,
     pub config_hash: &'a str,
     pub output_kind: &'a str,
+    pub format: &'a str,
     pub object_key: &'a str,
     pub content_type: &'a str,
     pub byte_len: i64,
@@ -336,6 +337,9 @@ pub struct ArtifactUpsert<'a> {
     pub producing_job_key: Option<&'a str>,
     pub source_hash: &'a str,
     pub options_hash: &'a str,
+    pub request_hash: Option<&'a str>,
+    pub raw_payload_hash: Option<&'a str>,
+    pub postprocess_hash: Option<&'a str>,
     pub parameter_schema_version: i64,
     pub config_values_json: &'a str,
 }
@@ -1440,11 +1444,6 @@ impl Database {
             config_values_json: Some(artifact.config_values_json.to_owned()),
         })
         .expect("artifact metadata serializes");
-        let format = if artifact.output_kind == "preview_glb" {
-            "glb"
-        } else {
-            artifact.output_kind
-        };
         let logical_path = artifact
             .object_key
             .rsplit('/')
@@ -1458,7 +1457,7 @@ impl Database {
                 raw_payload_hash, postprocess_hash, output_kind, format, status,
                 primary_object_key, metadata_json
             )
-            VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?, ?, 'staged', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'staged', ?, ?)
             ON CONFLICT(artifact_set_hash) DO UPDATE SET
                 source_hash = excluded.source_hash,
                 config_hash = excluded.config_hash,
@@ -1482,8 +1481,11 @@ impl Database {
         .bind(artifact.source_hash)
         .bind(artifact.config_hash)
         .bind(artifact.options_hash)
+        .bind(artifact.request_hash)
+        .bind(artifact.raw_payload_hash)
+        .bind(artifact.postprocess_hash)
         .bind(artifact.output_kind)
-        .bind(format)
+        .bind(artifact.format)
         .bind(artifact.object_key)
         .bind(&metadata_json)
         .execute(&self.pool)
@@ -2610,6 +2612,34 @@ mod tests {
         );
 
         assert!(
+            db.insert_postprocess_run_if_absent(PostprocessRunInsert {
+                postprocess_hash: "posthash",
+                raw_payload_hash: "rawhash",
+                processor_name: "preview_extract",
+                processor_version: "1",
+                policy_json: r#"{"acceptedInputShapes":["direct_glb"]}"#,
+                status: "staged",
+                log_json: "[]",
+                derived_files_json: "[]",
+            })
+            .await
+            .unwrap()
+        );
+        assert!(
+            db.transition_postprocess_run_status(
+                "posthash",
+                "ready",
+                r#"[{"level":"info","message":"done"}]"#,
+                r#"[{"role":"viewer_entry","logicalPath":"preview.glb"}]"#,
+            )
+            .await
+            .unwrap()
+        );
+        let postprocess = db.postprocess_run("posthash").await.unwrap().unwrap();
+        assert_eq!(postprocess.status, "ready");
+        assert!(postprocess.derived_files_json.contains("preview.glb"));
+
+        assert!(
             db.insert_artifact_set_if_absent(ArtifactSetInsert {
                 artifact_set_hash: "artifactsethash",
                 source_hash: "sourcehash",
@@ -2779,6 +2809,11 @@ mod tests {
             model_slug: "demo",
             config_hash,
             output_kind,
+            format: if output_kind == "preview_glb" {
+                "glb"
+            } else {
+                output_kind
+            },
             object_key,
             content_type,
             byte_len,
@@ -2786,6 +2821,9 @@ mod tests {
             producing_job_key: Some("work"),
             source_hash: "sourcehash",
             options_hash: "optionshash",
+            request_hash: None,
+            raw_payload_hash: None,
+            postprocess_hash: None,
             parameter_schema_version: 1,
             config_values_json: r#"{"width":"10"}"#,
         }

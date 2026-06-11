@@ -108,6 +108,17 @@ impl StorageClient {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
+    pub async fn get_bytes(&self, key: &str) -> anyhow::Result<Vec<u8>> {
+        let output = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await?;
+        Ok(output.body.collect().await?.into_bytes().to_vec())
+    }
+
     pub fn public_url(&self, key: &str) -> Option<String> {
         self.public_base_url.as_ref().map(|base| {
             format!(
