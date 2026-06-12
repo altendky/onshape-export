@@ -714,8 +714,10 @@ async fn generate_preview_for_values(
 ) -> anyhow::Result<String> {
     let source_hash = resolve_source_hash(state, model).await?;
     let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
+    let prepared =
+        prepare_preview_export(state, model, &source_hash, &validated.values, &config_hash).await?;
 
-    if let Some(record) = ready_preview_artifact(state, model, &source_hash, &config_hash).await? {
+    if let Some(record) = ready_preview_artifact(state, &prepared.request_hash).await? {
         return Ok(record.object_key);
     }
 
@@ -725,6 +727,7 @@ async fn generate_preview_for_values(
         &source_hash,
         &validated.values,
         &config_hash,
+        Some(prepared),
         None,
         None,
     )
@@ -862,10 +865,17 @@ async fn generate_download_for_values(
 ) -> anyhow::Result<Option<String>> {
     let source_hash = resolve_source_hash(state, model).await?;
     let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
+    let prepared = prepare_download_export(
+        state,
+        model,
+        &source_hash,
+        &validated.values,
+        &config_hash,
+        format,
+    )
+    .await?;
 
-    if let Some(record) =
-        ready_download_artifact(state, model, &source_hash, &config_hash, format).await?
-    {
+    if let Some(record) = ready_download_artifact(state, &prepared.request_hash).await? {
         return Ok(Some(record.object_key));
     }
 
@@ -876,6 +886,7 @@ async fn generate_download_for_values(
         &validated.values,
         &config_hash,
         format,
+        Some(prepared),
         None,
         None,
     )
@@ -1463,8 +1474,11 @@ async fn generate_preview(
         };
     let source_hash = resolve_source_hash(&state, model).await?;
     let config_hash = persist_configuration_selection(&state, &source_hash, &validated).await?;
+    let prepared =
+        prepare_preview_export(&state, model, &source_hash, &validated.values, &config_hash)
+            .await?;
 
-    if let Some(record) = ready_preview_artifact(&state, model, &source_hash, &config_hash).await? {
+    if let Some(record) = ready_preview_artifact(&state, &prepared.request_hash).await? {
         let preview = format!(
             "{}{}",
             render_clean_model_url_script(model)?,
@@ -1538,10 +1552,17 @@ async fn generate_download(
         };
     let source_hash = resolve_source_hash(&state, model).await?;
     let config_hash = persist_configuration_selection(&state, &source_hash, &validated).await?;
+    let prepared = prepare_download_export(
+        &state,
+        model,
+        &source_hash,
+        &validated.values,
+        &config_hash,
+        format,
+    )
+    .await?;
 
-    if let Some(record) =
-        ready_download_artifact(&state, model, &source_hash, &config_hash, format).await?
-    {
+    if let Some(record) = ready_download_artifact(&state, &prepared.request_hash).await? {
         let preview = format!(
             "{}{}",
             render_clean_model_url_script(model)?,
@@ -1582,10 +1603,22 @@ async fn preview_status(
 ) -> Result<Json<ArtifactStatusResponse>, AppError> {
     let model = published_model(&state.catalog, &slug).ok_or(AppError::NotFound)?;
     let source_hash = resolve_source_hash(&state, model).await?;
-    let work_keys = preview_status_job_keys(&state, &source_hash, model, &config_hash).await?;
-    let artifact = ready_preview_artifact(&state, model, &source_hash, &config_hash).await?;
-    let artifact_set =
-        latest_preview_artifact_set(&state, model, &source_hash, &config_hash).await?;
+    let request_hash =
+        current_preview_request_hash(&state, model, &source_hash, &config_hash).await?;
+    let work_keys = request_hash
+        .as_deref()
+        .map(|request_hash| vec![export_job_key(request_hash)])
+        .unwrap_or_default();
+    let artifact = if let Some(request_hash) = request_hash.as_deref() {
+        ready_preview_artifact(&state, request_hash).await?
+    } else {
+        None
+    };
+    let artifact_set = if let Some(request_hash) = request_hash.as_deref() {
+        latest_artifact_set(&state, request_hash).await?
+    } else {
+        None
+    };
 
     Ok(Json(
         artifact_status(
@@ -1609,12 +1642,22 @@ async fn download_status(
         return Err(AppError::NotFound);
     }
     let source_hash = resolve_source_hash(&state, model).await?;
-    let work_keys =
-        download_status_job_keys(&state, &source_hash, model, &config_hash, format).await?;
-    let artifact =
-        ready_download_artifact(&state, model, &source_hash, &config_hash, format).await?;
-    let artifact_set =
-        latest_download_artifact_set(&state, model, &source_hash, &config_hash, format).await?;
+    let request_hash =
+        current_download_request_hash(&state, model, &source_hash, &config_hash, format).await?;
+    let work_keys = request_hash
+        .as_deref()
+        .map(|request_hash| vec![export_job_key(request_hash)])
+        .unwrap_or_default();
+    let artifact = if let Some(request_hash) = request_hash.as_deref() {
+        ready_download_artifact(&state, request_hash).await?
+    } else {
+        None
+    };
+    let artifact_set = if let Some(request_hash) = request_hash.as_deref() {
+        latest_artifact_set(&state, request_hash).await?
+    } else {
+        None
+    };
 
     Ok(Json(
         artifact_status(
@@ -1954,7 +1997,10 @@ async fn enqueue_scheduled_rebuild(state: &AppState) -> anyhow::Result<()> {
 
         let source_hash = resolve_source_hash(state, model).await?;
         let config_hash = persist_configuration_selection(state, &source_hash, &validated).await?;
-        if ready_preview_artifact(state, model, &source_hash, &config_hash)
+        let preview_prepared =
+            prepare_preview_export(state, model, &source_hash, &validated.values, &config_hash)
+                .await?;
+        if ready_preview_artifact(state, &preview_prepared.request_hash)
             .await?
             .is_none()
             && enqueue_preview(state, model, &validated).await?
@@ -1962,7 +2008,16 @@ async fn enqueue_scheduled_rebuild(state: &AppState) -> anyhow::Result<()> {
             enqueued += 1;
         }
         for format in &model.exports.downloads {
-            if ready_download_artifact(state, model, &source_hash, &config_hash, *format)
+            let download_prepared = prepare_download_export(
+                state,
+                model,
+                &source_hash,
+                &validated.values,
+                &config_hash,
+                *format,
+            )
+            .await?;
+            if ready_download_artifact(state, &download_prepared.request_hash)
                 .await?
                 .is_none()
                 && enqueue_download(state, model, &validated, *format).await?
@@ -2168,7 +2223,7 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                 anyhow::ensure!(format == "glb", "unexpected queued preview export format");
             }
             persist_configuration_selection(state, &source_hash, &validated).await?;
-            if ready_preview_artifact(state, model, &source_hash, &config_hash)
+            if ready_preview_artifact(state, &request_hash)
                 .await?
                 .is_none()
             {
@@ -2178,6 +2233,7 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                     &source_hash,
                     &validated.values,
                     &config_hash,
+                    None,
                     Some(&job.work_key),
                     (!request_hash.is_empty()).then_some(request_hash.as_str()),
                 )
@@ -2260,7 +2316,7 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                 );
             }
             persist_configuration_selection(state, &source_hash, &validated).await?;
-            if ready_download_artifact(state, model, &source_hash, &config_hash, format)
+            if ready_download_artifact(state, &request_hash)
                 .await?
                 .is_none()
             {
@@ -2271,6 +2327,7 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                     &validated.values,
                     &config_hash,
                     format,
+                    None,
                     Some(&job.work_key),
                     (!request_hash.is_empty()).then_some(request_hash.as_str()),
                 )
@@ -2331,7 +2388,14 @@ async fn render_cached_preview(
     };
     let source_hash = resolve_source_hash(state, model).await?;
     let config_hash = persist_configuration_selection(state, &source_hash, &validated).await?;
-    render_preview_for_hash(state, model, &config_hash, "default parameters").await
+    render_preview_for_hash(
+        state,
+        model,
+        &source_hash,
+        &config_hash,
+        "default parameters",
+    )
+    .await
 }
 
 async fn render_preview_for_values(
@@ -2341,20 +2405,23 @@ async fn render_preview_for_values(
 ) -> Result<String, AppError> {
     let source_hash = resolve_source_hash(state, model).await?;
     let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
-    render_preview_for_hash(state, model, &config_hash, "these parameters").await
+    render_preview_for_hash(state, model, &source_hash, &config_hash, "these parameters").await
 }
 
 async fn render_preview_for_hash(
     state: &AppState,
     model: &catalog::Model,
+    source_hash: &str,
     config_hash: &str,
     label: &str,
 ) -> Result<String, AppError> {
-    let source_hash = resolve_source_hash(state, model).await?;
-
-    match ready_preview_artifact(state, model, &source_hash, config_hash).await? {
-        Some(record) => Ok(render_preview_viewer(state, &record.object_key)),
-        None => Ok(format!("<p>No cached preview for {label} yet.</p>")),
+    if let Some(request_hash) =
+        current_preview_request_hash(state, model, source_hash, config_hash).await?
+        && let Some(record) = ready_preview_artifact(state, &request_hash).await?
+    {
+        Ok(render_preview_viewer(state, &record.object_key))
+    } else {
+        Ok(format!("<p>No cached preview for {label} yet.</p>"))
     }
 }
 
@@ -2382,8 +2449,9 @@ async fn render_downloads_for_values(
     let config_hash = persist_configuration_selection(state, &source_hash, validated).await?;
     let mut items = String::new();
     for format in &model.exports.downloads {
-        if let Some(record) =
-            ready_download_artifact(state, model, &source_hash, &config_hash, *format).await?
+        if let Some(request_hash) =
+            current_download_request_hash(state, model, &source_hash, &config_hash, *format).await?
+            && let Some(record) = ready_download_artifact(state, &request_hash).await?
         {
             items.push_str(&format!(
                 "<li>{}</li>",
@@ -2872,10 +2940,14 @@ async fn refresh_preview(
     source_hash: &str,
     values: &HashMap<String, String>,
     config_hash: &str,
+    prepared: Option<PreparedExportRequest>,
     producing_job_key: Option<&str>,
     expected_request_hash: Option<&str>,
 ) -> anyhow::Result<String> {
-    let prepared = prepare_preview_export(state, model, source_hash, values, config_hash).await?;
+    let prepared = match prepared {
+        Some(prepared) => prepared,
+        None => prepare_preview_export(state, model, source_hash, values, config_hash).await?,
+    };
     if let Some(expected_request_hash) = expected_request_hash {
         anyhow::ensure!(
             prepared.request_hash == expected_request_hash,
@@ -3261,11 +3333,16 @@ async fn refresh_download(
     values: &HashMap<String, String>,
     config_hash: &str,
     format: catalog::DownloadFormat,
+    prepared: Option<PreparedExportRequest>,
     producing_job_key: Option<&str>,
     expected_request_hash: Option<&str>,
 ) -> anyhow::Result<String> {
-    let prepared =
-        prepare_download_export(state, model, source_hash, values, config_hash, format).await?;
+    let prepared = match prepared {
+        Some(prepared) => prepared,
+        None => {
+            prepare_download_export(state, model, source_hash, values, config_hash, format).await?
+        }
+    };
     if let Some(expected_request_hash) = expected_request_hash {
         anyhow::ensure!(
             prepared.request_hash == expected_request_hash,
@@ -3742,41 +3819,6 @@ fn download_work_key(
     )
 }
 
-async fn preview_status_job_keys(
-    state: &AppState,
-    source_hash: &str,
-    model: &catalog::Model,
-    config_hash: &str,
-) -> Result<Vec<String>, AppError> {
-    export_status_job_keys(
-        state,
-        source_hash,
-        config_hash,
-        &preview_options_hash(model),
-        "preview",
-        "glb",
-    )
-    .await
-}
-
-async fn download_status_job_keys(
-    state: &AppState,
-    source_hash: &str,
-    model: &catalog::Model,
-    config_hash: &str,
-    format: catalog::DownloadFormat,
-) -> Result<Vec<String>, AppError> {
-    export_status_job_keys(
-        state,
-        source_hash,
-        config_hash,
-        &download_options_hash(model, format),
-        "download",
-        format.slug(),
-    )
-    .await
-}
-
 async fn export_status_job_keys(
     state: &AppState,
     source_hash: &str,
@@ -3815,72 +3857,79 @@ fn job_status_priority(status: &str) -> u8 {
 
 async fn ready_preview_artifact(
     state: &AppState,
-    model: &catalog::Model,
-    source_hash: &str,
-    config_hash: &str,
+    request_hash: &str,
 ) -> sqlx::Result<Option<db::ArtifactRecord>> {
     state
         .db
-        .latest_ready_artifact_for_output(
-            source_hash,
-            config_hash,
-            &preview_options_hash(model),
-            "preview_glb",
-        )
+        .latest_ready_artifact_for_request(request_hash)
         .await
 }
 
 async fn ready_download_artifact(
     state: &AppState,
-    model: &catalog::Model,
-    source_hash: &str,
-    config_hash: &str,
-    format: catalog::DownloadFormat,
+    request_hash: &str,
 ) -> sqlx::Result<Option<db::ArtifactRecord>> {
     state
         .db
-        .latest_ready_artifact_for_output(
-            source_hash,
-            config_hash,
-            &download_options_hash(model, format),
-            format.slug(),
-        )
+        .latest_ready_artifact_for_request(request_hash)
         .await
 }
 
-async fn latest_preview_artifact_set(
+async fn latest_artifact_set(
+    state: &AppState,
+    request_hash: &str,
+) -> sqlx::Result<Option<db::ArtifactSetRecord>> {
+    state.db.latest_artifact_set_for_request(request_hash).await
+}
+
+async fn current_preview_request_hash(
     state: &AppState,
     model: &catalog::Model,
     source_hash: &str,
     config_hash: &str,
-) -> sqlx::Result<Option<db::ArtifactSetRecord>> {
-    state
+) -> anyhow::Result<Option<String>> {
+    let Some(configuration) = state
         .db
-        .latest_artifact_set_for_output(
-            source_hash,
-            config_hash,
-            &preview_options_hash(model),
-            "preview_glb",
-        )
-        .await
+        .configuration_encoding(source_hash, config_hash)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let request = state.onshape.build_preview_glb_export_request(
+        &model.onshape,
+        &EncodedConfigurationIdentity {
+            encoded_id: configuration.encoded_id,
+            query_param: configuration.query_param,
+        },
+        &model.exports.preview_options,
+    );
+    Ok(Some(cache_model::request_hash(&request.identity)?))
 }
 
-async fn latest_download_artifact_set(
+async fn current_download_request_hash(
     state: &AppState,
     model: &catalog::Model,
     source_hash: &str,
     config_hash: &str,
     format: catalog::DownloadFormat,
-) -> sqlx::Result<Option<db::ArtifactSetRecord>> {
-    state
+) -> anyhow::Result<Option<String>> {
+    let Some(configuration) = state
         .db
-        .latest_artifact_set_for_output(
-            source_hash,
-            config_hash,
-            &download_options_hash(model, format),
-            format.slug(),
-        )
-        .await
+        .configuration_encoding(source_hash, config_hash)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let request = state.onshape.build_download_export_request(
+        &model.onshape,
+        &EncodedConfigurationIdentity {
+            encoded_id: configuration.encoded_id,
+            query_param: configuration.query_param,
+        },
+        format,
+        &model.exports.download_options,
+    );
+    Ok(Some(cache_model::request_hash(&request.identity)?))
 }
 
 fn preview_lookup_key(source_hash: &str, model: &catalog::Model, config_hash: &str) -> String {
@@ -5074,6 +5123,25 @@ mod tests {
             })
             .await
             .unwrap();
+        state
+            .db
+            .insert_export_request_if_absent(ExportRequestInsert {
+                request_hash: "zzz-new-requesthash",
+                source_hash: "sourcehash",
+                config_hash: "confighash",
+                options_hash: "optionshash",
+                output_kind: "preview",
+                format: "glb",
+                endpoint: "createPartStudioExportGltf",
+                method: "POST",
+                path: "/api/partstudios/d/did/v/mid/e/eid/export/gltf",
+                request_json: "{}",
+                defaults_policy_version: "v2",
+                request_builder_version: "v2",
+                status: EXPORT_REQUEST_STATUS_STAGED,
+            })
+            .await
+            .unwrap();
 
         let work_keys = export_status_job_keys(
             &state,
@@ -5086,7 +5154,126 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(work_keys, vec![export_job_key("requesthash")]);
+        assert_eq!(work_keys, vec![export_job_key("zzz-new-requesthash")]);
+    }
+
+    #[tokio::test]
+    async fn preview_status_prefers_current_request_hash_over_old_ready_artifact() {
+        let state = test_state().await;
+        let model = test_model();
+        let source_hash = resolved_source_hash_for_test_model(&model);
+        let validated = validated_configuration_for_test_values(HashMap::from([(
+            "a".to_owned(),
+            "1".to_owned(),
+        )]));
+        let config_hash = configuration_hash(&source_hash, &validated).unwrap();
+        seed_test_source_resolution(&state, &model, &source_hash).await;
+        state
+            .db
+            .upsert_configuration_encoding(db::ConfigurationEncodingUpsert {
+                source_hash: &source_hash,
+                config_hash: &config_hash,
+                encoded_id: "encoded-1",
+                query_param: "configuration=encoded-1",
+                request_json: r#"{"parameters":[{"parameterId":"a","parameterValue":"1"}]}"#,
+                response_json: r#"{"encodedId":"encoded-1","queryParam":"configuration=encoded-1"}"#,
+            })
+            .await
+            .unwrap();
+        let current_request = state.onshape.build_preview_glb_export_request(
+            &model.onshape,
+            &EncodedConfigurationIdentity {
+                encoded_id: "encoded-1".to_owned(),
+                query_param: "configuration=encoded-1".to_owned(),
+            },
+            &model.exports.preview_options,
+        );
+        let current_request_hash = cache_model::request_hash(&current_request.identity).unwrap();
+        let queued_work_key = export_job_key(&current_request_hash);
+        state
+            .db
+            .enqueue_job(&queued_work_key, "preview_export", "{}")
+            .await
+            .unwrap();
+        state
+            .db
+            .upsert_artifact(db::ArtifactUpsert {
+                artifact_key: "old-ready-artifact",
+                model_slug: &model.slug,
+                config_hash: &config_hash,
+                output_kind: "preview_glb",
+                format: "glb",
+                object_key: "previews/v2/old-ready-artifact/preview.glb",
+                content_type: "model/gltf-binary",
+                byte_len: 42,
+                sha256: "old-sha",
+                producing_job_key: Some("work-v2:export:old-requesthash"),
+                source_hash: &source_hash,
+                options_hash: &preview_options_hash(&model),
+                request_hash: Some("old-requesthash"),
+                raw_payload_hash: Some("rawhash-old"),
+                postprocess_hash: Some("posthash-old"),
+                parameter_schema_version: SCHEMA_VERSION.into(),
+                config_values_json: "{}",
+            })
+            .await
+            .unwrap();
+
+        let Json(status) = preview_status(
+            State(state.clone()),
+            Path((model.slug.clone(), config_hash.clone())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status.status, "queued");
+        assert_eq!(status.job_id.as_deref(), Some(queued_work_key.as_str()));
+        assert_eq!(status.public_url, None);
+    }
+
+    #[tokio::test]
+    async fn enqueue_preview_dedupes_identical_request_hash() {
+        let state = test_state().await;
+        let model = test_model();
+        let source_hash = resolved_source_hash_for_test_model(&model);
+        let validated = validated_configuration_for_test_values(HashMap::from([(
+            "a".to_owned(),
+            "1".to_owned(),
+        )]));
+        let config_hash = configuration_hash(&source_hash, &validated).unwrap();
+        seed_test_source_resolution(&state, &model, &source_hash).await;
+        state
+            .db
+            .upsert_configuration_encoding(db::ConfigurationEncodingUpsert {
+                source_hash: &source_hash,
+                config_hash: &config_hash,
+                encoded_id: "encoded-1",
+                query_param: "configuration=encoded-1",
+                request_json: r#"{"parameters":[{"parameterId":"a","parameterValue":"1"}]}"#,
+                response_json: r#"{"encodedId":"encoded-1","queryParam":"configuration=encoded-1"}"#,
+            })
+            .await
+            .unwrap();
+
+        assert!(enqueue_preview(&state, &model, &validated).await.unwrap());
+        assert!(!enqueue_preview(&state, &model, &validated).await.unwrap());
+
+        let prepared = prepare_preview_export(
+            &state,
+            &model,
+            &source_hash,
+            &validated.values,
+            &config_hash,
+        )
+        .await
+        .unwrap();
+        let job = state
+            .db
+            .job(&export_job_key(&prepared.request_hash))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(job.status, "queued");
     }
 
     #[tokio::test]
@@ -5458,6 +5645,28 @@ mod tests {
             link_document_id: model.onshape.link_document_id.clone(),
         })
         .unwrap()
+    }
+
+    async fn seed_test_source_resolution(
+        state: &AppState,
+        model: &catalog::Model,
+        source_hash: &str,
+    ) {
+        state
+            .db
+            .upsert_source_resolution(db::SourceResolutionUpsert {
+                source_hash,
+                model_slug: &model.slug,
+                document_id: &model.onshape.document_id,
+                version_id: &model.onshape.version_id,
+                microversion_id: "mid",
+                element_id: &model.onshape.element_id,
+                element_kind: model.onshape.element_kind.key(),
+                link_document_id: model.onshape.link_document_id.as_deref(),
+                diagnostics_json: r#"{"microversionId":"mid"}"#,
+            })
+            .await
+            .unwrap();
     }
 
     fn validated_configuration_for_test_values(

@@ -722,6 +722,61 @@ impl Database {
         .map(|row| row.map(export_request_record_from_row))
     }
 
+    pub async fn latest_ready_artifact_for_request(
+        &self,
+        request_hash: &str,
+    ) -> sqlx::Result<Option<ArtifactRecord>> {
+        sqlx::query(
+            r#"
+            SELECT artifact_sets.artifact_set_hash AS artifact_key,
+                   artifact_sets.config_hash,
+                   artifact_sets.output_kind,
+                   artifact_sets.status,
+                   artifact_sets.primary_object_key AS object_key,
+                   artifact_sets.source_hash,
+                   artifact_sets.options_hash,
+                   artifact_sets.metadata_json,
+                   artifact_sets.created_at,
+                   artifact_sets.superseded_at,
+                   artifact_files.content_type,
+                   artifact_files.byte_len,
+                   artifact_files.sha256
+            FROM artifact_sets
+            LEFT JOIN artifact_files ON artifact_files.object_key = artifact_sets.primary_object_key
+            WHERE artifact_sets.request_hash = ?
+              AND artifact_sets.status = 'ready'
+            ORDER BY artifact_sets.created_at DESC, artifact_sets.artifact_set_hash DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(request_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(artifact_record_from_v2_row))
+    }
+
+    pub async fn latest_artifact_set_for_request(
+        &self,
+        request_hash: &str,
+    ) -> sqlx::Result<Option<ArtifactSetRecord>> {
+        sqlx::query(
+            r#"
+            SELECT artifact_set_hash, source_hash, config_hash, options_hash, request_hash,
+                   raw_payload_hash, postprocess_hash, output_kind, format, status,
+                   primary_object_key, metadata_json, created_at, updated_at,
+                   superseded_at, superseded_by, supersession_reason
+            FROM artifact_sets
+            WHERE request_hash = ?
+            ORDER BY updated_at DESC, created_at DESC, artifact_set_hash DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(request_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(artifact_set_record_from_row))
+    }
+
     pub async fn translation(
         &self,
         translation_id: &str,
@@ -2159,6 +2214,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn latest_ready_artifact_for_request_uses_exact_request_hash() {
+        let db = test_database().await;
+        db.upsert_artifact(ArtifactUpsert {
+            artifact_key: "first-set",
+            model_slug: "demo",
+            config_hash: "abc",
+            output_kind: "step",
+            format: "step",
+            object_key: "artifacts/v2/first-set/demo-step.step",
+            content_type: "model/step",
+            byte_len: 10,
+            sha256: "sha-first",
+            producing_job_key: Some("work-v2:export:older-request"),
+            source_hash: "sourcehash",
+            options_hash: "optionshash",
+            request_hash: Some("older-request"),
+            raw_payload_hash: Some("raw-first"),
+            postprocess_hash: Some("post-first"),
+            parameter_schema_version: 2,
+            config_values_json: "{}",
+        })
+        .await
+        .unwrap();
+        db.upsert_artifact(ArtifactUpsert {
+            artifact_key: "second-set",
+            model_slug: "demo",
+            config_hash: "abc",
+            output_kind: "step",
+            format: "step",
+            object_key: "artifacts/v2/second-set/demo-step.step",
+            content_type: "model/step",
+            byte_len: 12,
+            sha256: "sha-second",
+            producing_job_key: Some("work-v2:export:newer-request"),
+            source_hash: "sourcehash",
+            options_hash: "optionshash",
+            request_hash: Some("newer-request"),
+            raw_payload_hash: Some("raw-second"),
+            postprocess_hash: Some("post-second"),
+            parameter_schema_version: 2,
+            config_values_json: "{}",
+        })
+        .await
+        .unwrap();
+
+        let artifact = db
+            .latest_ready_artifact_for_request("older-request")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(artifact.artifact_key, "first-set");
+        assert_eq!(artifact.object_key, "artifacts/v2/first-set/demo-step.step");
+    }
+
+    #[tokio::test]
     async fn supersede_ready_artifacts_for_output_retires_all_other_ready_sets() {
         let db = test_database().await;
         for artifact_key in ["first-set", "second-set", "kept-set"] {
@@ -2575,20 +2686,27 @@ mod tests {
                 request_hash: "requesthash",
                 source_hash: "sourcehash",
                 config_hash: "confighash",
-                options_hash: "optionshash",
+                options_hash: "different-optionshash",
                 output_kind: "preview",
                 format: "glb",
                 endpoint: "createPartStudioExportGltf",
                 method: "POST",
                 path: "/api/partstudios/d/did/v/vid/e/eid/export/gltf",
-                request_json: "{}",
-                defaults_policy_version: "v1",
-                request_builder_version: "v1",
-                status: "queued",
+                request_json: r#"{"different":true}"#,
+                defaults_policy_version: "v2",
+                request_builder_version: "v2",
+                status: "ready",
             })
             .await
             .unwrap()
         );
+
+        let record = db.export_request("requesthash").await.unwrap().unwrap();
+        assert_eq!(record.options_hash, "optionshash");
+        assert_eq!(record.request_json, "{}");
+        assert_eq!(record.defaults_policy_version, "v1");
+        assert_eq!(record.request_builder_version, "v1");
+        assert_eq!(record.status, "queued");
     }
 
     #[tokio::test]
