@@ -57,7 +57,7 @@ Implemented foundation:
 - SQLite connection setup with migrations and MVP durability PRAGMAs.
 - Tigris/S3-compatible client construction.
 - Signed Onshape API-key client for configuration metadata and export calls.
-- In-repo `catalog/v1` JSON loading and validation, with explicit legacy catalog compatibility.
+- In-repo `catalog/v1` JSON loading and validation.
 - Onshape parameter metadata refresh, normalization, Tigris caching, and SQLite deduplication.
 - RFC 8785 canonical JSON hashing for source, configuration, options, and work keys.
 - Server-rendered model parameter controls and submitted-value validation.
@@ -130,7 +130,7 @@ Make implementation contracts executable before relying on Onshape.
 
 Implemented on branch:
 
-- `catalog/v1/models.json` plus `catalog/v1/models/{slug}.json`, with explicit legacy catalog compatibility for operators that set `CATALOG_PATH` to the old single-file layout.
+- `catalog/v1/models.json` plus `catalog/v1/models/{slug}.json`.
 - Catalog validation for schema version, entry version, slugs, tags, duplicate source identities, duplicate formats, preview resolution, STEP option presence, preset slugs, override precision, override widgets, and cached-schema override IDs.
 - `catalogSchemaVersion`, `entryVersion`, `published`, `tags`, `thumbnail`, optional `linkDocumentId`, and `parameterPolicy.autoRefresh` support.
 - RFC 8785 canonical JSON hash helpers with golden tests.

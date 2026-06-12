@@ -2472,8 +2472,8 @@ mod tests {
         let db = test_database().await;
         db.upsert_parameter_metadata(
             "sourcehash",
-            "onshape/source/v1/sourcehash/configuration.raw.json",
-            "onshape/source/v1/sourcehash/parameters.normalized/schemahash.json",
+            "onshape/source/v2/sourcehash/configuration.raw.json",
+            "onshape/source/v2/sourcehash/parameters.normalized/schemahash.json",
             "schemahash",
             2,
         )
@@ -2702,7 +2702,7 @@ mod tests {
         assert!(
             db.insert_raw_payload_if_absent(RawPayloadInsert {
                 raw_payload_hash: "rawhash",
-                object_key: "onshape/raw/v1/ra/rawhash/payload.bin",
+                object_key: "onshape/raw/v2/ra/rawhash/payload.bin",
                 content_type: Some("application/octet-stream"),
                 byte_len: 4,
                 headers_json: "{}",
@@ -2718,7 +2718,7 @@ mod tests {
         assert!(
             !db.insert_raw_payload_if_absent(RawPayloadInsert {
                 raw_payload_hash: "rawhash",
-                object_key: "onshape/raw/v1/ra/rawhash/payload.bin",
+                object_key: "onshape/raw/v2/ra/rawhash/payload.bin",
                 content_type: Some("application/octet-stream"),
                 byte_len: 4,
                 headers_json: "{}",
@@ -2772,7 +2772,7 @@ mod tests {
         assert!(
             db.insert_raw_payload_if_absent(RawPayloadInsert {
                 raw_payload_hash: "rawhash",
-                object_key: "onshape/raw/v1/ra/rawhash/payload.bin",
+                object_key: "onshape/raw/v2/ra/rawhash/payload.bin",
                 content_type: Some("application/zip"),
                 byte_len: 42,
                 headers_json: "{}",

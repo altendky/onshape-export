@@ -16,7 +16,7 @@ selected configuration -> Onshape GLB export -> Tigris -> browser viewer
 
 The preferred MVP preview artifact is GLB. In practice, Onshape can return direct glTF JSON or zipped glTF asset sets from the same preview endpoint, so the branch supports direct glTF and ZIPs that contain exactly one `.gltf` viewer asset by publishing that entry and its sidecars under the same immutable preview identity. Target cache language should call this a preview artifact set.
 
-Current branch status: preview handling writes direct or zipped GLB as `preview.glb`, and direct glTF JSON as `preview.gltf`. If a ZIP has no GLB but contains exactly one glTF file, it writes that `.gltf`, uploads all safe sidecar asset paths, and retains the original ZIP as `source.zip` for debugging/reprocessing. ZIPs with multiple `.gltf` files are rejected until the app can merge them.
+Current branch status: preview handling writes direct or zipped GLB as `preview.glb`, and direct glTF JSON as `preview.gltf`. If a ZIP has no GLB but contains exactly one glTF file, it writes that `.gltf`, uploads all safe sidecar asset paths, and retains the original ZIP privately as a raw payload for debugging/reprocessing. ZIPs with multiple `.gltf` files are rejected until the app can merge them.
 
 The final download is independently cached:
 

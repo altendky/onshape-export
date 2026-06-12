@@ -10,11 +10,11 @@
 
 ## Current Branch Snapshot
 
-This page tracks the current v1 cache implementation and near-term gaps. The authoritative target design for layered request, response, raw-payload, post-processing, artifact-set, and manifest identity is documented in [Forward-Looking Cache Model](cache-model.md).
+This page is retained as historical v1 cache background. The authoritative current design for layered request, response, raw-payload, post-processing, artifact-set, and manifest identity is documented in [Forward-Looking Cache Model](cache-model.md).
 
-The v2 cache implementation is expected to be a clean cut from this v1 cache. Existing v1 SQLite records, object keys, public URLs, and manifests may be discarded or ignored during the v2 migration.
+The repository now uses a hard-cut v2 cache model. Existing v1 SQLite records, object keys, public URLs, and manifests are not preserved for compatibility.
 
-The branch has a working cache foundation and now implements the most important pieces of the newer main-branch target contract.
+Where this page describes v1 layouts or behaviors, treat them as historical context rather than the current branch state.
 
 Implemented now:
 
@@ -22,11 +22,11 @@ Implemented now:
 - Unique `jobs.work_key` for deduplicated parameter refresh, preview, and download work.
 - RFC 8785 JSON canonicalization for source, configuration, options, and work-key hash preimages.
 - Split `sourceHash`, `configHash`, and `optionsHash` helpers for artifact keys, object keys, jobs, and status responses.
-- `catalog/v1/models.json` plus `catalog/v1/models/{slug}.json`, while preserving explicit legacy catalog file compatibility.
+- `catalog/v1/models.json` plus `catalog/v1/models/{slug}.json`.
 - Versioned object prefixes for parameter metadata, previews, and downloads.
 - Tigris/S3 reads and writes for raw parameter metadata, normalized parameter metadata, preview artifacts, and download artifacts.
 - Server-side value validation before enqueueing preview or download work.
-- Preview storage prefers a single GLB, but direct glTF JSON is accepted as a browser viewer artifact. When Onshape returns a ZIP with exactly one glTF viewer asset instead, the branch publishes that `.gltf` plus sidecars under the same immutable preview identity and currently keeps the original ZIP under the implementation-chosen name `source.zip`. ZIPs with multiple `.gltf` files are rejected until a real merge path exists. The target cache model preserves Onshape-provided filenames and stores roles in metadata instead of relying on this fixed name.
+- Preview storage prefers a single GLB, but direct glTF JSON is accepted as a browser viewer artifact. When Onshape returns a ZIP with exactly one glTF viewer asset instead, the branch publishes that `.gltf` plus sidecars under the same immutable preview identity and retains the original ZIP privately as a raw payload. ZIPs with multiple `.gltf` files are rejected until a real merge path exists. The target cache model preserves Onshape-provided filenames and stores roles in metadata instead of relying on a fixed public ZIP name.
 - Ready artifact metadata for public URL, byte length, SHA-256, producing job key, source hash, options hash, and parameter schema version where available.
 - Persisted `max_attempts`, `next_retry_at`, and bounded exponential full-jitter retry backoff for worker failures.
 - `superseded` job and artifact state for invalidation and pruning without deleting public object-store artifacts.

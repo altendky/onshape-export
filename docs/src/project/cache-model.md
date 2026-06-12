@@ -287,7 +287,7 @@ Example raw payload metadata:
   "rawPayloadHash": "...",
   "originalFilename": "Part Studio 1.zip",
   "filenameSource": "content-disposition",
-  "objectKey": "onshape/raw/v1/ab/abcdef.../Part_Studio_1.zip",
+  "objectKey": "onshape/raw/v2/ab/abcdef.../Part_Studio_1.zip",
   "contentType": "application/zip",
   "sizeBytes": 123456,
   "headers": {}
@@ -297,7 +297,7 @@ Example raw payload metadata:
 If no filename is available, store `originalFilename: null` and use a neutral fallback object key such as:
 
 ```text
-onshape/raw/v1/{hashPrefix}/{rawPayloadHash}/payload.bin
+onshape/raw/v2/{hashPrefix}/{rawPayloadHash}/payload.bin
 ```
 
 The fallback filename is not part of cache identity.
@@ -571,16 +571,16 @@ Keep raw payloads private or operational unless explicitly intended for public d
 Initial v2 should store metadata in the database and use object storage for raw and public artifact blobs. The metadata object keys below are full-model/future suggestions for cases where database state is later materialized into object storage.
 
 ```text
-onshape/source/v1/{sourceHash}/configuration.raw.json
-onshape/source/v1/{sourceHash}/parameters.normalized/{parameterSchemaHash}.json
+onshape/source/v2/{sourceHash}/configuration.raw.json
+onshape/source/v2/{sourceHash}/parameters.normalized/{parameterSchemaHash}.json
 config-encodings/v1/{sourceHash}/{configHash}.json
 
 onshape/requests/v1/{requestHash}/request.json
 onshape/translations/v1/{translationId}/start.json
 onshape/translations/v1/{translationId}/final.json
 
-onshape/raw/v1/{rawPayloadHashPrefix}/{rawPayloadHash}/{storageSafeOriginalFilename}
-onshape/raw/v1/{rawPayloadHashPrefix}/{rawPayloadHash}/payload.bin
+onshape/raw/v2/{rawPayloadHashPrefix}/{rawPayloadHash}/{storageSafeOriginalFilename}
+onshape/raw/v2/{rawPayloadHashPrefix}/{rawPayloadHash}/payload.bin
 onshape/raw-index/v1/{requestHash}/{translationId}/{resultIndex}.json
 
 previews/v2/{artifactSetHash}/{logicalPath}

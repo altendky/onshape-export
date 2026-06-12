@@ -216,8 +216,8 @@ Implementation details:
 Suggested object keys:
 
 ```text
-onshape/raw/v1/{hashPrefix}/{rawPayloadHash}/{storageSafeOriginalFilename}
-onshape/raw/v1/{hashPrefix}/{rawPayloadHash}/payload.bin
+onshape/raw/v2/{hashPrefix}/{rawPayloadHash}/{storageSafeOriginalFilename}
+onshape/raw/v2/{hashPrefix}/{rawPayloadHash}/payload.bin
 ```
 
 Testing:

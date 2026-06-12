@@ -15,7 +15,7 @@ catalog/v1/models.json
 catalog/v1/models/{slug}.json
 ```
 
-`catalog/models.json` is kept only as an explicit legacy-compatible file for local operators that point `CATALOG_PATH` at it.
+Deployments should point `CATALOG_PATH` at `catalog/v1/models.json`.
 
 Current index shape:
 

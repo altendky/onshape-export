@@ -16,18 +16,17 @@ Implemented foundation:
 - SQLite connection setup with migrations and MVP durability PRAGMAs.
 - Tigris/S3-compatible client construction.
 - Signed Onshape API-key client for configuration metadata reads and export calls.
-- In-repo `catalog/v1/` JSON loading and validation, with legacy catalog compatibility for explicit paths.
+- In-repo `catalog/v1/` JSON loading and validation.
 - Onshape parameter metadata refresh, normalization, Tigris caching, and SQLite deduplication.
 - RFC 8785 JSON canonicalization for source, configuration, options, and work-key hash preimages.
 - Server-rendered model parameter controls and submitted-value validation.
 - Background worker loop for queued parameter refreshes, previews, and downloads.
 - Persisted retry attempt limits, `nextRetryAt`, and exponential full-jitter backoff for failed worker jobs.
-- Preview artifacts prefer GLB, but direct glTF JSON is accepted; a ZIP with exactly one Onshape glTF viewer asset is extracted with sidecars and retained with the original `source.zip` when Onshape does not return GLB.
+- Preview artifacts prefer GLB, but direct glTF JSON is accepted; a ZIP with exactly one Onshape glTF viewer asset is extracted into a published viewer entry plus sidecars, while the original ZIP is retained privately as a raw payload.
 - Supersession-based artifact invalidation and pruning that leave public object-store artifacts immutable.
 - Worker-only runtime mode for separate Fly process groups.
 - Configurable worker concurrency through `WORKER_CONCURRENCY`.
 - CLI maintenance commands for catalog validation, parameter refresh, pre-generation, job/failure inspection and retry, and artifact inspection/invalidation.
-- CLI manifest inspection and rewrite support for cached model configurations.
 - Catalog-defined parameter presets for targeted preview/export pre-generation.
 - Catalog-defined parameter UI overrides and preview/STEP export option defaults.
 - Deploy-time `ops check` command for catalog, SQLite, storage, public URL, and credential readiness.
@@ -39,7 +38,7 @@ Known plan gaps:
 - Onshape translation IDs, polling state, and `Retry-After` values are not persisted for crash-resume yet.
 - Failure records and public status errors still need stable public-safe error codes and user messages.
 - Uploaded-object verification and cache reconciliation for partial writes are not implemented yet.
-- Manifests include ready output metadata, but do not yet materialize missing outputs, replacement pointers, or full supersession history.
+- Public manifests are not part of the initial v2 flow; DB-backed status and artifact state are the source of truth.
 
 Local run:
 

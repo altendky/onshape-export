@@ -2311,11 +2311,11 @@ async fn refresh_parameters(
 }
 
 fn parameter_raw_key(source_hash: &str) -> String {
-    format!("onshape/source/v1/{source_hash}/configuration.raw.json")
+    format!("onshape/source/v2/{source_hash}/configuration.raw.json")
 }
 
 fn parameter_normalized_key(source_hash: &str, schema_hash: &str) -> String {
-    format!("onshape/source/v1/{source_hash}/parameters.normalized/{schema_hash}.json")
+    format!("onshape/source/v2/{source_hash}/parameters.normalized/{schema_hash}.json")
 }
 
 async fn render_cached_preview(
@@ -2740,7 +2740,7 @@ async fn load_persisted_raw_payload(
 fn raw_payload_object_key(raw_payload_hash: &str) -> String {
     let prefix_len = raw_payload_hash.len().min(2);
     format!(
-        "onshape/raw/v1/{}/{}/payload.bin",
+        "onshape/raw/v2/{}/{}/payload.bin",
         &raw_payload_hash[..prefix_len],
         raw_payload_hash
     )
@@ -5268,7 +5268,7 @@ mod tests {
     fn raw_payload_object_key_is_content_addressed() {
         assert_eq!(
             raw_payload_object_key("abcdef"),
-            "onshape/raw/v1/ab/abcdef/payload.bin"
+            "onshape/raw/v2/ab/abcdef/payload.bin"
         );
     }
 
