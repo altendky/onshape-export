@@ -598,6 +598,8 @@ fn parse_polled_translation(response: &Value) -> anyhow::Result<PolledTranslatio
     );
     Ok(PolledTranslation {
         state,
+        // The cache model persists the final response and terminal poll snapshot
+        // separately even when the last poll payload matches the final response.
         poll_state_json: final_response_json.clone(),
         final_response_json,
         result_external_data_ids,
