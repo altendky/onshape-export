@@ -16,7 +16,7 @@ selected configuration -> Onshape GLB export -> Tigris -> browser viewer
 
 The preferred MVP preview artifact is GLB. In practice, Onshape can return direct glTF JSON or zipped glTF asset sets from the same preview endpoint, so the branch supports direct glTF and ZIPs that contain exactly one `.gltf` viewer asset by publishing that entry and its sidecars under the same immutable preview identity. Target cache language should call this a preview artifact set.
 
-Current branch status: preview handling writes direct or zipped GLB as `preview.glb`, and direct glTF JSON as `preview.gltf`. If a ZIP has no GLB but contains exactly one glTF file, it writes that `.gltf`, uploads all safe sidecar asset paths, and retains the original ZIP as `source.zip` for debugging/reprocessing. ZIPs with multiple `.gltf` files are rejected until the app can merge them.
+Current branch status: preview handling writes direct or zipped GLB as `preview.glb`, and direct glTF JSON as `preview.gltf`. If a ZIP has no GLB but contains exactly one glTF file, it writes that `.gltf`, uploads all safe sidecar asset paths, and retains the original ZIP privately as a raw payload for debugging/reprocessing. ZIPs with multiple `.gltf` files are rejected until the app can merge them.
 
 The final download is independently cached:
 
@@ -44,8 +44,8 @@ Cached preview and download URLs are stable public Tigris artifact URLs. The Fly
 1. Model page loads default parameters.
 2. Page calls an app cache/status route for the default preview artifact set.
 3. User changes parameters.
-4. Page calls an app cache/status route to check whether a preview exists for the new `config_hash`.
-5. If cached, the app returns the active preview artifact URL and the viewer updates.
+4. Page calls an app cache/status route, which rebuilds the current canonical preview request for the selected `config_hash` and checks readiness for that exact `requestHash`.
+5. If cached for that exact request, the app returns the active preview artifact URL and the viewer updates.
 6. If missing, the user can generate the preview.
 7. User selects STEP, STL, or 3MF for download.
 8. Missing download artifacts are generated and cached.

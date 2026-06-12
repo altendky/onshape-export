@@ -6,7 +6,7 @@ Use a single-provider Fly-oriented MVP:
 
 - Rust `axum` service on Fly.io for public pages, cache checks, queue submission, status routes, and Onshape orchestration.
 - A bounded embedded worker loop in the same Rust process for the safest MVP deployment.
-- Tigris Object Storage via Fly for completed artifacts, manifests, and cached Onshape metadata.
+- Tigris Object Storage via Fly for completed artifacts and cached Onshape metadata.
 - SQLite on a Fly volume for queue coordination, job uniqueness, artifact index state, and failure summaries.
 
 This keeps the MVP on Fly/Tigris, avoids the fixed cost of Fly Managed Postgres, and still provides transactional coordination so duplicate Onshape parameter fetches and exports are prevented.

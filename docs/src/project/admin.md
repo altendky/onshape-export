@@ -16,7 +16,6 @@ Initial admin operations:
 - Invalidate artifacts after exporter option changes by superseding old public artifacts in normal operation.
 - Prune artifacts older than an explicit age threshold, with dry-run support.
 - List cached outputs for a model.
-- Inspect and optionally rewrite the manifest for a cached model configuration.
 
 Implemented CLI commands:
 
@@ -31,7 +30,6 @@ onshape-export jobs list [--json]
 onshape-export failures list [--json]
 onshape-export failures retry [--all|<work-key>|--kind <job-kind>]
 onshape-export artifacts list <slug|--all>
-onshape-export artifacts manifest <slug> <config-hash> [--rewrite]
 onshape-export artifacts invalidate <artifact-key>
 onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]
 ```
@@ -44,13 +42,9 @@ onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]
 Use a listed work key or `--kind <job-kind>` when only one failed operation class
 should be retried.
 
-`artifacts invalidate` and `artifacts prune` supersede SQLite artifact records, preserve immutable public object-store artifacts, mark the producing ready job superseded when known, and rewrite the affected manifest from remaining ready records. Keep deletion for a future explicit operator cleanup command covering legal/IP concerns or storage-cost management.
+`artifacts invalidate` and `artifacts prune` supersede SQLite artifact records, preserve immutable public object-store artifacts, and mark the producing ready job superseded when known. Keep deletion for a future explicit operator cleanup command covering legal/IP concerns or storage-cost management.
 
 `artifacts prune` uses SQLite artifact records as the source of truth and supersedes each matching ready record. Use `--dry-run` first to inspect matches without changing artifact state.
-
-`artifacts manifest` renders the manifest that would be materialized from
-SQLite artifact records for one model configuration. Use `--rewrite` to upload
-that manifest to object storage after inspecting or repairing cache state.
 
 ## Target Command Gaps
 
@@ -60,7 +54,7 @@ The updated main plan expects several behaviors that are not implemented yet:
 - `cache reconcile` to repair SQLite/Tigris drift such as uploaded objects whose jobs were not marked ready.
 - v2 cache commands should be human-first by model/configuration/output, with advanced hash-based selectors such as `requestHash`, `rawPayloadHash`, and `artifactSetHash` for debugging and repair.
 - Retryability classes and public-safe error codes/messages.
-- Replacement pointers and supersession reasons for artifacts and manifests.
+- Replacement pointers and supersession reasons for artifacts.
 - Catalog validation against live Onshape metadata for a no-cache `catalog validate` mode.
 - Content disposition in SQLite artifact metadata.
 
@@ -101,7 +95,7 @@ POST /admin/cache/{group_id}/invalidate
 
 ## Future Admin With SQLite
 
-With SQLite coordination state and Tigris artifacts, future admin views should mostly operate by known keys from the catalog, job records, artifact records, and manifests.
+With SQLite coordination state and Tigris artifacts, future admin views should mostly operate by known keys from the catalog, job records, and artifact records.
 
 Weaknesses:
 

@@ -46,7 +46,7 @@ GLB is generated as a separate Onshape export for the same selected configuratio
 
 Target cache language should treat preview output as a preview artifact set, not as one guaranteed `.glb` file. GLB remains the preferred/current single-file preview case.
 
-Current branch status: direct GLB responses are accepted after GLB header validation, and direct glTF JSON responses are accepted as browser viewer artifacts. Zipped Onshape preview responses use exactly one valid `.glb` when present; otherwise a ZIP with exactly one `.gltf` publishes that viewer asset, safe sidecars, and the original `source.zip` under the preview identity. ZIPs with multiple `.gltf` files are rejected rather than showing a partial preview.
+Current branch status: direct GLB responses are accepted after GLB header validation, and direct glTF JSON responses are accepted as browser viewer artifacts. Zipped Onshape preview responses use exactly one valid `.glb` when present; otherwise a ZIP with exactly one `.gltf` publishes that viewer asset and safe sidecars while retaining the original ZIP privately as a raw payload. ZIPs with multiple `.gltf` files are rejected rather than showing a partial preview.
 
 ## Public API
 
@@ -58,7 +58,7 @@ Use product/UI routes only. Add an API later only with explicit keys, quotas, an
 
 **Decision:** Use Tigris Object Storage via Fly as the artifact/cache backend.
 
-Tigris stores completed artifacts, previews, manifests, raw Onshape responses, and normalized parameter metadata. Completed public artifacts are durable cache outputs and should be served directly from stable, non-expiring Tigris URLs.
+Tigris stores completed artifacts, previews, raw Onshape responses, and normalized parameter metadata. Completed public artifacts are durable cache outputs and should be served directly from stable, non-expiring Tigris URLs.
 
 Fly app egress is metered, so the Rust app should not proxy GLB, STEP, STL, or 3MF bytes in the steady state.
 
@@ -98,9 +98,9 @@ The product is a public anonymous catalog, so completed GLB, STEP, STL, and 3MF 
 
 **Decision:** Normal MVP cache invalidation uses supersession, not overwrite or deletion.
 
-Public artifact objects are immutable in normal operation. Exporter, schema, catalog, option, or parameter changes produce new artifact keys and update manifests or index state to point at newer outputs. Older public URLs may remain addressable and can be marked superseded for operational visibility. Deletion is reserved for explicit operator cleanup, legal or IP concerns, or storage-cost management.
+Public artifact objects are immutable in normal operation. Exporter, schema, catalog, option, or parameter changes produce new artifact keys and update DB-backed index state to point at newer outputs. Older public URLs may remain addressable and can be marked superseded for operational visibility. Deletion is reserved for explicit operator cleanup, legal or IP concerns, or storage-cost management.
 
-Current branch status: `artifacts invalidate` and `artifacts prune` mark ready SQLite artifact records superseded, leave public object-store artifacts untouched, and rewrite manifests from remaining ready records. Destructive deletion remains reserved for a future explicit cleanup command.
+Current branch status: `artifacts invalidate` and `artifacts prune` mark ready SQLite artifact records superseded and leave public object-store artifacts untouched. Destructive deletion remains reserved for a future explicit cleanup command.
 
 ## Admin Surface
 

@@ -14,6 +14,12 @@ pub struct StorageClient {
     public_base_url: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ObjectMetadata {
+    pub content_length: i64,
+    pub content_type: Option<String>,
+}
+
 impl StorageClient {
     pub async fn new(config: StorageConfig) -> anyhow::Result<Self> {
         let mut builder = Builder::new().region(Region::new(config.region.clone()));
@@ -106,6 +112,34 @@ impl StorageClient {
             .await?;
         let bytes = output.body.collect().await?.into_bytes();
         Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    pub async fn get_bytes(&self, key: &str) -> anyhow::Result<Vec<u8>> {
+        let output = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await?;
+        Ok(output.body.collect().await?.into_bytes().to_vec())
+    }
+
+    pub async fn head_object(&self, key: &str) -> anyhow::Result<ObjectMetadata> {
+        let output = self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await?;
+        let content_length = output
+            .content_length
+            .ok_or_else(|| anyhow::anyhow!("missing content_length in HEAD response for key: {key}"))?;
+        Ok(ObjectMetadata {
+            content_length,
+            content_type: output.content_type,
+        })
     }
 
     pub fn public_url(&self, key: &str) -> Option<String> {

@@ -1,12 +1,283 @@
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{Executor, Row, SqlitePool, sqlite::SqlitePoolOptions};
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ParameterMetadataRecord {
+    pub source_hash: String,
     pub raw_object_key: String,
     pub normalized_object_key: String,
+    pub schema_hash: String,
+    pub schema_version: i64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct SourceResolutionRecord {
+    pub source_hash: String,
+    pub model_slug: String,
+    pub document_id: String,
+    pub version_id: String,
+    pub microversion_id: String,
+    pub element_id: String,
+    pub element_kind: String,
+    pub link_document_id: Option<String>,
+    pub diagnostics_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SourceResolutionUpsert<'a> {
+    pub source_hash: &'a str,
+    pub model_slug: &'a str,
+    pub document_id: &'a str,
+    pub version_id: &'a str,
+    pub microversion_id: &'a str,
+    pub element_id: &'a str,
+    pub element_kind: &'a str,
+    pub link_document_id: Option<&'a str>,
+    pub diagnostics_json: &'a str,
+}
+
+#[allow(dead_code)]
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub struct ConfigurationSelectionRecord {
+    pub source_hash: String,
+    pub config_hash: String,
+    pub values_json: String,
+    pub validation_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ConfigurationSelectionUpsert<'a> {
+    pub source_hash: &'a str,
+    pub config_hash: &'a str,
+    pub values_json: &'a str,
+    pub validation_json: &'a str,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct ConfigurationEncodingRecord {
+    pub source_hash: String,
+    pub config_hash: String,
+    pub encoded_id: String,
+    pub query_param: String,
+    pub request_json: String,
+    pub response_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ConfigurationEncodingUpsert<'a> {
+    pub source_hash: &'a str,
+    pub config_hash: &'a str,
+    pub encoded_id: &'a str,
+    pub query_param: &'a str,
+    pub request_json: &'a str,
+    pub response_json: &'a str,
+}
+
+#[allow(dead_code)]
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub struct ExportRequestRecord {
+    pub request_hash: String,
+    pub source_hash: String,
+    pub config_hash: String,
+    pub options_hash: String,
+    pub output_kind: String,
+    pub format: String,
+    pub endpoint: String,
+    pub method: String,
+    pub path: String,
+    pub request_json: String,
+    pub defaults_policy_version: String,
+    pub request_builder_version: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExportRequestInsert<'a> {
+    pub request_hash: &'a str,
+    pub source_hash: &'a str,
+    pub config_hash: &'a str,
+    pub options_hash: &'a str,
+    pub output_kind: &'a str,
+    pub format: &'a str,
+    pub endpoint: &'a str,
+    pub method: &'a str,
+    pub path: &'a str,
+    pub request_json: &'a str,
+    pub defaults_policy_version: &'a str,
+    pub request_builder_version: &'a str,
+    pub status: &'a str,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct TranslationRecord {
+    pub translation_id: String,
+    pub request_hash: String,
+    pub state: String,
+    pub start_response_json: Option<String>,
+    pub final_response_json: Option<String>,
+    pub poll_state_json: Option<String>,
+    pub result_external_data_ids_json: Option<String>,
+    pub result_element_ids_json: Option<String>,
+    pub response_hash: Option<String>,
+    pub failure_reason: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TranslationStartInsert<'a> {
+    pub translation_id: &'a str,
+    pub request_hash: &'a str,
+    pub state: &'a str,
+    pub start_response_json: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TranslationFinalUpdate<'a> {
+    pub translation_id: &'a str,
+    pub state: &'a str,
+    pub final_response_json: &'a str,
+    pub poll_state_json: &'a str,
+    pub result_external_data_ids_json: &'a str,
+    pub result_element_ids_json: &'a str,
+    pub response_hash: Option<&'a str>,
+    pub failure_reason: Option<&'a str>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct RawPayloadRecord {
+    pub raw_payload_hash: String,
+    pub object_key: String,
+    pub content_type: Option<String>,
+    pub byte_len: i64,
+    pub headers_json: String,
+    pub original_filename: Option<String>,
+    pub filename_source: Option<String>,
+    pub detected_kind: String,
+    pub zip_manifest_json: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RawPayloadInsert<'a> {
+    pub raw_payload_hash: &'a str,
+    pub object_key: &'a str,
+    pub content_type: Option<&'a str>,
+    pub byte_len: i64,
+    pub headers_json: &'a str,
+    pub original_filename: Option<&'a str>,
+    pub filename_source: Option<&'a str>,
+    pub detected_kind: &'a str,
+    pub zip_manifest_json: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RawPayloadSourceInsert<'a> {
+    pub request_hash: &'a str,
+    pub translation_id: Option<&'a str>,
+    pub external_data_id: Option<&'a str>,
+    pub result_index: Option<i64>,
+    pub response_headers_json: &'a str,
+    pub etag: Option<&'a str>,
+    pub raw_payload_hash: &'a str,
+}
+
+#[allow(dead_code)]
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub struct PostprocessRunRecord {
+    pub postprocess_hash: String,
+    pub raw_payload_hash: String,
+    pub processor_name: String,
+    pub processor_version: String,
+    pub policy_json: String,
+    pub status: String,
+    pub log_json: String,
+    pub derived_files_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PostprocessRunInsert<'a> {
+    pub postprocess_hash: &'a str,
+    pub raw_payload_hash: &'a str,
+    pub processor_name: &'a str,
+    pub processor_version: &'a str,
+    pub policy_json: &'a str,
+    pub status: &'a str,
+    pub log_json: &'a str,
+    pub derived_files_json: &'a str,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct ArtifactSetRecord {
+    pub artifact_set_hash: String,
+    pub source_hash: String,
+    pub config_hash: String,
+    pub options_hash: String,
+    pub request_hash: Option<String>,
+    pub raw_payload_hash: Option<String>,
+    pub postprocess_hash: Option<String>,
+    pub output_kind: String,
+    pub format: String,
+    pub status: String,
+    pub primary_object_key: Option<String>,
+    pub metadata_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub superseded_at: Option<String>,
+    pub superseded_by: Option<String>,
+    pub supersession_reason: Option<String>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+pub struct ArtifactSetInsert<'a> {
+    pub artifact_set_hash: &'a str,
+    pub source_hash: &'a str,
+    pub config_hash: &'a str,
+    pub options_hash: &'a str,
+    pub request_hash: Option<&'a str>,
+    pub raw_payload_hash: Option<&'a str>,
+    pub postprocess_hash: Option<&'a str>,
+    pub output_kind: &'a str,
+    pub format: &'a str,
+    pub status: &'a str,
+    pub primary_object_key: Option<&'a str>,
+    pub metadata_json: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ArtifactFileInsert<'a> {
+    pub artifact_set_hash: &'a str,
+    pub role: &'a str,
+    pub logical_path: &'a str,
+    pub original_path: Option<&'a str>,
+    pub object_key: &'a str,
+    pub content_type: &'a str,
+    pub byte_len: i64,
+    pub sha256: &'a str,
+    pub metadata_json: &'a str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -65,12 +336,14 @@ pub struct ArtifactMetric {
     pub byte_len: i64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct ArtifactUpsert<'a> {
     pub artifact_key: &'a str,
     pub model_slug: &'a str,
     pub config_hash: &'a str,
     pub output_kind: &'a str,
+    pub format: &'a str,
     pub object_key: &'a str,
     pub content_type: &'a str,
     pub byte_len: i64,
@@ -78,8 +351,23 @@ pub struct ArtifactUpsert<'a> {
     pub producing_job_key: Option<&'a str>,
     pub source_hash: &'a str,
     pub options_hash: &'a str,
+    pub request_hash: Option<&'a str>,
+    pub raw_payload_hash: Option<&'a str>,
+    pub postprocess_hash: Option<&'a str>,
     pub parameter_schema_version: i64,
     pub config_values_json: &'a str,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ArtifactMetadata {
+    model_slug: String,
+    #[serde(default)]
+    producing_job_key: Option<String>,
+    #[serde(default)]
+    parameter_schema_version: Option<i64>,
+    #[serde(default)]
+    config_values_json: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -129,46 +417,894 @@ impl Database {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub async fn source_resolution(
+        &self,
+        source_hash: &str,
+    ) -> sqlx::Result<Option<SourceResolutionRecord>> {
+        sqlx::query(
+            r#"
+            SELECT source_hash, model_slug, document_id, version_id, microversion_id,
+                   element_id, element_kind, link_document_id, diagnostics_json,
+                   created_at, updated_at
+            FROM source_resolutions
+            WHERE source_hash = ?
+            "#,
+        )
+        .bind(source_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(source_resolution_record_from_row))
+    }
+
+    pub async fn source_resolution_for_version(
+        &self,
+        document_id: &str,
+        version_id: &str,
+        element_id: &str,
+        element_kind: &str,
+        link_document_id: Option<&str>,
+    ) -> sqlx::Result<Option<SourceResolutionRecord>> {
+        sqlx::query(
+            r#"
+            SELECT source_resolutions.source_hash AS source_hash,
+                   source_resolutions.model_slug AS model_slug,
+                   source_resolution_aliases.document_id AS document_id,
+                   source_resolution_aliases.version_id AS version_id,
+                   source_resolutions.microversion_id AS microversion_id,
+                   source_resolution_aliases.element_id AS element_id,
+                   source_resolution_aliases.element_kind AS element_kind,
+                   source_resolution_aliases.link_document_id AS link_document_id,
+                   source_resolutions.diagnostics_json AS diagnostics_json,
+                   source_resolutions.created_at AS created_at,
+                   source_resolutions.updated_at AS updated_at
+            FROM source_resolution_aliases
+            JOIN source_resolutions USING (source_hash)
+            WHERE source_resolution_aliases.document_id = ?
+              AND source_resolution_aliases.version_id = ?
+              AND source_resolution_aliases.element_id = ?
+              AND source_resolution_aliases.element_kind = ?
+              AND ifnull(source_resolution_aliases.link_document_id, '') = ifnull(?, '')
+            "#,
+        )
+        .bind(document_id)
+        .bind(version_id)
+        .bind(element_id)
+        .bind(element_kind)
+        .bind(link_document_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(source_resolution_record_from_row))
+    }
+
+    pub async fn upsert_source_resolution(
+        &self,
+        resolution: SourceResolutionUpsert<'_>,
+    ) -> sqlx::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            r#"
+            INSERT INTO source_resolutions (
+                source_hash, model_slug, document_id, version_id, microversion_id,
+                element_id, element_kind, link_document_id, diagnostics_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_hash) DO UPDATE SET
+                model_slug = excluded.model_slug,
+                document_id = excluded.document_id,
+                microversion_id = excluded.microversion_id,
+                element_id = excluded.element_id,
+                element_kind = excluded.element_kind,
+                link_document_id = excluded.link_document_id,
+                diagnostics_json = excluded.diagnostics_json,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+        )
+        .bind(resolution.source_hash)
+        .bind(resolution.model_slug)
+        .bind(resolution.document_id)
+        .bind(resolution.version_id)
+        .bind(resolution.microversion_id)
+        .bind(resolution.element_id)
+        .bind(resolution.element_kind)
+        .bind(resolution.link_document_id)
+        .bind(resolution.diagnostics_json)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO source_resolution_aliases (
+                document_id, version_id, element_id, element_kind, link_document_id, source_hash
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT DO UPDATE SET
+                source_hash = excluded.source_hash,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+        )
+        .bind(resolution.document_id)
+        .bind(resolution.version_id)
+        .bind(resolution.element_id)
+        .bind(resolution.element_kind)
+        .bind(resolution.link_document_id)
+        .bind(resolution.source_hash)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn parameter_metadata(
         &self,
-        model_slug: &str,
+        source_hash: &str,
     ) -> sqlx::Result<Option<ParameterMetadataRecord>> {
         sqlx::query(
-            "SELECT raw_object_key, normalized_object_key FROM parameter_metadata WHERE model_slug = ?",
+            "SELECT source_hash, raw_object_key, normalized_object_key, schema_hash, schema_version FROM parameter_metadata WHERE source_hash = ?",
         )
-            .bind(model_slug)
+            .bind(source_hash)
             .fetch_optional(&self.pool)
             .await
             .map(|row| {
                 row.map(|row| ParameterMetadataRecord {
+                    source_hash: row.get("source_hash"),
                     raw_object_key: row.get("raw_object_key"),
                     normalized_object_key: row.get("normalized_object_key"),
+                    schema_hash: row.get("schema_hash"),
+                    schema_version: row.get("schema_version"),
                 })
             })
     }
 
     pub async fn upsert_parameter_metadata(
         &self,
-        model_slug: &str,
+        source_hash: &str,
         raw_object_key: &str,
         normalized_object_key: &str,
+        schema_hash: &str,
+        schema_version: i64,
     ) -> sqlx::Result<()> {
         sqlx::query(
             r#"
-            INSERT INTO parameter_metadata (model_slug, raw_object_key, normalized_object_key)
-            VALUES (?, ?, ?)
-            ON CONFLICT(model_slug) DO UPDATE SET
+            INSERT INTO parameter_metadata (
+                source_hash,
+                raw_object_key,
+                normalized_object_key,
+                schema_hash,
+                schema_version
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(source_hash) DO UPDATE SET
                 raw_object_key = excluded.raw_object_key,
                 normalized_object_key = excluded.normalized_object_key,
-                refreshed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                schema_hash = excluded.schema_hash,
+                schema_version = excluded.schema_version,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             "#,
         )
-        .bind(model_slug)
+        .bind(source_hash)
         .bind(raw_object_key)
         .bind(normalized_object_key)
+        .bind(schema_hash)
+        .bind(schema_version)
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub async fn configuration_selection(
+        &self,
+        source_hash: &str,
+        config_hash: &str,
+    ) -> sqlx::Result<Option<ConfigurationSelectionRecord>> {
+        sqlx::query(
+            r#"
+            SELECT source_hash, config_hash, values_json, validation_json, created_at, updated_at
+            FROM configuration_selections
+            WHERE source_hash = ? AND config_hash = ?
+            "#,
+        )
+        .bind(source_hash)
+        .bind(config_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(configuration_selection_record_from_row))
+    }
+
+    pub async fn upsert_configuration_selection(
+        &self,
+        selection: ConfigurationSelectionUpsert<'_>,
+    ) -> sqlx::Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO configuration_selections (
+                source_hash, config_hash, values_json, validation_json
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(source_hash, config_hash) DO UPDATE SET
+                values_json = excluded.values_json,
+                validation_json = excluded.validation_json,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+        )
+        .bind(selection.source_hash)
+        .bind(selection.config_hash)
+        .bind(selection.values_json)
+        .bind(selection.validation_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn configuration_encoding(
+        &self,
+        source_hash: &str,
+        config_hash: &str,
+    ) -> sqlx::Result<Option<ConfigurationEncodingRecord>> {
+        sqlx::query(
+            r#"
+            SELECT source_hash, config_hash, encoded_id, query_param, request_json,
+                   response_json, created_at, updated_at
+            FROM configuration_encodings
+            WHERE source_hash = ? AND config_hash = ?
+            "#,
+        )
+        .bind(source_hash)
+        .bind(config_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(configuration_encoding_record_from_row))
+    }
+
+    pub async fn upsert_configuration_encoding(
+        &self,
+        encoding: ConfigurationEncodingUpsert<'_>,
+    ) -> sqlx::Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO configuration_encodings (
+                source_hash, config_hash, encoded_id, query_param, request_json, response_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_hash, config_hash) DO UPDATE SET
+                encoded_id = excluded.encoded_id,
+                query_param = excluded.query_param,
+                request_json = excluded.request_json,
+                response_json = excluded.response_json,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+        )
+        .bind(encoding.source_hash)
+        .bind(encoding.config_hash)
+        .bind(encoding.encoded_id)
+        .bind(encoding.query_param)
+        .bind(encoding.request_json)
+        .bind(encoding.response_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub async fn export_request(
+        &self,
+        request_hash: &str,
+    ) -> sqlx::Result<Option<ExportRequestRecord>> {
+        sqlx::query(
+            r#"
+            SELECT request_hash, source_hash, config_hash, options_hash, output_kind, format,
+                   endpoint, method, path, request_json, defaults_policy_version,
+                   request_builder_version, status, created_at, updated_at
+            FROM export_requests
+            WHERE request_hash = ?
+            "#,
+        )
+        .bind(request_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(export_request_record_from_row))
+    }
+
+    pub async fn insert_export_request_if_absent(
+        &self,
+        request: ExportRequestInsert<'_>,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO export_requests (
+                request_hash, source_hash, config_hash, options_hash, output_kind, format,
+                endpoint, method, path, request_json, defaults_policy_version,
+                request_builder_version, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(request_hash) DO NOTHING
+            "#,
+        )
+        .bind(request.request_hash)
+        .bind(request.source_hash)
+        .bind(request.config_hash)
+        .bind(request.options_hash)
+        .bind(request.output_kind)
+        .bind(request.format)
+        .bind(request.endpoint)
+        .bind(request.method)
+        .bind(request.path)
+        .bind(request.request_json)
+        .bind(request.defaults_policy_version)
+        .bind(request.request_builder_version)
+        .bind(request.status)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    #[cfg(test)]
+    pub async fn latest_export_request_for_output(
+        &self,
+        source_hash: &str,
+        config_hash: &str,
+        options_hash: &str,
+        output_kind: &str,
+        format: &str,
+    ) -> sqlx::Result<Option<ExportRequestRecord>> {
+        sqlx::query(
+            r#"
+            SELECT request_hash, source_hash, config_hash, options_hash, output_kind, format,
+                   endpoint, method, path, request_json, defaults_policy_version,
+                   request_builder_version, status, created_at, updated_at
+            FROM export_requests
+            WHERE source_hash = ? AND config_hash = ? AND options_hash = ?
+              AND output_kind = ? AND format = ?
+            ORDER BY updated_at DESC, created_at DESC, request_hash DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(source_hash)
+        .bind(config_hash)
+        .bind(options_hash)
+        .bind(output_kind)
+        .bind(format)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(export_request_record_from_row))
+    }
+
+    pub async fn latest_ready_artifact_for_request(
+        &self,
+        request_hash: &str,
+    ) -> sqlx::Result<Option<ArtifactRecord>> {
+        sqlx::query(
+            r#"
+            SELECT artifact_sets.artifact_set_hash AS artifact_key,
+                   artifact_sets.config_hash,
+                   artifact_sets.output_kind,
+                   artifact_sets.status,
+                   artifact_sets.primary_object_key AS object_key,
+                   artifact_sets.source_hash,
+                   artifact_sets.options_hash,
+                   artifact_sets.metadata_json,
+                   artifact_sets.created_at,
+                   artifact_sets.superseded_at,
+                   artifact_files.content_type,
+                   artifact_files.byte_len,
+                   artifact_files.sha256
+            FROM artifact_sets
+            LEFT JOIN artifact_files ON artifact_files.object_key = artifact_sets.primary_object_key
+            WHERE artifact_sets.request_hash = ?
+              AND artifact_sets.status = 'ready'
+            ORDER BY artifact_sets.created_at DESC, artifact_sets.artifact_set_hash DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(request_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(artifact_record_from_v2_row))
+    }
+
+    pub async fn latest_artifact_set_for_request(
+        &self,
+        request_hash: &str,
+    ) -> sqlx::Result<Option<ArtifactSetRecord>> {
+        sqlx::query(
+            r#"
+            SELECT artifact_set_hash, source_hash, config_hash, options_hash, request_hash,
+                   raw_payload_hash, postprocess_hash, output_kind, format, status,
+                   primary_object_key, metadata_json, created_at, updated_at,
+                   superseded_at, superseded_by, supersession_reason
+            FROM artifact_sets
+            WHERE request_hash = ?
+            ORDER BY updated_at DESC, created_at DESC, artifact_set_hash DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(request_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(artifact_set_record_from_row))
+    }
+
+    #[cfg(test)]
+    pub async fn translation(
+        &self,
+        translation_id: &str,
+    ) -> sqlx::Result<Option<TranslationRecord>> {
+        sqlx::query(
+            r#"
+            SELECT translation_id, request_hash, state, start_response_json, final_response_json,
+                   poll_state_json, result_external_data_ids_json, result_element_ids_json,
+                   response_hash, failure_reason, created_at, updated_at
+            FROM translations
+            WHERE translation_id = ?
+            "#,
+        )
+        .bind(translation_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(translation_record_from_row))
+    }
+
+    pub async fn latest_translation_for_request(
+        &self,
+        request_hash: &str,
+    ) -> sqlx::Result<Option<TranslationRecord>> {
+        sqlx::query(
+            r#"
+            SELECT translation_id, request_hash, state, start_response_json, final_response_json,
+                   poll_state_json, result_external_data_ids_json, result_element_ids_json,
+                   response_hash, failure_reason, created_at, updated_at
+            FROM translations
+            WHERE request_hash = ?
+            ORDER BY updated_at DESC, created_at DESC, translation_id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(request_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(translation_record_from_row))
+    }
+
+    pub async fn latest_completed_translation_for_request(
+        &self,
+        request_hash: &str,
+    ) -> sqlx::Result<Option<TranslationRecord>> {
+        sqlx::query(
+            r#"
+            SELECT translation_id, request_hash, state, start_response_json, final_response_json,
+                   poll_state_json, result_external_data_ids_json, result_element_ids_json,
+                   response_hash, failure_reason, created_at, updated_at
+            FROM translations
+            WHERE request_hash = ? AND state = 'DONE' AND final_response_json IS NOT NULL
+            ORDER BY updated_at DESC, created_at DESC, translation_id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(request_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(translation_record_from_row))
+    }
+
+    pub async fn insert_translation_start(
+        &self,
+        translation: TranslationStartInsert<'_>,
+    ) -> sqlx::Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO translations (translation_id, request_hash, state, start_response_json)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(translation_id) DO UPDATE SET
+                request_hash = excluded.request_hash,
+                state = excluded.state,
+                start_response_json = excluded.start_response_json,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+        )
+        .bind(translation.translation_id)
+        .bind(translation.request_hash)
+        .bind(translation.state)
+        .bind(translation.start_response_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_translation_final(
+        &self,
+        translation: TranslationFinalUpdate<'_>,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE translations
+            SET state = ?,
+                final_response_json = ?,
+                poll_state_json = ?,
+                result_external_data_ids_json = ?,
+                result_element_ids_json = ?,
+                response_hash = ?,
+                failure_reason = ?,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE translation_id = ?
+            "#,
+        )
+        .bind(translation.state)
+        .bind(translation.final_response_json)
+        .bind(translation.poll_state_json)
+        .bind(translation.result_external_data_ids_json)
+        .bind(translation.result_element_ids_json)
+        .bind(translation.response_hash)
+        .bind(translation.failure_reason)
+        .bind(translation.translation_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn raw_payload(
+        &self,
+        raw_payload_hash: &str,
+    ) -> sqlx::Result<Option<RawPayloadRecord>> {
+        sqlx::query(
+            r#"
+            SELECT raw_payload_hash, object_key, content_type, byte_len, headers_json,
+                   original_filename, filename_source, detected_kind, zip_manifest_json,
+                   created_at, updated_at
+            FROM raw_payloads
+            WHERE raw_payload_hash = ?
+            "#,
+        )
+        .bind(raw_payload_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(raw_payload_record_from_row))
+    }
+
+    pub async fn insert_raw_payload_if_absent(
+        &self,
+        payload: RawPayloadInsert<'_>,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO raw_payloads (
+                raw_payload_hash, object_key, content_type, byte_len, headers_json,
+                original_filename, filename_source, detected_kind, zip_manifest_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(raw_payload_hash) DO NOTHING
+            "#,
+        )
+        .bind(payload.raw_payload_hash)
+        .bind(payload.object_key)
+        .bind(payload.content_type)
+        .bind(payload.byte_len)
+        .bind(payload.headers_json)
+        .bind(payload.original_filename)
+        .bind(payload.filename_source)
+        .bind(payload.detected_kind)
+        .bind(payload.zip_manifest_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn link_raw_payload_source(
+        &self,
+        source: RawPayloadSourceInsert<'_>,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO raw_payload_sources (
+                request_hash, translation_id, external_data_id, result_index,
+                response_headers_json, etag, raw_payload_hash
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(source.request_hash)
+        .bind(source.translation_id)
+        .bind(source.external_data_id)
+        .bind(source.result_index)
+        .bind(source.response_headers_json)
+        .bind(source.etag)
+        .bind(source.raw_payload_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn raw_payload_hash_for_source(
+        &self,
+        request_hash: &str,
+        translation_id: Option<&str>,
+        external_data_id: Option<&str>,
+        result_index: Option<i64>,
+    ) -> sqlx::Result<Option<String>> {
+        sqlx::query_scalar(
+            r#"
+            SELECT raw_payload_hash
+            FROM raw_payload_sources
+            WHERE request_hash = ?
+              AND ifnull(translation_id, '') = ifnull(?, '')
+              AND ifnull(external_data_id, '') = ifnull(?, '')
+              AND ifnull(result_index, -1) = ifnull(?, -1)
+            "#,
+        )
+        .bind(request_hash)
+        .bind(translation_id)
+        .bind(external_data_id)
+        .bind(result_index)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    #[cfg(test)]
+    pub async fn postprocess_run(
+        &self,
+        postprocess_hash: &str,
+    ) -> sqlx::Result<Option<PostprocessRunRecord>> {
+        sqlx::query(
+            r#"
+            SELECT postprocess_hash, raw_payload_hash, processor_name, processor_version,
+                   policy_json, status, log_json, derived_files_json, created_at, updated_at
+            FROM postprocess_runs
+            WHERE postprocess_hash = ?
+            "#,
+        )
+        .bind(postprocess_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(postprocess_run_record_from_row))
+    }
+
+    pub async fn insert_postprocess_run_if_absent(
+        &self,
+        run: PostprocessRunInsert<'_>,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO postprocess_runs (
+                postprocess_hash, raw_payload_hash, processor_name, processor_version,
+                policy_json, status, log_json, derived_files_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(postprocess_hash) DO NOTHING
+            "#,
+        )
+        .bind(run.postprocess_hash)
+        .bind(run.raw_payload_hash)
+        .bind(run.processor_name)
+        .bind(run.processor_version)
+        .bind(run.policy_json)
+        .bind(run.status)
+        .bind(run.log_json)
+        .bind(run.derived_files_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn transition_postprocess_run_status(
+        &self,
+        postprocess_hash: &str,
+        status: &str,
+        log_json: &str,
+        derived_files_json: &str,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE postprocess_runs
+            SET status = ?,
+                log_json = ?,
+                derived_files_json = ?,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE postprocess_hash = ?
+            "#,
+        )
+        .bind(status)
+        .bind(log_json)
+        .bind(derived_files_json)
+        .bind(postprocess_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    #[cfg(test)]
+    pub async fn artifact_set(
+        &self,
+        artifact_set_hash: &str,
+    ) -> sqlx::Result<Option<ArtifactSetRecord>> {
+        sqlx::query(
+            r#"
+            SELECT artifact_set_hash, source_hash, config_hash, options_hash, request_hash,
+                   raw_payload_hash, postprocess_hash, output_kind, format, status,
+                   primary_object_key, metadata_json, created_at, updated_at,
+                   superseded_at, superseded_by, supersession_reason
+            FROM artifact_sets
+            WHERE artifact_set_hash = ?
+            "#,
+        )
+        .bind(artifact_set_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map(|row| row.map(artifact_set_record_from_row))
+    }
+
+    #[cfg(test)]
+    pub async fn insert_artifact_set_if_absent(
+        &self,
+        artifact_set: ArtifactSetInsert<'_>,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO artifact_sets (
+                artifact_set_hash, source_hash, config_hash, options_hash, request_hash,
+                raw_payload_hash, postprocess_hash, output_kind, format, status,
+                primary_object_key, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(artifact_set_hash) DO NOTHING
+            "#,
+        )
+        .bind(artifact_set.artifact_set_hash)
+        .bind(artifact_set.source_hash)
+        .bind(artifact_set.config_hash)
+        .bind(artifact_set.options_hash)
+        .bind(artifact_set.request_hash)
+        .bind(artifact_set.raw_payload_hash)
+        .bind(artifact_set.postprocess_hash)
+        .bind(artifact_set.output_kind)
+        .bind(artifact_set.format)
+        .bind(artifact_set.status)
+        .bind(artifact_set.primary_object_key)
+        .bind(artifact_set.metadata_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    #[cfg(test)]
+    pub async fn replace_artifact_files(
+        &self,
+        artifact_set_hash: &str,
+        files: &[ArtifactFileInsert<'_>],
+    ) -> sqlx::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM artifact_files WHERE artifact_set_hash = ?")
+            .bind(artifact_set_hash)
+            .execute(&mut *tx)
+            .await?;
+
+        for file in files {
+            sqlx::query(
+                r#"
+                INSERT INTO artifact_files (
+                    artifact_set_hash, role, logical_path, original_path, object_key,
+                    content_type, byte_len, sha256, metadata_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(file.artifact_set_hash)
+            .bind(file.role)
+            .bind(file.logical_path)
+            .bind(file.original_path)
+            .bind(file.object_key)
+            .bind(file.content_type)
+            .bind(file.byte_len)
+            .bind(file.sha256)
+            .bind(file.metadata_json)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn mark_artifact_set_ready(
+        &self,
+        artifact_set_hash: &str,
+        primary_object_key: &str,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE artifact_sets
+            SET status = 'ready',
+                primary_object_key = ?,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE artifact_set_hash = ?
+            "#,
+        )
+        .bind(primary_object_key)
+        .bind(artifact_set_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn transition_artifact_set_status(
+        &self,
+        artifact_set_hash: &str,
+        status: &str,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE artifact_sets
+            SET status = ?,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE artifact_set_hash = ?
+            "#,
+        )
+        .bind(status)
+        .bind(artifact_set_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn supersede_artifact_set(
+        &self,
+        artifact_set_hash: &str,
+        superseded_by: Option<&str>,
+        supersession_reason: Option<&str>,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
+            r#"
+            UPDATE artifact_sets
+            SET status = 'superseded',
+                superseded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                superseded_by = ?,
+                supersession_reason = ?,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE artifact_set_hash = ? AND status <> 'superseded'
+            "#,
+        )
+        .bind(superseded_by)
+        .bind(supersession_reason)
+        .bind(artifact_set_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn supersede_ready_artifacts_for_output(
+        &self,
+        source_hash: &str,
+        config_hash: &str,
+        options_hash: &str,
+        output_kind: &str,
+        retained_artifact_set_hash: &str,
+        supersession_reason: Option<&str>,
+    ) -> sqlx::Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE artifact_sets
+            SET status = 'superseded',
+                superseded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                superseded_by = ?,
+                supersession_reason = ?,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE source_hash = ?
+              AND config_hash = ?
+              AND options_hash = ?
+              AND output_kind = ?
+              AND status = 'ready'
+              AND artifact_set_hash <> ?
+            "#,
+        )
+        .bind(retained_artifact_set_hash)
+        .bind(supersession_reason)
+        .bind(source_hash)
+        .bind(config_hash)
+        .bind(options_hash)
+        .bind(output_kind)
+        .bind(retained_artifact_set_hash)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 
     pub async fn enqueue_job(
@@ -337,36 +1473,56 @@ impl Database {
     pub async fn artifact(&self, artifact_key: &str) -> sqlx::Result<Option<ArtifactRecord>> {
         sqlx::query(
             r#"
-            SELECT artifact_key, model_slug, config_hash, output_kind, status, object_key,
-                   content_type, byte_len, sha256, producing_job_key, source_hash,
-                   options_hash, parameter_schema_version, config_values_json, created_at,
-                   superseded_at
-            FROM artifacts
-            WHERE artifact_key = ? AND status = 'ready'
+            SELECT artifact_sets.artifact_set_hash AS artifact_key,
+                   artifact_sets.config_hash,
+                   artifact_sets.output_kind,
+                   artifact_sets.status,
+                   artifact_sets.primary_object_key AS object_key,
+                   artifact_sets.source_hash,
+                   artifact_sets.options_hash,
+                   artifact_sets.metadata_json,
+                   artifact_sets.created_at,
+                   artifact_sets.superseded_at,
+                   artifact_files.content_type,
+                   artifact_files.byte_len,
+                   artifact_files.sha256
+            FROM artifact_sets
+            LEFT JOIN artifact_files ON artifact_files.object_key = artifact_sets.primary_object_key
+            WHERE artifact_sets.artifact_set_hash = ? AND artifact_sets.status = 'ready'
             "#,
         )
         .bind(artifact_key)
         .fetch_optional(&self.pool)
         .await
-        .map(|row| row.map(artifact_record_from_row))
+        .map(|row| row.map(artifact_record_from_v2_row))
     }
 
     pub async fn artifacts_for_model(&self, model_slug: &str) -> sqlx::Result<Vec<ArtifactRecord>> {
         sqlx::query(
             r#"
-            SELECT artifact_key, model_slug, config_hash, output_kind, status, object_key,
-                   content_type, byte_len, sha256, producing_job_key, source_hash,
-                   options_hash, parameter_schema_version, config_values_json, created_at,
-                   superseded_at
-            FROM artifacts
-            WHERE model_slug = ? AND status = 'ready'
-            ORDER BY created_at DESC, output_kind
+            SELECT artifact_sets.artifact_set_hash AS artifact_key,
+                   artifact_sets.config_hash,
+                   artifact_sets.output_kind,
+                   artifact_sets.status,
+                   artifact_sets.primary_object_key AS object_key,
+                   artifact_sets.source_hash,
+                   artifact_sets.options_hash,
+                   artifact_sets.metadata_json,
+                   artifact_sets.created_at,
+                   artifact_sets.superseded_at,
+                   artifact_files.content_type,
+                   artifact_files.byte_len,
+                   artifact_files.sha256
+            FROM artifact_sets
+            LEFT JOIN artifact_files ON artifact_files.object_key = artifact_sets.primary_object_key
+            WHERE json_extract(artifact_sets.metadata_json, '$.modelSlug') = ? AND artifact_sets.status = 'ready'
+            ORDER BY artifact_sets.created_at DESC, artifact_sets.output_kind
             "#,
         )
         .bind(model_slug)
         .fetch_all(&self.pool)
         .await
-        .map(|rows| rows.into_iter().map(artifact_record_from_row).collect())
+        .map(|rows| rows.into_iter().map(artifact_record_from_v2_row).collect())
     }
 
     pub async fn artifacts_older_than_days(
@@ -376,116 +1532,206 @@ impl Database {
     ) -> sqlx::Result<Vec<ArtifactRecord>> {
         sqlx::query(
             r#"
-            SELECT artifact_key, model_slug, config_hash, output_kind, status, object_key,
-                   content_type, byte_len, sha256, producing_job_key, source_hash,
-                   options_hash, parameter_schema_version, config_values_json, created_at,
-                   superseded_at
-            FROM artifacts
-            WHERE model_slug = ?
-              AND status = 'ready'
-              AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || ? || ' days')
-            ORDER BY created_at, output_kind
+            SELECT artifact_sets.artifact_set_hash AS artifact_key,
+                   artifact_sets.config_hash,
+                   artifact_sets.output_kind,
+                   artifact_sets.status,
+                   artifact_sets.primary_object_key AS object_key,
+                   artifact_sets.source_hash,
+                   artifact_sets.options_hash,
+                   artifact_sets.metadata_json,
+                   artifact_sets.created_at,
+                   artifact_sets.superseded_at,
+                   artifact_files.content_type,
+                   artifact_files.byte_len,
+                   artifact_files.sha256
+            FROM artifact_sets
+            LEFT JOIN artifact_files ON artifact_files.object_key = artifact_sets.primary_object_key
+            WHERE json_extract(artifact_sets.metadata_json, '$.modelSlug') = ?
+              AND artifact_sets.status = 'ready'
+              AND artifact_sets.created_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-' || ? || ' days')
+            ORDER BY artifact_sets.created_at, artifact_sets.output_kind
             "#,
         )
         .bind(model_slug)
         .bind(days)
         .fetch_all(&self.pool)
         .await
-        .map(|rows| rows.into_iter().map(artifact_record_from_row).collect())
+        .map(|rows| rows.into_iter().map(artifact_record_from_v2_row).collect())
     }
 
-    pub async fn artifacts_for_configuration(
+    #[cfg(test)]
+    pub async fn latest_ready_artifact_for_output(
         &self,
-        model_slug: &str,
+        source_hash: &str,
         config_hash: &str,
-    ) -> sqlx::Result<Vec<ArtifactRecord>> {
+        options_hash: &str,
+        output_kind: &str,
+    ) -> sqlx::Result<Option<ArtifactRecord>> {
         sqlx::query(
             r#"
-            SELECT artifact_key, model_slug, config_hash, output_kind, status, object_key,
-                   content_type, byte_len, sha256, producing_job_key, source_hash,
-                   options_hash, parameter_schema_version, config_values_json, created_at,
-                   superseded_at
-            FROM artifacts
-            WHERE model_slug = ? AND config_hash = ? AND status = 'ready'
-            ORDER BY output_kind
+            SELECT artifact_sets.artifact_set_hash AS artifact_key,
+                   artifact_sets.config_hash,
+                   artifact_sets.output_kind,
+                   artifact_sets.status,
+                   artifact_sets.primary_object_key AS object_key,
+                   artifact_sets.source_hash,
+                   artifact_sets.options_hash,
+                   artifact_sets.metadata_json,
+                   artifact_sets.created_at,
+                   artifact_sets.superseded_at,
+                   artifact_files.content_type,
+                   artifact_files.byte_len,
+                   artifact_files.sha256
+            FROM artifact_sets
+            LEFT JOIN artifact_files ON artifact_files.object_key = artifact_sets.primary_object_key
+            WHERE artifact_sets.source_hash = ?
+              AND artifact_sets.config_hash = ?
+              AND artifact_sets.options_hash = ?
+              AND artifact_sets.output_kind = ?
+              AND artifact_sets.status = 'ready'
+            ORDER BY artifact_sets.created_at DESC
+            LIMIT 1
             "#,
         )
-        .bind(model_slug)
+        .bind(source_hash)
         .bind(config_hash)
-        .fetch_all(&self.pool)
+        .bind(options_hash)
+        .bind(output_kind)
+        .fetch_optional(&self.pool)
         .await
-        .map(|rows| rows.into_iter().map(artifact_record_from_row).collect())
+        .map(|row| row.map(artifact_record_from_v2_row))
     }
 
     pub async fn supersede_artifact(&self, artifact_key: &str) -> sqlx::Result<bool> {
-        let result = sqlx::query(
-            r#"
-            UPDATE artifacts
-            SET status = 'superseded',
-                superseded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-            WHERE artifact_key = ? AND status = 'ready'
-            "#,
-        )
-        .bind(artifact_key)
-        .execute(&self.pool)
-        .await?;
-        Ok(result.rows_affected() == 1)
+        self.supersede_artifact_set(artifact_key, None, None).await
     }
 
-    pub async fn upsert_artifact(&self, artifact: ArtifactUpsert<'_>) -> sqlx::Result<()> {
+    pub async fn stage_artifact(
+        &self,
+        artifact: ArtifactUpsert<'_>,
+        files: &[ArtifactFileInsert<'_>],
+    ) -> sqlx::Result<()> {
+        let metadata_json = serde_json::to_string(&ArtifactMetadata {
+            model_slug: artifact.model_slug.to_owned(),
+            producing_job_key: artifact.producing_job_key.map(ToOwned::to_owned),
+            parameter_schema_version: Some(artifact.parameter_schema_version),
+            config_values_json: Some(artifact.config_values_json.to_owned()),
+        })
+        .expect("artifact metadata serializes");
+
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             r#"
-            INSERT INTO artifacts (
-                artifact_key,
-                model_slug,
-                config_hash,
-                output_kind,
-                status,
-                object_key,
-                content_type,
-                byte_len,
-                sha256,
-                producing_job_key,
-                source_hash,
-                options_hash,
-                parameter_schema_version,
-                config_values_json
+            INSERT INTO artifact_sets (
+                artifact_set_hash, source_hash, config_hash, options_hash, request_hash,
+                raw_payload_hash, postprocess_hash, output_kind, format, status,
+                primary_object_key, metadata_json
             )
-            VALUES (?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(artifact_key) DO UPDATE SET
-                model_slug = excluded.model_slug,
-                config_hash = excluded.config_hash,
-                output_kind = excluded.output_kind,
-                status = 'ready',
-                object_key = excluded.object_key,
-                content_type = excluded.content_type,
-                byte_len = excluded.byte_len,
-                sha256 = excluded.sha256,
-                producing_job_key = excluded.producing_job_key,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'staged', ?, ?)
+            ON CONFLICT(artifact_set_hash) DO UPDATE SET
                 source_hash = excluded.source_hash,
+                config_hash = excluded.config_hash,
                 options_hash = excluded.options_hash,
-                parameter_schema_version = excluded.parameter_schema_version,
-                config_values_json = excluded.config_values_json,
+                request_hash = excluded.request_hash,
+                raw_payload_hash = excluded.raw_payload_hash,
+                postprocess_hash = excluded.postprocess_hash,
+                output_kind = excluded.output_kind,
+                format = excluded.format,
+                status = 'staged',
+                primary_object_key = excluded.primary_object_key,
+                metadata_json = excluded.metadata_json,
                 created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-                superseded_at = NULL
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                superseded_at = NULL,
+                superseded_by = NULL,
+                supersession_reason = NULL
             "#,
         )
         .bind(artifact.artifact_key)
-        .bind(artifact.model_slug)
-        .bind(artifact.config_hash)
-        .bind(artifact.output_kind)
-        .bind(artifact.object_key)
-        .bind(artifact.content_type)
-        .bind(artifact.byte_len)
-        .bind(artifact.sha256)
-        .bind(artifact.producing_job_key)
         .bind(artifact.source_hash)
+        .bind(artifact.config_hash)
         .bind(artifact.options_hash)
-        .bind(artifact.parameter_schema_version)
-        .bind(artifact.config_values_json)
-        .execute(&self.pool)
+        .bind(artifact.request_hash)
+        .bind(artifact.raw_payload_hash)
+        .bind(artifact.postprocess_hash)
+        .bind(artifact.output_kind)
+        .bind(artifact.format)
+        .bind(artifact.object_key)
+        .bind(&metadata_json)
+        .execute(&mut *tx)
         .await?;
+
+        sqlx::query("DELETE FROM artifact_files WHERE artifact_set_hash = ?")
+            .bind(artifact.artifact_key)
+            .execute(&mut *tx)
+            .await?;
+
+        for file in files {
+            sqlx::query(
+                r#"
+                INSERT INTO artifact_files (
+                    artifact_set_hash, role, logical_path, original_path, object_key,
+                    content_type, byte_len, sha256, metadata_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(file.artifact_set_hash)
+            .bind(file.role)
+            .bind(file.logical_path)
+            .bind(file.original_path)
+            .bind(file.object_key)
+            .bind(file.content_type)
+            .bind(file.byte_len)
+            .bind(file.sha256)
+            .bind(file.metadata_json)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub async fn publish_artifact(
+        &self,
+        artifact: ArtifactUpsert<'_>,
+        files: &[ArtifactFileInsert<'_>],
+    ) -> sqlx::Result<()> {
+        self.stage_artifact(artifact, files).await?;
+        self.mark_artifact_set_ready(artifact.artifact_key, artifact.object_key)
+            .await?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub async fn upsert_artifact(&self, artifact: ArtifactUpsert<'_>) -> sqlx::Result<()> {
+        let logical_path = artifact
+            .object_key
+            .rsplit('/')
+            .next()
+            .unwrap_or(artifact.object_key);
+        self.publish_artifact(
+            artifact,
+            &[ArtifactFileInsert {
+                artifact_set_hash: artifact.artifact_key,
+                role: if artifact.output_kind == "preview_glb" {
+                    "viewer_entry"
+                } else {
+                    "download"
+                },
+                logical_path,
+                original_path: Some(logical_path),
+                object_key: artifact.object_key,
+                content_type: artifact.content_type,
+                byte_len: artifact.byte_len,
+                sha256: artifact.sha256,
+                metadata_json: "{}",
+            }],
+        )
+        .await
     }
 
     pub async fn failed_jobs(&self, limit: i64) -> sqlx::Result<Vec<JobRecord>> {
@@ -554,11 +1800,12 @@ impl Database {
     pub async fn artifact_metrics(&self) -> sqlx::Result<Vec<ArtifactMetric>> {
         sqlx::query(
             r#"
-            SELECT output_kind, COUNT(*) AS count, COALESCE(SUM(byte_len), 0) AS byte_len
-            FROM artifacts
-            WHERE status = 'ready'
-            GROUP BY output_kind
-            ORDER BY output_kind
+            SELECT artifact_sets.output_kind, COUNT(*) AS count, COALESCE(SUM(artifact_files.byte_len), 0) AS byte_len
+            FROM artifact_sets
+            LEFT JOIN artifact_files ON artifact_files.object_key = artifact_sets.primary_object_key
+            WHERE artifact_sets.status = 'ready'
+            GROUP BY artifact_sets.output_kind
+            ORDER BY artifact_sets.output_kind
             "#,
         )
         .fetch_all(&self.pool)
@@ -631,10 +1878,16 @@ impl Database {
     }
 }
 
-fn artifact_record_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactRecord {
+fn artifact_record_from_v2_row(row: sqlx::sqlite::SqliteRow) -> ArtifactRecord {
+    let metadata = row
+        .try_get::<String, _>("metadata_json")
+        .ok()
+        .and_then(|value| serde_json::from_str::<ArtifactMetadata>(&value).ok())
+        .unwrap_or_default();
+
     ArtifactRecord {
         artifact_key: row.get("artifact_key"),
-        model_slug: row.get("model_slug"),
+        model_slug: metadata.model_slug,
         config_hash: row.get("config_hash"),
         output_kind: row.get("output_kind"),
         status: row.get("status"),
@@ -642,13 +1895,150 @@ fn artifact_record_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactRecord {
         content_type: row.get("content_type"),
         byte_len: row.get("byte_len"),
         sha256: row.get("sha256"),
-        producing_job_key: row.get("producing_job_key"),
+        producing_job_key: metadata.producing_job_key,
         source_hash: row.get("source_hash"),
         options_hash: row.get("options_hash"),
-        parameter_schema_version: row.get("parameter_schema_version"),
-        config_values_json: row.get("config_values_json"),
+        parameter_schema_version: metadata.parameter_schema_version,
+        config_values_json: metadata.config_values_json,
         created_at: row.get("created_at"),
         superseded_at: row.get("superseded_at"),
+    }
+}
+
+fn source_resolution_record_from_row(row: sqlx::sqlite::SqliteRow) -> SourceResolutionRecord {
+    SourceResolutionRecord {
+        source_hash: row.get("source_hash"),
+        model_slug: row.get("model_slug"),
+        document_id: row.get("document_id"),
+        version_id: row.get("version_id"),
+        microversion_id: row.get("microversion_id"),
+        element_id: row.get("element_id"),
+        element_kind: row.get("element_kind"),
+        link_document_id: row.get("link_document_id"),
+        diagnostics_json: row.get("diagnostics_json"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+#[cfg(test)]
+fn configuration_selection_record_from_row(
+    row: sqlx::sqlite::SqliteRow,
+) -> ConfigurationSelectionRecord {
+    ConfigurationSelectionRecord {
+        source_hash: row.get("source_hash"),
+        config_hash: row.get("config_hash"),
+        values_json: row.get("values_json"),
+        validation_json: row.get("validation_json"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+fn configuration_encoding_record_from_row(
+    row: sqlx::sqlite::SqliteRow,
+) -> ConfigurationEncodingRecord {
+    ConfigurationEncodingRecord {
+        source_hash: row.get("source_hash"),
+        config_hash: row.get("config_hash"),
+        encoded_id: row.get("encoded_id"),
+        query_param: row.get("query_param"),
+        request_json: row.get("request_json"),
+        response_json: row.get("response_json"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+#[cfg(test)]
+fn export_request_record_from_row(row: sqlx::sqlite::SqliteRow) -> ExportRequestRecord {
+    ExportRequestRecord {
+        request_hash: row.get("request_hash"),
+        source_hash: row.get("source_hash"),
+        config_hash: row.get("config_hash"),
+        options_hash: row.get("options_hash"),
+        output_kind: row.get("output_kind"),
+        format: row.get("format"),
+        endpoint: row.get("endpoint"),
+        method: row.get("method"),
+        path: row.get("path"),
+        request_json: row.get("request_json"),
+        defaults_policy_version: row.get("defaults_policy_version"),
+        request_builder_version: row.get("request_builder_version"),
+        status: row.get("status"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+fn translation_record_from_row(row: sqlx::sqlite::SqliteRow) -> TranslationRecord {
+    TranslationRecord {
+        translation_id: row.get("translation_id"),
+        request_hash: row.get("request_hash"),
+        state: row.get("state"),
+        start_response_json: row.get("start_response_json"),
+        final_response_json: row.get("final_response_json"),
+        poll_state_json: row.get("poll_state_json"),
+        result_external_data_ids_json: row.get("result_external_data_ids_json"),
+        result_element_ids_json: row.get("result_element_ids_json"),
+        response_hash: row.get("response_hash"),
+        failure_reason: row.get("failure_reason"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+fn raw_payload_record_from_row(row: sqlx::sqlite::SqliteRow) -> RawPayloadRecord {
+    RawPayloadRecord {
+        raw_payload_hash: row.get("raw_payload_hash"),
+        object_key: row.get("object_key"),
+        content_type: row.get("content_type"),
+        byte_len: row.get("byte_len"),
+        headers_json: row.get("headers_json"),
+        original_filename: row.get("original_filename"),
+        filename_source: row.get("filename_source"),
+        detected_kind: row.get("detected_kind"),
+        zip_manifest_json: row.get("zip_manifest_json"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+#[cfg(test)]
+fn postprocess_run_record_from_row(row: sqlx::sqlite::SqliteRow) -> PostprocessRunRecord {
+    PostprocessRunRecord {
+        postprocess_hash: row.get("postprocess_hash"),
+        raw_payload_hash: row.get("raw_payload_hash"),
+        processor_name: row.get("processor_name"),
+        processor_version: row.get("processor_version"),
+        policy_json: row.get("policy_json"),
+        status: row.get("status"),
+        log_json: row.get("log_json"),
+        derived_files_json: row.get("derived_files_json"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+fn artifact_set_record_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactSetRecord {
+    ArtifactSetRecord {
+        artifact_set_hash: row.get("artifact_set_hash"),
+        source_hash: row.get("source_hash"),
+        config_hash: row.get("config_hash"),
+        options_hash: row.get("options_hash"),
+        request_hash: row.get("request_hash"),
+        raw_payload_hash: row.get("raw_payload_hash"),
+        postprocess_hash: row.get("postprocess_hash"),
+        output_kind: row.get("output_kind"),
+        format: row.get("format"),
+        status: row.get("status"),
+        primary_object_key: row.get("primary_object_key"),
+        metadata_json: row.get("metadata_json"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+        superseded_at: row.get("superseded_at"),
+        superseded_by: row.get("superseded_by"),
+        supersession_reason: row.get("supersession_reason"),
     }
 }
 
@@ -801,7 +2191,7 @@ mod tests {
         .await
         .unwrap();
         sqlx::query(
-            "UPDATE artifacts SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 days') WHERE artifact_key = 'old'",
+            "UPDATE artifact_sets SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 days') WHERE artifact_set_hash = 'old'",
         )
         .execute(&db.pool)
         .await
@@ -811,6 +2201,136 @@ mod tests {
 
         assert_eq!(artifacts.len(), 1);
         assert_eq!(artifacts[0].artifact_key, "old");
+    }
+
+    #[tokio::test]
+    async fn latest_ready_artifact_for_output_uses_logical_output_identity() {
+        let db = test_database().await;
+        db.upsert_artifact(test_artifact_upsert(
+            "first-set",
+            "abc",
+            "step",
+            "artifacts/v2/first-set/demo-step.step",
+            "model/step",
+            10,
+        ))
+        .await
+        .unwrap();
+        db.upsert_artifact(test_artifact_upsert(
+            "second-set",
+            "abc",
+            "step",
+            "artifacts/v2/second-set/demo-step.step",
+            "model/step",
+            12,
+        ))
+        .await
+        .unwrap();
+
+        let artifact = db
+            .latest_ready_artifact_for_output("sourcehash", "abc", "optionshash", "step")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(artifact.artifact_key, "second-set");
+        assert_eq!(
+            artifact.object_key,
+            "artifacts/v2/second-set/demo-step.step"
+        );
+    }
+
+    #[tokio::test]
+    async fn latest_ready_artifact_for_request_uses_exact_request_hash() {
+        let db = test_database().await;
+        db.upsert_artifact(ArtifactUpsert {
+            artifact_key: "first-set",
+            model_slug: "demo",
+            config_hash: "abc",
+            output_kind: "step",
+            format: "step",
+            object_key: "artifacts/v2/first-set/demo-step.step",
+            content_type: "model/step",
+            byte_len: 10,
+            sha256: "sha-first",
+            producing_job_key: Some("work-v2:export:older-request"),
+            source_hash: "sourcehash",
+            options_hash: "optionshash",
+            request_hash: Some("older-request"),
+            raw_payload_hash: Some("raw-first"),
+            postprocess_hash: Some("post-first"),
+            parameter_schema_version: 2,
+            config_values_json: "{}",
+        })
+        .await
+        .unwrap();
+        db.upsert_artifact(ArtifactUpsert {
+            artifact_key: "second-set",
+            model_slug: "demo",
+            config_hash: "abc",
+            output_kind: "step",
+            format: "step",
+            object_key: "artifacts/v2/second-set/demo-step.step",
+            content_type: "model/step",
+            byte_len: 12,
+            sha256: "sha-second",
+            producing_job_key: Some("work-v2:export:newer-request"),
+            source_hash: "sourcehash",
+            options_hash: "optionshash",
+            request_hash: Some("newer-request"),
+            raw_payload_hash: Some("raw-second"),
+            postprocess_hash: Some("post-second"),
+            parameter_schema_version: 2,
+            config_values_json: "{}",
+        })
+        .await
+        .unwrap();
+
+        let artifact = db
+            .latest_ready_artifact_for_request("older-request")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(artifact.artifact_key, "first-set");
+        assert_eq!(artifact.object_key, "artifacts/v2/first-set/demo-step.step");
+    }
+
+    #[tokio::test]
+    async fn supersede_ready_artifacts_for_output_retires_all_other_ready_sets() {
+        let db = test_database().await;
+        for artifact_key in ["first-set", "second-set", "kept-set"] {
+            db.upsert_artifact(test_artifact_upsert(
+                artifact_key,
+                "abc",
+                "step",
+                &format!("artifacts/v2/{artifact_key}/demo-step.step"),
+                "model/step",
+                10,
+            ))
+            .await
+            .unwrap();
+        }
+
+        let superseded = db
+            .supersede_ready_artifacts_for_output(
+                "sourcehash",
+                "abc",
+                "optionshash",
+                "step",
+                "kept-set",
+                Some("replaced"),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(superseded, 2);
+        assert_eq!(
+            db.artifact("kept-set").await.unwrap().unwrap().status,
+            "ready"
+        );
+        assert!(db.artifact("first-set").await.unwrap().is_none());
+        assert!(db.artifact("second-set").await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -831,12 +2351,48 @@ mod tests {
         assert!(db.supersede_artifact("artifact").await.unwrap());
 
         assert!(db.artifact("artifact").await.unwrap().is_none());
-        let retained_status: String =
-            sqlx::query_scalar("SELECT status FROM artifacts WHERE artifact_key = 'artifact'")
-                .fetch_one(&db.pool)
-                .await
-                .unwrap();
+        let retained_status: String = sqlx::query_scalar(
+            "SELECT status FROM artifact_sets WHERE artifact_set_hash = 'artifact'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
         assert_eq!(retained_status, "superseded");
+    }
+
+    #[tokio::test]
+    async fn superseded_artifacts_can_be_republished_cleanly() {
+        let db = test_database().await;
+        db.upsert_artifact(test_artifact_upsert(
+            "artifact",
+            "abc",
+            "preview_glb",
+            "previews/demo/first.glb",
+            "model/gltf-binary",
+            10,
+        ))
+        .await
+        .unwrap();
+        db.supersede_artifact("artifact").await.unwrap();
+
+        db.upsert_artifact(test_artifact_upsert(
+            "artifact",
+            "abc",
+            "preview_glb",
+            "previews/demo/second.glb",
+            "model/gltf-binary",
+            11,
+        ))
+        .await
+        .unwrap();
+
+        let artifact = db.artifact("artifact").await.unwrap().unwrap();
+        assert_eq!(artifact.object_key, "previews/demo/second.glb");
+        let record = db.artifact_set("artifact").await.unwrap().unwrap();
+        assert_eq!(record.status, "ready");
+        assert_eq!(record.superseded_at, None);
+        assert_eq!(record.superseded_by, None);
+        assert_eq!(record.supersession_reason, None);
     }
 
     #[tokio::test]
@@ -1022,6 +2578,491 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_resolutions_round_trip_by_version_identity() {
+        let db = test_database().await;
+        db.upsert_source_resolution(SourceResolutionUpsert {
+            source_hash: "sourcehash",
+            model_slug: "demo",
+            document_id: "did",
+            version_id: "vid",
+            microversion_id: "mid",
+            element_id: "eid",
+            element_kind: "part_studio",
+            link_document_id: None,
+            diagnostics_json: r#"{"microversionId":"mid"}"#,
+        })
+        .await
+        .unwrap();
+
+        let by_hash = db.source_resolution("sourcehash").await.unwrap().unwrap();
+        assert_eq!(by_hash.microversion_id, "mid");
+
+        let by_version = db
+            .source_resolution_for_version("did", "vid", "eid", "part_studio", None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_version.source_hash, "sourcehash");
+
+        db.upsert_source_resolution(SourceResolutionUpsert {
+            source_hash: "sourcehash",
+            model_slug: "demo",
+            document_id: "did",
+            version_id: "vid-alias",
+            microversion_id: "mid",
+            element_id: "eid",
+            element_kind: "part_studio",
+            link_document_id: None,
+            diagnostics_json: r#"{"microversionId":"mid"}"#,
+        })
+        .await
+        .unwrap();
+
+        let first_alias = db
+            .source_resolution_for_version("did", "vid", "eid", "part_studio", None)
+            .await
+            .unwrap()
+            .unwrap();
+        let second_alias = db
+            .source_resolution_for_version("did", "vid-alias", "eid", "part_studio", None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first_alias.source_hash, "sourcehash");
+        assert_eq!(second_alias.source_hash, "sourcehash");
+    }
+
+    #[tokio::test]
+    async fn parameter_metadata_is_keyed_by_source_hash() {
+        let db = test_database().await;
+        db.upsert_parameter_metadata(
+            "sourcehash",
+            "onshape/source/v2/sourcehash/configuration.raw.json",
+            "onshape/source/v2/sourcehash/parameters.normalized/schemahash.json",
+            "schemahash",
+            2,
+        )
+        .await
+        .unwrap();
+
+        let record = db.parameter_metadata("sourcehash").await.unwrap().unwrap();
+        assert_eq!(record.schema_hash, "schemahash");
+        assert_eq!(record.schema_version, 2);
+    }
+
+    #[tokio::test]
+    async fn configuration_selections_round_trip_typed_values() {
+        let db = test_database().await;
+        db.upsert_configuration_selection(ConfigurationSelectionUpsert {
+            source_hash: "sourcehash",
+            config_hash: "confighash",
+            values_json: r#"{"enabled":{"kind":"boolean","value":true}}"#,
+            validation_json: r#"{"parameterSchemaVersion":3,"requestValues":{"enabled":"true"}}"#,
+        })
+        .await
+        .unwrap();
+
+        let record = db
+            .configuration_selection("sourcehash", "confighash")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(record.values_json.contains(r#""kind":"boolean""#));
+        assert!(record.validation_json.contains("parameterSchemaVersion"));
+    }
+
+    #[tokio::test]
+    async fn configuration_encodings_round_trip_by_source_and_config_hash() {
+        let db = test_database().await;
+        db.upsert_configuration_encoding(ConfigurationEncodingUpsert {
+            source_hash: "sourcehash",
+            config_hash: "confighash",
+            encoded_id: "encoded-1",
+            query_param: "configuration=encoded-1",
+            request_json: r#"{"parameters":[{"parameterId":"enabled","parameterValue":"true"}]}"#,
+            response_json: r#"{"encodedId":"encoded-1","queryParam":"configuration=encoded-1"}"#,
+        })
+        .await
+        .unwrap();
+
+        let record = db
+            .configuration_encoding("sourcehash", "confighash")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.encoded_id, "encoded-1");
+        assert_eq!(record.query_param, "configuration=encoded-1");
+
+        db.upsert_configuration_encoding(ConfigurationEncodingUpsert {
+            source_hash: "sourcehash",
+            config_hash: "confighash",
+            encoded_id: "encoded-2",
+            query_param: "configuration=encoded-2",
+            request_json: r#"{"parameters":[{"parameterId":"enabled","parameterValue":"false"}]}"#,
+            response_json: r#"{"encodedId":"encoded-2","queryParam":"configuration=encoded-2"}"#,
+        })
+        .await
+        .unwrap();
+
+        let updated = db
+            .configuration_encoding("sourcehash", "confighash")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.encoded_id, "encoded-2");
+        assert!(updated.request_json.contains("false"));
+    }
+
+    #[tokio::test]
+    async fn export_requests_dedupe_by_request_hash() {
+        let db = test_database().await;
+        let inserted = db
+            .insert_export_request_if_absent(ExportRequestInsert {
+                request_hash: "requesthash",
+                source_hash: "sourcehash",
+                config_hash: "confighash",
+                options_hash: "optionshash",
+                output_kind: "preview",
+                format: "glb",
+                endpoint: "createPartStudioExportGltf",
+                method: "POST",
+                path: "/api/partstudios/d/did/v/vid/e/eid/export/gltf",
+                request_json: "{}",
+                defaults_policy_version: "v1",
+                request_builder_version: "v1",
+                status: "queued",
+            })
+            .await
+            .unwrap();
+        assert!(inserted);
+        assert!(
+            !db.insert_export_request_if_absent(ExportRequestInsert {
+                request_hash: "requesthash",
+                source_hash: "sourcehash",
+                config_hash: "confighash",
+                options_hash: "different-optionshash",
+                output_kind: "preview",
+                format: "glb",
+                endpoint: "createPartStudioExportGltf",
+                method: "POST",
+                path: "/api/partstudios/d/did/v/vid/e/eid/export/gltf",
+                request_json: r#"{"different":true}"#,
+                defaults_policy_version: "v2",
+                request_builder_version: "v2",
+                status: "ready",
+            })
+            .await
+            .unwrap()
+        );
+
+        let record = db.export_request("requesthash").await.unwrap().unwrap();
+        assert_eq!(record.options_hash, "optionshash");
+        assert_eq!(record.request_json, "{}");
+        assert_eq!(record.defaults_policy_version, "v1");
+        assert_eq!(record.request_builder_version, "v1");
+        assert_eq!(record.status, "queued");
+    }
+
+    #[tokio::test]
+    async fn latest_export_request_for_output_prefers_newest_request() {
+        let db = test_database().await;
+
+        db.insert_export_request_if_absent(ExportRequestInsert {
+            request_hash: "older-requesthash",
+            source_hash: "sourcehash",
+            config_hash: "confighash",
+            options_hash: "optionshash",
+            output_kind: "preview",
+            format: "glb",
+            endpoint: "createPartStudioExportGltf",
+            method: "POST",
+            path: "/api/partstudios/d/did/v/vid/e/eid/export/gltf",
+            request_json: "{}",
+            defaults_policy_version: "v1",
+            request_builder_version: "v1",
+            status: "staged",
+        })
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE export_requests SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day') WHERE request_hash = 'older-requesthash'",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        db.insert_export_request_if_absent(ExportRequestInsert {
+            request_hash: "newer-requesthash",
+            source_hash: "sourcehash",
+            config_hash: "confighash",
+            options_hash: "optionshash-2",
+            output_kind: "preview",
+            format: "glb",
+            endpoint: "createPartStudioExportGltf",
+            method: "POST",
+            path: "/api/partstudios/d/did/v/vid/e/eid/export/gltf",
+            request_json: "{}",
+            defaults_policy_version: "v2",
+            request_builder_version: "v2",
+            status: "staged",
+        })
+        .await
+        .unwrap();
+
+        let record = db
+            .latest_export_request_for_output(
+                "sourcehash",
+                "confighash",
+                "optionshash-2",
+                "preview",
+                "glb",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(record.request_hash, "newer-requesthash");
+        assert_eq!(record.request_builder_version, "v2");
+    }
+
+    #[tokio::test]
+    async fn latest_export_request_for_output_filters_by_options_hash() {
+        let db = test_database().await;
+
+        for (request_hash, options_hash) in [
+            ("preview-old", "optionshash-1"),
+            ("preview-new", "optionshash-2"),
+        ] {
+            db.insert_export_request_if_absent(ExportRequestInsert {
+                request_hash,
+                source_hash: "sourcehash",
+                config_hash: "confighash",
+                options_hash,
+                output_kind: "preview",
+                format: "glb",
+                endpoint: "createPartStudioExportGltf",
+                method: "POST",
+                path: "/api/partstudios/d/did/v/vid/e/eid/export/gltf",
+                request_json: "{}",
+                defaults_policy_version: "v1",
+                request_builder_version: "v1",
+                status: "staged",
+            })
+            .await
+            .unwrap();
+        }
+
+        let record = db
+            .latest_export_request_for_output(
+                "sourcehash",
+                "confighash",
+                "optionshash-2",
+                "preview",
+                "glb",
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(record.request_hash, "preview-new");
+    }
+
+    #[tokio::test]
+    async fn raw_payload_insert_dedupes_by_hash() {
+        let db = test_database().await;
+
+        assert!(
+            db.insert_raw_payload_if_absent(RawPayloadInsert {
+                raw_payload_hash: "rawhash",
+                object_key: "onshape/raw/v2/ra/rawhash/payload.bin",
+                content_type: Some("application/octet-stream"),
+                byte_len: 4,
+                headers_json: "{}",
+                original_filename: None,
+                filename_source: None,
+                detected_kind: "binary",
+                zip_manifest_json: None,
+            })
+            .await
+            .unwrap()
+        );
+
+        assert!(
+            !db.insert_raw_payload_if_absent(RawPayloadInsert {
+                raw_payload_hash: "rawhash",
+                object_key: "onshape/raw/v2/ra/rawhash/payload.bin",
+                content_type: Some("application/octet-stream"),
+                byte_len: 4,
+                headers_json: "{}",
+                original_filename: None,
+                filename_source: None,
+                detected_kind: "binary",
+                zip_manifest_json: None,
+            })
+            .await
+            .unwrap()
+        );
+
+        assert_eq!(
+            db.raw_payload("rawhash")
+                .await
+                .unwrap()
+                .unwrap()
+                .raw_payload_hash,
+            "rawhash"
+        );
+    }
+
+    #[tokio::test]
+    async fn translation_raw_payload_and_artifact_set_round_trip() {
+        let db = test_database().await;
+
+        db.insert_translation_start(TranslationStartInsert {
+            translation_id: "tid",
+            request_hash: "requesthash",
+            state: "ACTIVE",
+            start_response_json: r#"{"id":"tid"}"#,
+        })
+        .await
+        .unwrap();
+        assert!(
+            db.update_translation_final(TranslationFinalUpdate {
+                translation_id: "tid",
+                state: "DONE",
+                final_response_json: r#"{"requestState":"DONE"}"#,
+                poll_state_json: r#"{"requestState":"DONE"}"#,
+                result_external_data_ids_json: r#"["fid"]"#,
+                result_element_ids_json: "[]",
+                response_hash: Some("responsehash"),
+                failure_reason: None,
+            })
+            .await
+            .unwrap()
+        );
+        assert_eq!(db.translation("tid").await.unwrap().unwrap().state, "DONE");
+
+        assert!(
+            db.insert_raw_payload_if_absent(RawPayloadInsert {
+                raw_payload_hash: "rawhash",
+                object_key: "onshape/raw/v2/ra/rawhash/payload.bin",
+                content_type: Some("application/zip"),
+                byte_len: 42,
+                headers_json: "{}",
+                original_filename: Some("payload.zip"),
+                filename_source: Some("content-disposition"),
+                detected_kind: "zip",
+                zip_manifest_json: Some("[]"),
+            })
+            .await
+            .unwrap()
+        );
+        assert!(
+            db.link_raw_payload_source(RawPayloadSourceInsert {
+                request_hash: "requesthash",
+                translation_id: Some("tid"),
+                external_data_id: Some("fid"),
+                result_index: Some(0),
+                response_headers_json: "{}",
+                etag: Some("etag"),
+                raw_payload_hash: "rawhash",
+            })
+            .await
+            .unwrap()
+        );
+        assert_eq!(
+            db.raw_payload_hash_for_source("requesthash", Some("tid"), Some("fid"), Some(0))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("rawhash")
+        );
+
+        assert!(
+            db.insert_postprocess_run_if_absent(PostprocessRunInsert {
+                postprocess_hash: "posthash",
+                raw_payload_hash: "rawhash",
+                processor_name: "preview_extract",
+                processor_version: "1",
+                policy_json: r#"{"acceptedInputShapes":["direct_glb"]}"#,
+                status: "staged",
+                log_json: "[]",
+                derived_files_json: "[]",
+            })
+            .await
+            .unwrap()
+        );
+        assert!(
+            db.transition_postprocess_run_status(
+                "posthash",
+                "ready",
+                r#"[{"level":"info","message":"done"}]"#,
+                r#"[{"role":"viewer_entry","logicalPath":"preview.glb"}]"#,
+            )
+            .await
+            .unwrap()
+        );
+        let postprocess = db.postprocess_run("posthash").await.unwrap().unwrap();
+        assert_eq!(postprocess.status, "ready");
+        assert!(postprocess.derived_files_json.contains("preview.glb"));
+
+        assert!(
+            db.insert_artifact_set_if_absent(ArtifactSetInsert {
+                artifact_set_hash: "artifactsethash",
+                source_hash: "sourcehash",
+                config_hash: "confighash",
+                options_hash: "optionshash",
+                request_hash: Some("requesthash"),
+                raw_payload_hash: Some("rawhash"),
+                postprocess_hash: Some("posthash"),
+                output_kind: "preview",
+                format: "gltf_asset_set",
+                status: "staged",
+                primary_object_key: None,
+                metadata_json: "{}",
+            })
+            .await
+            .unwrap()
+        );
+        db.replace_artifact_files(
+            "artifactsethash",
+            &[ArtifactFileInsert {
+                artifact_set_hash: "artifactsethash",
+                role: "viewer_entry",
+                logical_path: "scene/model.gltf",
+                original_path: Some("scene/model.gltf"),
+                object_key: "previews/v2/artifactsethash/scene/model.gltf",
+                content_type: "model/gltf+json",
+                byte_len: 12,
+                sha256: "filehash",
+                metadata_json: "{}",
+            }],
+        )
+        .await
+        .unwrap();
+        assert!(
+            db.mark_artifact_set_ready(
+                "artifactsethash",
+                "previews/v2/artifactsethash/scene/model.gltf"
+            )
+            .await
+            .unwrap()
+        );
+        assert!(
+            db.supersede_artifact_set("artifactsethash", Some("newset"), Some("replaced"))
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            db.artifact_set("artifactsethash")
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "superseded"
+        );
+    }
+
+    #[tokio::test]
     async fn database_backup_refuses_existing_file() {
         let db = test_database().await;
         let backup_directory = tempfile::tempdir().unwrap();
@@ -1031,6 +3072,171 @@ mod tests {
         let error = db.backup_to_path(&backup_path).await.unwrap_err();
 
         assert!(error.to_string().contains("already exists"));
+    }
+
+    #[tokio::test]
+    async fn latest_translation_for_request_prefers_most_recent_record() {
+        let db = test_database().await;
+
+        db.insert_translation_start(TranslationStartInsert {
+            translation_id: "older",
+            request_hash: "requesthash",
+            state: "ACTIVE",
+            start_response_json: r#"{"id":"older"}"#,
+        })
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE translations SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day') WHERE translation_id = 'older'",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        db.insert_translation_start(TranslationStartInsert {
+            translation_id: "newer",
+            request_hash: "requesthash",
+            state: "ACTIVE",
+            start_response_json: r#"{"id":"newer"}"#,
+        })
+        .await
+        .unwrap();
+
+        let record = db
+            .latest_translation_for_request("requesthash")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.translation_id, "newer");
+    }
+
+    #[tokio::test]
+    async fn latest_completed_translation_for_request_prefers_done_record() {
+        let db = test_database().await;
+
+        db.insert_translation_start(TranslationStartInsert {
+            translation_id: "done",
+            request_hash: "requesthash",
+            state: "ACTIVE",
+            start_response_json: r#"{"id":"done"}"#,
+        })
+        .await
+        .unwrap();
+        db.update_translation_final(TranslationFinalUpdate {
+            translation_id: "done",
+            state: "DONE",
+            final_response_json: r#"{"requestState":"DONE"}"#,
+            poll_state_json: r#"{"requestState":"DONE"}"#,
+            result_external_data_ids_json: r#"["fid"]"#,
+            result_element_ids_json: "[]",
+            response_hash: Some("responsehash"),
+            failure_reason: None,
+        })
+        .await
+        .unwrap();
+
+        db.insert_translation_start(TranslationStartInsert {
+            translation_id: "active",
+            request_hash: "requesthash",
+            state: "ACTIVE",
+            start_response_json: r#"{"id":"active"}"#,
+        })
+        .await
+        .unwrap();
+
+        let record = db
+            .latest_completed_translation_for_request("requesthash")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.translation_id, "done");
+    }
+
+    #[tokio::test]
+    async fn staged_artifact_sets_are_not_ready_until_explicitly_marked_ready() {
+        let db = test_database().await;
+
+        db.stage_artifact(
+            test_artifact_upsert(
+                "artifact",
+                "abc",
+                "preview_glb",
+                "previews/v2/artifact/preview.glb",
+                "model/gltf-binary",
+                10,
+            ),
+            &[ArtifactFileInsert {
+                artifact_set_hash: "artifact",
+                role: "viewer_entry",
+                logical_path: "preview.glb",
+                original_path: Some("preview.glb"),
+                object_key: "previews/v2/artifact/preview.glb",
+                content_type: "model/gltf-binary",
+                byte_len: 10,
+                sha256: "abc123",
+                metadata_json: "{}",
+            }],
+        )
+        .await
+        .unwrap();
+
+        assert!(db.artifact("artifact").await.unwrap().is_none());
+        assert_eq!(
+            db.artifact_set("artifact").await.unwrap().unwrap().status,
+            "staged"
+        );
+
+        assert!(
+            db.mark_artifact_set_ready("artifact", "previews/v2/artifact/preview.glb")
+                .await
+                .unwrap()
+        );
+
+        assert_eq!(
+            db.artifact("artifact").await.unwrap().unwrap().status,
+            "ready"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_failed_artifact_sets_remain_non_ready() {
+        let db = test_database().await;
+
+        db.stage_artifact(
+            test_artifact_upsert(
+                "artifact",
+                "abc",
+                "step",
+                "artifacts/v2/artifact/demo.step",
+                "model/step",
+                10,
+            ),
+            &[ArtifactFileInsert {
+                artifact_set_hash: "artifact",
+                role: "download",
+                logical_path: "demo.step",
+                original_path: Some("demo.step"),
+                object_key: "artifacts/v2/artifact/demo.step",
+                content_type: "model/step",
+                byte_len: 10,
+                sha256: "abc123",
+                metadata_json: "{}",
+            }],
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            db.transition_artifact_set_status("artifact", "upload_failed")
+                .await
+                .unwrap()
+        );
+
+        assert!(db.artifact("artifact").await.unwrap().is_none());
+        assert_eq!(
+            db.artifact_set("artifact").await.unwrap().unwrap().status,
+            "upload_failed"
+        );
     }
 
     async fn test_database() -> Database {
@@ -1055,6 +3261,11 @@ mod tests {
             model_slug: "demo",
             config_hash,
             output_kind,
+            format: if output_kind == "preview_glb" {
+                "glb"
+            } else {
+                output_kind
+            },
             object_key,
             content_type,
             byte_len,
@@ -1062,6 +3273,9 @@ mod tests {
             producing_job_key: Some("work"),
             source_hash: "sourcehash",
             options_hash: "optionshash",
+            request_hash: None,
+            raw_payload_hash: None,
+            postprocess_hash: None,
             parameter_schema_version: 1,
             config_values_json: r#"{"width":"10"}"#,
         }

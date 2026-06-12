@@ -15,7 +15,7 @@ Fly.io Rust axum app
   |  v
   | Tigris Object Storage
   |  ^
-  |  | artifact uploads, manifests, cached metadata
+  |  | artifact uploads, cached metadata
   |
   | queue, job uniqueness, status, artifact index
   v
@@ -38,7 +38,7 @@ The public site should be able to serve cached content even when no export job i
 | Public UI | Catalog browsing, parameter forms, preview viewer, export requests. |
 | Fly Rust app | Public routing, validation, cache checks, queue submission, status routes, Onshape orchestration, Tigris writes. |
 | SQLite on Fly volume | Queue coordination, unique work keys, job status, artifact index, failure summaries. |
-| Tigris Object Storage | Durable public artifacts, previews, manifests, raw Onshape responses, normalized parameter metadata. |
+| Tigris Object Storage | Durable public artifacts, previews, raw Onshape responses, normalized parameter metadata. |
 | Onshape API | Configuration discovery and export generation. |
 
 Current Rust boundaries are still mostly in one crate and several responsibilities remain in `main.rs`. The intended internal boundaries are:
@@ -51,7 +51,6 @@ Current Rust boundaries are still mostly in one crate and several responsibiliti
 - `worker`: bounded background loop and Onshape polling orchestration.
 - `storage`: Tigris/S3 reads, writes, metadata, public URLs.
 - `cache_keys`: canonical identity and hash helpers.
-- `manifests`: manifest read/write and artifact index coordination.
 - `templates`: server-rendered pages or static page helpers.
 
 ## Public User Flow
@@ -107,7 +106,7 @@ Initial operational commands:
 - Fetch and cache parameter metadata for a model version.
 - Generate or rebuild missing previews.
 - Generate or rebuild download artifacts.
-- Inspect manifests, jobs, and failure records.
+- Inspect artifacts, jobs, and failure records.
 - Invalidate or supersede cached outputs after exporter changes.
 
 Authenticated `/admin` routes can be added later when browser-based administration becomes necessary.

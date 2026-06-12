@@ -10,36 +10,33 @@
 
 ## Current Branch Snapshot
 
-This page tracks the current v1 cache implementation and near-term gaps. The authoritative target design for layered request, response, raw-payload, post-processing, artifact-set, and manifest identity is documented in [Forward-Looking Cache Model](cache-model.md).
+This page is retained as historical v1 cache background. The authoritative current design for layered request, response, raw-payload, post-processing, artifact-set, and manifest identity is documented in [Forward-Looking Cache Model](cache-model.md).
 
-The v2 cache implementation is expected to be a clean cut from this v1 cache. Existing v1 SQLite records, object keys, public URLs, and manifests may be discarded or ignored during the v2 migration.
+The repository now uses a hard-cut v2 cache model. Existing v1 SQLite records, object keys, public URLs, and manifests are not preserved for compatibility.
 
-The branch has a working cache foundation and now implements the most important pieces of the newer main-branch target contract.
+Where this page describes v1 layouts or behaviors, treat them as historical context rather than the current branch state.
 
 Implemented now:
 
 - SQLite `jobs`, `artifacts`, and `parameter_metadata` tables.
 - Unique `jobs.work_key` for deduplicated parameter refresh, preview, and download work.
 - RFC 8785 JSON canonicalization for source, configuration, options, and work-key hash preimages.
-- Split `sourceHash`, `configHash`, and `optionsHash` helpers for artifact keys, object keys, manifests, jobs, and status responses.
-- `catalog/v1/models.json` plus `catalog/v1/models/{slug}.json`, while preserving explicit legacy catalog file compatibility.
-- Versioned object prefixes for parameter metadata, previews, downloads, and manifests.
-- Tigris/S3 reads and writes for raw parameter metadata, normalized parameter metadata, preview artifacts, download artifacts, and manifests.
+- Split `sourceHash`, `configHash`, and `optionsHash` helpers for artifact keys, object keys, jobs, and status responses.
+- `catalog/v1/models.json` plus `catalog/v1/models/{slug}.json`.
+- Versioned object prefixes for parameter metadata, previews, and downloads.
+- Tigris/S3 reads and writes for raw parameter metadata, normalized parameter metadata, preview artifacts, and download artifacts.
 - Server-side value validation before enqueueing preview or download work.
-- Preview storage prefers a single GLB, but direct glTF JSON is accepted as a browser viewer artifact. When Onshape returns a ZIP with exactly one glTF viewer asset instead, the branch publishes that `.gltf` plus sidecars under the same immutable preview identity and currently keeps the original ZIP under the implementation-chosen name `source.zip`. ZIPs with multiple `.gltf` files are rejected until a real merge path exists. The target cache model preserves Onshape-provided filenames and stores roles in metadata instead of relying on this fixed name.
+- Preview storage prefers a single GLB, but direct glTF JSON is accepted as a browser viewer artifact. When Onshape returns a ZIP with exactly one glTF viewer asset instead, the branch publishes that `.gltf` plus sidecars under the same immutable preview identity and retains the original ZIP privately as a raw payload. ZIPs with multiple `.gltf` files are rejected until a real merge path exists. The target cache model preserves Onshape-provided filenames and stores roles in metadata instead of relying on a fixed public ZIP name.
 - Ready artifact metadata for public URL, byte length, SHA-256, producing job key, source hash, options hash, and parameter schema version where available.
-- Manifest rewrites from active SQLite artifact records after successful preview/download writes, invalidation, and pruning.
 - Persisted `max_attempts`, `next_retry_at`, and bounded exponential full-jitter retry backoff for worker failures.
 - `superseded` job and artifact state for invalidation and pruning without deleting public object-store artifacts.
-- Operational listing, retry, manifest rewrite, invalidation, and pruning commands.
+- Operational listing, retry, invalidation, and pruning commands.
 
 Remaining deviations from the updated plan:
 
-- Parameter values are still represented as strings after validation. Unit normalization, unit synonym conversion, and typed canonical values remain future work.
-- Uploaded-object verification and cache reconciliation for partial writes are not implemented.
-- Manifests are built from active ready artifacts only; they do not yet materialize missing outputs, replacement pointers, or full supersession history.
+- Public manifests are not part of the initial v2 flow; DB state and status routes are the current source of truth for ready and superseded outputs.
 - Failure records are still stored as job summaries only. Stable public-safe error codes and user messages are not implemented.
-- Onshape translation IDs, poll state, and `Retry-After` values are not persisted for crash-resume yet.
+- Onshape `Retry-After` values are not persisted yet.
 
 ## Current v1 Cache Tiers
 
@@ -83,7 +80,7 @@ Current and target-compatible hashing rules:
 - Include units where they affect the Onshape configuration string.
 - Do not rely on `slug` for immutable identity. Slugs are useful for URLs and display, but source IDs and hashes own uniqueness.
 
-TODO: v2 moves export deduplication from `workKey` to `requestHash`, uses resolved microversion source identity, always uses Onshape configuration encodings after typed local canonicalization, and adds `rawPayloadHash`, `postprocessHash`, and `artifactSetHash` layers. See [Forward-Looking Cache Model](cache-model.md).
+Current branch status: v2 export deduplication uses `requestHash`, source identity is resolved through immutable microversions, configuration encodings are built from typed canonical values, retained raw payloads are verified before reuse, and artifact readiness is modeled through `rawPayloadHash`, `postprocessHash`, and `artifactSetHash`. See [Forward-Looking Cache Model](cache-model.md).
 
 ## Object Storage Layout
 
@@ -173,7 +170,7 @@ Current v1 direction:
 
 Unsupported Onshape parameter types should remain visible in metadata with `unsupportedReason` so the UI can explain why a model or parameter cannot be exported yet.
 
-Current branch gap: normalized metadata uses the implemented `ParameterSchema` shape with string values and no `unsupportedReason`. Unknown parameter types are not represented with explicit unsupported metadata.
+Current branch status: normalized metadata keeps the implemented `ParameterSchema` shape, and unsupported or ambiguous parameter shapes are represented explicitly through `kind: unsupported` so validation fails before those parameters can enter `configHash`.
 
 ### Canonical Configuration Payload
 
@@ -192,7 +189,7 @@ Current v1 direction:
 
 The browser may submit parameter values, but the server must validate, apply defaults, canonicalize, and compute `configHash` before trusting any status or enqueue request.
 
-Current branch status: server-side validation, RFC 8785 canonicalization, and split source/config/options hashes exist. Parameter values are still string-based rather than typed `{kind, value}` payloads, so unit synonym/conversion canonicalization remains future work.
+Current branch status: server-side validation, typed canonical values, RFC 8785 canonicalization, canonical Onshape encoding-request projections, and split source/config/options hashes are all implemented. Supported numeric/unit spellings normalize to one canonical configuration meaning before `configHash` and encoding reuse.
 
 ### Manifest
 
@@ -251,7 +248,7 @@ Current v1 shape:
 
 The manifest is application state. Tigris object metadata is useful but should not be the only source of truth. In v2, initial public flow is expected to be database/status-route driven, with object-store manifests deferred as a future materialization of database state.
 
-Current branch status: manifests are materialized at `manifests/v1/{group_id}.json` from active SQLite artifact records. Ready outputs include schema version, output status, public URL, SHA-256, producing job key, source/options hashes, stored configuration values, and byte length. They do not yet materialize missing outputs, replacement pointers, full supersession history, or content disposition.
+Current branch status: v2 status and product behavior are driven from database state rather than object-store manifests. Ready outputs still track public URL, SHA-256, producing job key, source/options hashes, stored configuration values, and byte length.
 
 ### Artifact Records
 
@@ -288,12 +285,12 @@ Expected artifact write ordering:
 
 1. Upload the public artifact object under a new immutable key.
 2. Verify the uploaded object is readable or can be inspected through object metadata.
-3. Write or update the manifest and artifact index.
+3. Write or update the DB artifact state for the uploaded output.
 4. Mark the corresponding SQLite job ready.
 
 Recovery and reconciliation commands should handle partial writes, such as an uploaded object whose SQLite job was not marked ready before a restart.
 
-Current branch gap: upload, artifact upsert, manifest rewrite, and job-ready marking exist, but uploaded-object verification and reconciliation for partial writes are not implemented.
+Current branch status: upload verification, artifact publishing, and job-ready marking exist. Reconciliation for partial writes remains future work.
 
 ## Invalidation And Eviction
 
@@ -301,10 +298,10 @@ Normal invalidation must supersede rather than delete:
 
 - Write a new artifact object under a new immutable key.
 - Mark the old artifact record as `superseded` with a reason and replacement pointer when available.
-- Update manifests and status responses to point to the new ready artifact or show the old artifact as superseded.
+- Update DB-backed status responses to point to the new ready artifact or show the old artifact as superseded.
 - Keep public object deletion for explicit operator cleanup, legal/IP concerns, or storage-cost management.
 
-Current branch status: `artifacts invalidate` and `artifacts prune` mark ready artifact records as `superseded`, preserve public object-store artifacts, mark producing ready jobs superseded when known, and rewrite manifests from remaining ready artifacts. A future explicit destructive cleanup command can handle legal/IP removal or storage-cost deletion separately.
+Current branch status: `artifacts invalidate` and `artifacts prune` mark ready artifact records as `superseded`, preserve public object-store artifacts, and mark producing ready jobs superseded when known. A future explicit destructive cleanup command can handle legal/IP removal or storage-cost deletion separately.
 
 ## Job Records
 

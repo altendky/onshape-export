@@ -20,7 +20,7 @@ Initial scope:
 - SQLite on a Fly volume for queue coordination and job uniqueness.
 - Documentation tracks the current implementation and explicit TODO gaps.
 
-Current implementation note: the branch already contains an initial Rust service with `catalog/v1`, RFC 8785 cache-key hashing, supersession-based invalidation/pruning, GLB-or-Onshape-glTF preview artifacts, retry backoff, target job states, and ready artifact metadata. Remaining gaps are mostly live Onshape verification, typed/unit canonicalization, uploaded-object reconciliation, persisted translation state, and public-safe error taxonomy.
+Current implementation note: the branch already contains the cache v2 hard cut plus its follow-up correctness fixes: resolved-microversion source identity, typed canonical configuration hashing, canonical Onshape configuration encodings, request-hash export deduplication/readiness, retained raw payload verification, strict zipped glTF sidecar validation, legacy export-job retirement, upload verification, retry backoff, and ready artifact metadata. Remaining gaps are mostly live Onshape verification, richer public-safe error taxonomy, and future reconciliation or repair tooling.
 
 The cache design is the central project risk. The current implementation snapshot is documented in [Caching](caching.md), while the target layered model is documented in [Forward-Looking Cache Model](cache-model.md).
 
