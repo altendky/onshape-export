@@ -4489,6 +4489,10 @@ fn render_parameter_controls_with_values(
                         .collect::<String>();
                     format!(r#"<select id="{id}" name="{id}"{required}>{options}</select>"#)
                 }
+                ParameterKind::Unsupported => format!(
+                    r#"<input id="{id}" name="{id}" value="{value}" disabled title="Unsupported parameter type">"#,
+                    value = escape_html(&display_value),
+                ),
             };
 
             format!(

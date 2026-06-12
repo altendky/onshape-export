@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::catalog::{OnshapeSource, ParameterOverride};
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,6 +46,7 @@ pub enum ParameterKind {
     Number,
     Boolean,
     Enum,
+    Unsupported,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -192,6 +193,11 @@ pub fn validate_values(
     let mut values = HashMap::new();
     let mut typed_values = BTreeMap::new();
     for parameter in &schema.parameters {
+        if parameter.kind == ParameterKind::Unsupported {
+            errors.push(unsupported_parameter_message(parameter));
+            continue;
+        }
+
         let value = submitted
             .get(&parameter.id)
             .filter(|value| !value.is_empty())
@@ -261,6 +267,7 @@ pub fn validate_values(
                         errors.push(format!("{} has an invalid option", parameter.label));
                     }
                 }
+                ParameterKind::Unsupported => unreachable!("handled before value lookup"),
             },
             None if parameter.required => errors.push(format!("{} is required", parameter.label)),
             None => {}
@@ -344,8 +351,10 @@ fn normalize_parameter(value: &Value) -> Option<Parameter> {
             .is_some_and(|value| value.parse::<f64>().is_ok())
     {
         ParameterKind::Number
-    } else {
+    } else if type_hint.contains("string") || type_hint.contains("text") {
         ParameterKind::Text
+    } else {
+        ParameterKind::Unsupported
     };
 
     Some(Parameter {
@@ -452,6 +461,13 @@ fn canonical_quantity_unit(unit: &str) -> Option<&'static str> {
         "rad" | "radian" => Some("rad"),
         _ => None,
     }
+}
+
+fn unsupported_parameter_message(parameter: &Parameter) -> String {
+    format!(
+        "{} ({}) uses an unsupported parameter type",
+        parameter.label, parameter.id
+    )
 }
 
 fn request_number_with_default_units(number: &str, units: Option<&str>) -> String {
@@ -720,6 +736,44 @@ mod tests {
         assert_eq!(schema.parameters[0].kind, ParameterKind::Number);
         assert_eq!(schema.parameters[1].kind, ParameterKind::Enum);
         assert_eq!(schema.parameters[2].kind, ParameterKind::Boolean);
+    }
+
+    #[test]
+    fn normalizes_unknown_parameter_shapes_as_unsupported() {
+        let schema = normalize_configuration(
+            &source(),
+            &json!({
+                "configurationParameters": [
+                    {
+                        "parameterId": "custom",
+                        "parameterName": "Custom",
+                        "type": "BTMConfigurationParameterMatrix"
+                    }
+                ]
+            }),
+        );
+
+        assert_eq!(schema.parameters.len(), 1);
+        assert_eq!(schema.parameters[0].kind, ParameterKind::Unsupported);
+    }
+
+    #[test]
+    fn normalizes_missing_type_string_defaults_as_unsupported() {
+        let schema = normalize_configuration(
+            &source(),
+            &json!({
+                "configurationParameters": [
+                    {
+                        "parameterId": "finish",
+                        "parameterName": "Finish",
+                        "defaultValue": "matte"
+                    }
+                ]
+            }),
+        );
+
+        assert_eq!(schema.parameters.len(), 1);
+        assert_eq!(schema.parameters[0].kind, ParameterKind::Unsupported);
     }
 
     #[test]
@@ -1183,6 +1237,74 @@ mod tests {
             CanonicalParameterValue::Text {
                 value: "surprise".to_owned(),
             }
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_schema_entries_even_when_unknowns_are_allowed() {
+        let schema = ParameterSchema {
+            schema_version: SCHEMA_VERSION,
+            source: source(),
+            parameters: vec![Parameter {
+                id: "custom".to_owned(),
+                label: "Custom".to_owned(),
+                description: None,
+                kind: ParameterKind::Unsupported,
+                required: false,
+                default_value: None,
+                options: Vec::new(),
+                hidden: false,
+                visibility_condition: None,
+                precision: None,
+                widget: None,
+                units: None,
+                raw: Value::Null,
+            }],
+        };
+
+        let errors = validate_values(
+            &schema,
+            &HashMap::from([
+                ("custom".to_owned(), "value".to_owned()),
+                ("extra".to_owned(), "surprise".to_owned()),
+            ]),
+            true,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            errors,
+            vec!["Custom (custom) uses an unsupported parameter type"]
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_schema_entries_without_submitted_values() {
+        let schema = ParameterSchema {
+            schema_version: SCHEMA_VERSION,
+            source: source(),
+            parameters: vec![Parameter {
+                id: "custom".to_owned(),
+                label: "Custom".to_owned(),
+                description: None,
+                kind: ParameterKind::Unsupported,
+                required: false,
+                default_value: None,
+                options: Vec::new(),
+                hidden: false,
+                visibility_condition: None,
+                precision: None,
+                widget: None,
+                units: None,
+                raw: Value::Null,
+            }],
+        };
+
+        let errors = validate_values(&schema, &HashMap::new(), true).unwrap_err();
+
+        assert_eq!(
+            errors,
+            vec!["Custom (custom) uses an unsupported parameter type"]
         );
     }
 

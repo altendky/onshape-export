@@ -2603,7 +2603,7 @@ mod tests {
             source_hash: "sourcehash",
             config_hash: "confighash",
             values_json: r#"{"enabled":{"kind":"boolean","value":true}}"#,
-            validation_json: r#"{"parameterSchemaVersion":2,"requestValues":{"enabled":"true"}}"#,
+            validation_json: r#"{"parameterSchemaVersion":3,"requestValues":{"enabled":"true"}}"#,
         })
         .await
         .unwrap();
