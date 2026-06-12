@@ -125,3 +125,18 @@ Project documentation is under `docs/src/project/`.
 
 - `~/repos/onshape-mcp`: Onshape auth/client patterns and request modeling.
 - `~/repos/onshape3mf`: Python proof-of-concept for configuration discovery and async export calls.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution licensing terms.
+
+## License
+
+Licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or
+  <http://opensource.org/licenses/MIT>)
+
+at your option.
