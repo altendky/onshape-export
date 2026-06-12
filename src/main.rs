@@ -61,6 +61,7 @@ const PREVIEW_POSTPROCESSOR_VERSION: &str = "1";
 const DOWNLOAD_POSTPROCESSOR_NAME: &str = "download_identity";
 const DOWNLOAD_POSTPROCESSOR_VERSION: &str = "1";
 const STRICT_UPLOAD_VERIFICATION: bool = false;
+const V2_EXPORT_WORK_KEY_PREFIX: &str = "work-v2:export:";
 
 #[derive(Clone)]
 struct AppState {
@@ -2080,6 +2081,23 @@ async fn process_next_job(state: &AppState) -> anyhow::Result<bool> {
         return Ok(false);
     };
 
+    if should_retire_legacy_export_job(&job) {
+        if !state
+            .db
+            .finish_job(
+                &job.work_key,
+                job.attempt,
+                "superseded",
+                Some("legacy export jobs are retired after the cache v2 hard cut"),
+            )
+            .await?
+        {
+            tracing::warn!(work_key = %job.work_key, attempt = job.attempt, "legacy export job lease was already reclaimed before retirement");
+        }
+        tracing::info!(work_key = %job.work_key, job_kind = %job.job_kind, "retired legacy export job outside the request-hash execution path");
+        return Ok(true);
+    }
+
     let result = execute_job(state, &job).await;
     match result {
         Ok(()) => {
@@ -2123,6 +2141,11 @@ async fn process_next_job(state: &AppState) -> anyhow::Result<bool> {
     }
 
     Ok(true)
+}
+
+fn should_retire_legacy_export_job(job: &db::JobLease) -> bool {
+    matches!(job.job_kind.as_str(), "preview_export" | "download_export")
+        && !job.work_key.starts_with(V2_EXPORT_WORK_KEY_PREFIX)
 }
 
 fn retry_backoff_seconds(attempt: i64) -> i64 {
@@ -2717,8 +2740,8 @@ async fn persist_downloaded_raw_payload(
     let raw_payload_hash = cache_key::hex_sha256(&downloaded.bytes);
     let object_key = raw_payload_object_key(&raw_payload_hash);
     let detected_kind = detect_raw_payload_kind(&downloaded.bytes);
-    let zip_manifest_json = zip_inventory_json(&downloaded.bytes)
-        .context("inspecting raw payload ZIP inventory")?;
+    let zip_manifest_json =
+        zip_inventory_json(&downloaded.bytes).context("inspecting raw payload ZIP inventory")?;
     state
         .storage
         .put_bytes(
@@ -3790,7 +3813,7 @@ fn parameter_refresh_work_key(source_hash: &str) -> String {
 }
 
 fn export_job_key(request_hash: &str) -> String {
-    format!("work-v2:export:{request_hash}")
+    format!("{V2_EXPORT_WORK_KEY_PREFIX}{request_hash}")
 }
 
 #[cfg(test)]
@@ -5176,6 +5199,77 @@ mod tests {
         .unwrap();
 
         assert_eq!(work_keys, vec![export_job_key("zzz-new-requesthash")]);
+    }
+
+    #[tokio::test]
+    async fn process_next_job_retires_legacy_export_jobs() {
+        let state = test_state().await;
+        for (work_key, job_kind) in [
+            (
+                preview_work_key("sourcehash", &test_model(), "confighash"),
+                "preview_export",
+            ),
+            (
+                download_work_key(
+                    "sourcehash",
+                    &test_model(),
+                    "confighash",
+                    catalog::DownloadFormat::Step,
+                ),
+                "download_export",
+            ),
+        ] {
+            state
+                .db
+                .enqueue_job(&work_key, job_kind, "{}")
+                .await
+                .unwrap();
+            assert!(process_next_job(&state).await.unwrap());
+
+            let job = state.db.job(&work_key).await.unwrap().unwrap();
+            assert_eq!(job.status, "superseded");
+            assert_eq!(
+                job.error_summary.as_deref(),
+                Some("legacy export jobs are retired after the cache v2 hard cut")
+            );
+        }
+    }
+
+    #[test]
+    fn only_non_request_hash_export_jobs_are_retired() {
+        assert!(should_retire_legacy_export_job(&db::JobLease {
+            work_key: preview_work_key("sourcehash", &test_model(), "confighash"),
+            job_kind: "preview_export".to_owned(),
+            payload_json: "{}".to_owned(),
+            attempt: 1,
+            max_attempts: 3,
+        }));
+        assert!(should_retire_legacy_export_job(&db::JobLease {
+            work_key: download_work_key(
+                "sourcehash",
+                &test_model(),
+                "confighash",
+                catalog::DownloadFormat::Step,
+            ),
+            job_kind: "download_export".to_owned(),
+            payload_json: "{}".to_owned(),
+            attempt: 1,
+            max_attempts: 3,
+        }));
+        assert!(!should_retire_legacy_export_job(&db::JobLease {
+            work_key: export_job_key("requesthash"),
+            job_kind: "preview_export".to_owned(),
+            payload_json: "{}".to_owned(),
+            attempt: 1,
+            max_attempts: 3,
+        }));
+        assert!(!should_retire_legacy_export_job(&db::JobLease {
+            work_key: parameter_refresh_work_key("sourcehash"),
+            job_kind: "parameter_refresh".to_owned(),
+            payload_json: r#"{"kind":"parameter_refresh","model_slug":"demo"}"#.to_owned(),
+            attempt: 1,
+            max_attempts: 3,
+        }));
     }
 
     #[tokio::test]
