@@ -2716,6 +2716,9 @@ async fn persist_downloaded_raw_payload(
 ) -> anyhow::Result<PersistedRawPayload> {
     let raw_payload_hash = cache_key::hex_sha256(&downloaded.bytes);
     let object_key = raw_payload_object_key(&raw_payload_hash);
+    let detected_kind = detect_raw_payload_kind(&downloaded.bytes);
+    let zip_manifest_json = zip_inventory_json(&downloaded.bytes)
+        .context("inspecting raw payload ZIP inventory")?;
     state
         .storage
         .put_bytes(
@@ -2727,8 +2730,6 @@ async fn persist_downloaded_raw_payload(
                 .unwrap_or("application/octet-stream"),
         )
         .await?;
-    let detected_kind = detect_raw_payload_kind(&downloaded.bytes);
-    let zip_manifest_json = zip_inventory_json(&downloaded.bytes);
     state
         .db
         .insert_raw_payload_if_absent(RawPayloadInsert {
@@ -2740,10 +2741,7 @@ async fn persist_downloaded_raw_payload(
             original_filename: downloaded.original_filename.as_deref(),
             filename_source: downloaded.filename_source.as_deref(),
             detected_kind,
-            zip_manifest_json: zip_manifest_json
-                .as_ref()
-                .ok()
-                .and_then(|json| json.as_deref()),
+            zip_manifest_json: zip_manifest_json.as_deref(),
         })
         .await?;
     let linked = state
@@ -2773,9 +2771,6 @@ async fn persist_downloaded_raw_payload(
             "raw payload source mapping already exists with a different payload hash"
         );
     }
-    if let Err(error) = zip_manifest_json {
-        return Err(error).context("inspecting raw payload ZIP inventory");
-    }
     Ok(PersistedRawPayload { raw_payload_hash })
 }
 
@@ -2789,7 +2784,17 @@ async fn load_persisted_raw_payload(
         .await?
         .with_context(|| format!("missing raw payload record for {raw_payload_hash}"))?;
     let bytes = state.storage.get_bytes(&record.object_key).await?;
+    verify_raw_payload_bytes(raw_payload_hash, &bytes)?;
     Ok((record, bytes))
+}
+
+fn verify_raw_payload_bytes(raw_payload_hash: &str, bytes: &[u8]) -> anyhow::Result<()> {
+    let actual_hash = cache_key::hex_sha256(bytes);
+    anyhow::ensure!(
+        actual_hash == raw_payload_hash,
+        "raw payload bytes sha256 mismatch: expected {raw_payload_hash}, got {actual_hash}"
+    );
+    Ok(())
 }
 
 fn raw_payload_object_key(raw_payload_hash: &str) -> String {
@@ -5460,6 +5465,13 @@ mod tests {
         let second = cache_key::hex_sha256(b"abcd");
 
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn verify_raw_payload_bytes_rejects_hash_mismatch() {
+        let error = verify_raw_payload_bytes(&cache_key::hex_sha256(b"abc"), b"abcd").unwrap_err();
+
+        assert!(error.to_string().contains("sha256 mismatch"));
     }
 
     #[test]
