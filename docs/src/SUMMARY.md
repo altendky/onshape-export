@@ -20,8 +20,7 @@
 - [CI And Local Tooling](project/ci.md)
 - [Library Reuse](project/library-reuse.md)
 
-# Project Management
+# Project Notes
 
-- [Implementation Plan](project/implementation.md)
 - [Decisions](project/decisions.md)
 - [Open Questions](project/open-questions.md)

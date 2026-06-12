@@ -118,7 +118,6 @@ Project documentation is under `docs/src/project/`.
 - [Admin Operations](docs/src/project/admin.md)
 - [CI And Local Tooling](docs/src/project/ci.md)
 - [Library Reuse](docs/src/project/library-reuse.md)
-- [Implementation Plan](docs/src/project/implementation.md)
 - [Decisions](docs/src/project/decisions.md)
 - [Open Questions](docs/src/project/open-questions.md)
 
