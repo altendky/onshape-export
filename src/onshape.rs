@@ -746,7 +746,10 @@ fn unquote_header_value(value: &str) -> String {
 }
 
 fn decode_rfc8187_filename(value: &str) -> Option<String> {
-    let (_, rest) = value.split_once("''")?;
+    let (charset, rest) = value.split_once("''")?;
+    if !charset.eq_ignore_ascii_case("UTF-8") {
+        return None;
+    }
     percent_decode(rest)
 }
 
@@ -1177,6 +1180,25 @@ mod tests {
             (
                 Some("model space.zip".to_owned()),
                 Some("content-disposition-filename*".to_owned())
+            )
+        );
+    }
+
+    #[test]
+    fn ignores_non_utf8_rfc8187_download_filename() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_static(
+                "attachment; filename=\"fallback.zip\"; filename*=ISO-8859-1''model%20space.zip",
+            ),
+        );
+
+        assert_eq!(
+            download_filename(&headers),
+            (
+                Some("fallback.zip".to_owned()),
+                Some("content-disposition".to_owned())
             )
         );
     }
