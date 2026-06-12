@@ -11,7 +11,7 @@ version id: vid
 
 Workspaces are intentionally out of scope for the first version.
 
-For the v2 cache model, catalog entries may remain version-based, but the service should resolve the version to its immutable document microversion before computing `sourceHash`. Store the version-to-microversion mapping for diagnostics and traceability.
+For the implemented v2 cache model, catalog entries remain version-based for operator usability, but the service resolves the version to its immutable document microversion before computing `sourceHash`. The version-to-microversion mapping is stored for diagnostics and traceability, and multiple `versionId` aliases can point at the same resolved `sourceHash`.
 
 Resolution must complete before writing source-scoped cache records or artifacts. Transient resolution failures should follow the Onshape retry/backoff policy and record diagnostics or `failureReason`; terminal failures should abort the export before any partial cache artifacts are published. If a previously stored `versionId` to `microversionId` mapping later resolves differently or becomes inconsistent, compute a new `sourceHash` from the new microversion and mark the old mapping/cache state stale or orphaned for reconciliation diagnostics instead of mutating existing artifacts in place.
 
@@ -47,7 +47,7 @@ Configuration values may be represented as an Onshape configuration string:
 parameterId=value;other=value
 ```
 
-Current v1 code may hand-build this string for simple cases. The v2 cache model should always use Onshape's encoding endpoint after local validation and typed canonicalization:
+The implemented v2 cache path always uses Onshape's encoding endpoint after local validation and typed canonicalization:
 
 ```text
 POST /api/elements/d/{did}/e/{eid}/configurationencodings?versionId={vid}
@@ -55,7 +55,7 @@ POST /api/elements/d/{did}/e/{eid}/configurationencodings?versionId={vid}
 
 Use `linkDocumentId` as well if the versioned element must be accessed through a linked document context.
 
-Local validation should confirm that every submitted parameter is supported by the normalized schema and that every value can be represented as a typed canonical value before any network call. Typed canonicalization should normalize those values into the same application payload that produces `configHash`. A v2 export must not fall back to hand-built configuration strings if encoding fails; retry transient endpoint failures through the normal Onshape retry policy, record malformed or terminal responses in diagnostics, and surface the export as failed until a valid Onshape encoding is available. The hand-built path remains v1 compatibility only.
+Local validation confirms that every submitted parameter is supported by the normalized schema and that every value can be represented as a typed canonical value before any network call. Typed canonicalization normalizes those values into the same application payload that produces `configHash`, and equivalent numeric or unit spellings reuse the same encoding request shape. A v2 export does not fall back to hand-built configuration strings if encoding fails; transient endpoint failures follow the normal retry policy, malformed or terminal responses are recorded in diagnostics, and the export stays failed until a valid Onshape encoding is available.
 
 Request body shape from the OpenAPI schema:
 

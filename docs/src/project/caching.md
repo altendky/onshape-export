@@ -34,11 +34,9 @@ Implemented now:
 
 Remaining deviations from the updated plan:
 
-- Parameter values are still represented as strings after validation. Unit normalization, unit synonym conversion, and typed canonical values remain future work.
-- Uploaded-object verification and cache reconciliation for partial writes are not implemented.
 - Public manifests are not part of the initial v2 flow; DB state and status routes are the current source of truth for ready and superseded outputs.
 - Failure records are still stored as job summaries only. Stable public-safe error codes and user messages are not implemented.
-- Onshape translation IDs, poll state, and `Retry-After` values are not persisted for crash-resume yet.
+- Onshape `Retry-After` values are not persisted yet.
 
 ## Current v1 Cache Tiers
 
@@ -82,7 +80,7 @@ Current and target-compatible hashing rules:
 - Include units where they affect the Onshape configuration string.
 - Do not rely on `slug` for immutable identity. Slugs are useful for URLs and display, but source IDs and hashes own uniqueness.
 
-TODO: v2 moves export deduplication from `workKey` to `requestHash`, uses resolved microversion source identity, always uses Onshape configuration encodings after typed local canonicalization, and adds `rawPayloadHash`, `postprocessHash`, and `artifactSetHash` layers. See [Forward-Looking Cache Model](cache-model.md).
+Current branch status: v2 export deduplication uses `requestHash`, source identity is resolved through immutable microversions, configuration encodings are built from typed canonical values, retained raw payloads are verified before reuse, and artifact readiness is modeled through `rawPayloadHash`, `postprocessHash`, and `artifactSetHash`. See [Forward-Looking Cache Model](cache-model.md).
 
 ## Object Storage Layout
 
@@ -172,7 +170,7 @@ Current v1 direction:
 
 Unsupported Onshape parameter types should remain visible in metadata with `unsupportedReason` so the UI can explain why a model or parameter cannot be exported yet.
 
-Current branch gap: normalized metadata uses the implemented `ParameterSchema` shape with string values and no `unsupportedReason`. Unknown parameter types are not represented with explicit unsupported metadata.
+Current branch status: normalized metadata keeps the implemented `ParameterSchema` shape, and unsupported or ambiguous parameter shapes are represented explicitly through `kind: unsupported` so validation fails before those parameters can enter `configHash`.
 
 ### Canonical Configuration Payload
 
@@ -191,7 +189,7 @@ Current v1 direction:
 
 The browser may submit parameter values, but the server must validate, apply defaults, canonicalize, and compute `configHash` before trusting any status or enqueue request.
 
-Current branch status: server-side validation, RFC 8785 canonicalization, and split source/config/options hashes exist. Parameter values are still string-based rather than typed `{kind, value}` payloads, so unit synonym/conversion canonicalization remains future work.
+Current branch status: server-side validation, typed canonical values, RFC 8785 canonicalization, canonical Onshape encoding-request projections, and split source/config/options hashes are all implemented. Supported numeric/unit spellings normalize to one canonical configuration meaning before `configHash` and encoding reuse.
 
 ### Manifest
 

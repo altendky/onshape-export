@@ -21,7 +21,7 @@ Do not skip a phase because a later phase looks more interesting. If a phase can
 | --- | --- | --- |
 | Phase 0: Documentation And Decisions | `done` | Planning docs reconciled with implementation status and TODO gaps. |
 | Phase 1: Tooling And Rust Skeleton | `in_progress` | Rust skeleton exists; real CI/tooling still TODO. |
-| Phase 2: Contracts, Catalog, And Cache Keys | `in_progress` | `catalog/v1`, RFC 8785 hash helpers, and split identity hashes exist; typed/unit canonicalization and unsupported-parameter metadata are TODO. |
+| Phase 2: Contracts, Catalog, And Cache Keys | `in_progress` | `catalog/v1`, RFC 8785 hash helpers, split identity hashes, typed/unit canonicalization, and unsupported-parameter rejection are implemented; broader contract cleanup remains. |
 | Phase 3: SQLite Queue And Fake Worker | `in_progress` | SQLite queue/leases, retry backoff, and target states exist; failure table and persisted translation state are TODO. |
 | Phase 4: Tigris Storage And Manifests | `in_progress` | Tigris writes, v1 keys, manifests, and ready metadata exist; upload verification, reconciliation, and full missing/superseded output history are TODO. |
 | Phase 5: Onshape Auth And Metadata Read Path | `in_progress` | API-key signing and metadata path exist; real smoke tests and unsupported metadata are TODO. |
@@ -73,14 +73,12 @@ Implemented foundation:
 
 Plan review TODOs that are not implemented yet:
 
-- Replace string-only parameter canonicalization with typed values and unit normalization where needed.
-- Add uploaded-object verification and cache reconciliation for partial writes.
 - Add retryability classes, stable public-safe error codes, and user messages.
 - Add a separate failure history table if job summaries stop being enough.
-- Persist Onshape translation IDs and polling state for crash recovery.
+- Persist richer crash-resume polling state if the current staged translation records prove insufficient.
 - Honor Onshape `Retry-After` once the client exposes it.
 - Materialize missing outputs, replacement pointers, and full supersession history in manifests.
-- Reconcile the current v1 cache implementation with the v2 cache model as a clean cut, following [Forward-Looking Cache Model](cache-model.md): do not merge v1 artifact records into v2 identity; resolve microversion source identity before hashing; honor Onshape `configurationencodings`; and add explicit upload verification and repair state for partial-write recovery.
+- Add reconciliation or repair commands for object-store or DB drift beyond the current upload verification and raw-payload hash checks.
 
 ## Phase 0: Documentation And Decisions
 
@@ -140,9 +138,7 @@ Implemented on branch:
 
 TODO gaps:
 
-- Replace string-only parameter values with typed canonical values if the current representation proves ambiguous.
-- Add unit synonym/conversion canonicalization where target models need it.
-- Represent unsupported Onshape parameter types with `unsupportedReason`.
+- Add richer unsupported-parameter metadata beyond the current explicit `unsupported` kind if operators need more detailed provenance from raw Onshape schemas.
 
 ## Phase 3: SQLite Queue And Fake Worker
 
@@ -206,8 +202,6 @@ TODO gaps:
 - Record real-call smoke-test results for Part Studio and Assembly metadata.
 - Confirm API-key permissions for linked-document assembly contexts.
 - Add sanitized Onshape fixtures for all target parameter types.
-- Preserve unsupported parameter types with `unsupportedReason`.
-- Implement v2's always-use `configurationencodings` path after local typed canonicalization.
 
 ## Phase 6: GLB Preview Vertical Slice
 

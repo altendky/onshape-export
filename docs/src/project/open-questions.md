@@ -25,7 +25,6 @@
 ## Parameter Handling
 
 - Which Onshape configuration parameter types appear in target models?
-- What exact typed canonical form should v2 use for each supported Onshape parameter type?
 - Does `configurationencodings` behave consistently for default, explicit-default, and non-default values across Part Studios and Assemblies?
 - What numeric precision or step rules should each model expose?
 - How should hidden or conditionally visible parameters be handled?

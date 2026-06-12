@@ -138,7 +138,7 @@ Target override behavior:
 - Unsupported Onshape parameter types may be hidden only if they are not required to generate a valid configuration.
 - Preview auto-generation policy may become an explicit future field if per-parameter generation policy is needed.
 
-Current branch gap: unsupported parameter types do not carry explicit `unsupportedReason` metadata.
+Current branch status: unsupported or ambiguous parameter types normalize as explicit `unsupported` entries so the UI can surface them and validation can fail before those parameters enter cache identity.
 
 ## Later Configurability
 
