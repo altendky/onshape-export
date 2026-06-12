@@ -3,6 +3,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use sqlx::{Executor, Row, SqlitePool, sqlite::SqlitePoolOptions};
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ParameterMetadataRecord {
     pub source_hash: String,
@@ -12,6 +13,7 @@ pub struct ParameterMetadataRecord {
     pub schema_version: i64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SourceResolutionRecord {
     pub source_hash: String,
@@ -40,6 +42,8 @@ pub struct SourceResolutionUpsert<'a> {
     pub diagnostics_json: &'a str,
 }
 
+#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct ConfigurationSelectionRecord {
     pub source_hash: String,
@@ -58,6 +62,7 @@ pub struct ConfigurationSelectionUpsert<'a> {
     pub validation_json: &'a str,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ConfigurationEncodingRecord {
     pub source_hash: String,
@@ -80,6 +85,8 @@ pub struct ConfigurationEncodingUpsert<'a> {
     pub response_json: &'a str,
 }
 
+#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct ExportRequestRecord {
     pub request_hash: String,
@@ -116,6 +123,7 @@ pub struct ExportRequestInsert<'a> {
     pub status: &'a str,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TranslationRecord {
     pub translation_id: String,
@@ -152,6 +160,7 @@ pub struct TranslationFinalUpdate<'a> {
     pub failure_reason: Option<&'a str>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct RawPayloadRecord {
     pub raw_payload_hash: String,
@@ -191,6 +200,8 @@ pub struct RawPayloadSourceInsert<'a> {
     pub raw_payload_hash: &'a str,
 }
 
+#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct PostprocessRunRecord {
     pub postprocess_hash: String,
@@ -217,6 +228,7 @@ pub struct PostprocessRunInsert<'a> {
     pub derived_files_json: &'a str,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ArtifactSetRecord {
     pub artifact_set_hash: String,
@@ -238,6 +250,7 @@ pub struct ArtifactSetRecord {
     pub supersession_reason: Option<String>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 pub struct ArtifactSetInsert<'a> {
     pub artifact_set_hash: &'a str,
@@ -323,6 +336,7 @@ pub struct ArtifactMetric {
     pub byte_len: i64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct ArtifactUpsert<'a> {
     pub artifact_key: &'a str,
@@ -403,6 +417,7 @@ impl Database {
         Ok(())
     }
 
+    #[cfg(test)]
     pub async fn source_resolution(
         &self,
         source_hash: &str,
@@ -576,6 +591,7 @@ impl Database {
         Ok(())
     }
 
+    #[cfg(test)]
     pub async fn configuration_selection(
         &self,
         source_hash: &str,
@@ -669,6 +685,7 @@ impl Database {
         Ok(())
     }
 
+    #[cfg(test)]
     pub async fn export_request(
         &self,
         request_hash: &str,
@@ -721,6 +738,7 @@ impl Database {
         Ok(result.rows_affected() == 1)
     }
 
+    #[cfg(test)]
     pub async fn latest_export_request_for_output(
         &self,
         source_hash: &str,
@@ -806,6 +824,7 @@ impl Database {
         .map(|row| row.map(artifact_set_record_from_row))
     }
 
+    #[cfg(test)]
     pub async fn translation(
         &self,
         translation_id: &str,
@@ -1020,6 +1039,7 @@ impl Database {
         .await
     }
 
+    #[cfg(test)]
     pub async fn postprocess_run(
         &self,
         postprocess_hash: &str,
@@ -1091,6 +1111,7 @@ impl Database {
         Ok(result.rows_affected() == 1)
     }
 
+    #[cfg(test)]
     pub async fn artifact_set(
         &self,
         artifact_set_hash: &str,
@@ -1111,6 +1132,7 @@ impl Database {
         .map(|row| row.map(artifact_set_record_from_row))
     }
 
+    #[cfg(test)]
     pub async fn insert_artifact_set_if_absent(
         &self,
         artifact_set: ArtifactSetInsert<'_>,
@@ -1143,6 +1165,7 @@ impl Database {
         Ok(result.rows_affected() == 1)
     }
 
+    #[cfg(test)]
     pub async fn replace_artifact_files(
         &self,
         artifact_set_hash: &str,
@@ -1537,6 +1560,7 @@ impl Database {
         .map(|rows| rows.into_iter().map(artifact_record_from_v2_row).collect())
     }
 
+    #[cfg(test)]
     pub async fn latest_ready_artifact_for_output(
         &self,
         source_hash: &str,
@@ -1577,37 +1601,6 @@ impl Database {
         .fetch_optional(&self.pool)
         .await
         .map(|row| row.map(artifact_record_from_v2_row))
-    }
-
-    pub async fn latest_artifact_set_for_output(
-        &self,
-        source_hash: &str,
-        config_hash: &str,
-        options_hash: &str,
-        output_kind: &str,
-    ) -> sqlx::Result<Option<ArtifactSetRecord>> {
-        sqlx::query(
-            r#"
-            SELECT artifact_set_hash, source_hash, config_hash, options_hash, request_hash,
-                   raw_payload_hash, postprocess_hash, output_kind, format, status,
-                   primary_object_key, metadata_json, created_at, updated_at,
-                   superseded_at, superseded_by, supersession_reason
-            FROM artifact_sets
-            WHERE source_hash = ?
-              AND config_hash = ?
-              AND options_hash = ?
-              AND output_kind = ?
-            ORDER BY updated_at DESC, created_at DESC, artifact_set_hash DESC
-            LIMIT 1
-            "#,
-        )
-        .bind(source_hash)
-        .bind(config_hash)
-        .bind(options_hash)
-        .bind(output_kind)
-        .fetch_optional(&self.pool)
-        .await
-        .map(|row| row.map(artifact_set_record_from_row))
     }
 
     pub async fn supersede_artifact(&self, artifact_key: &str) -> sqlx::Result<bool> {
@@ -1701,6 +1694,7 @@ impl Database {
         Ok(())
     }
 
+    #[cfg(test)]
     pub async fn publish_artifact(
         &self,
         artifact: ArtifactUpsert<'_>,
@@ -1712,6 +1706,7 @@ impl Database {
         Ok(())
     }
 
+    #[cfg(test)]
     pub async fn upsert_artifact(&self, artifact: ArtifactUpsert<'_>) -> sqlx::Result<()> {
         let logical_path = artifact
             .object_key
@@ -1926,6 +1921,7 @@ fn source_resolution_record_from_row(row: sqlx::sqlite::SqliteRow) -> SourceReso
     }
 }
 
+#[cfg(test)]
 fn configuration_selection_record_from_row(
     row: sqlx::sqlite::SqliteRow,
 ) -> ConfigurationSelectionRecord {
@@ -1954,6 +1950,7 @@ fn configuration_encoding_record_from_row(
     }
 }
 
+#[cfg(test)]
 fn export_request_record_from_row(row: sqlx::sqlite::SqliteRow) -> ExportRequestRecord {
     ExportRequestRecord {
         request_hash: row.get("request_hash"),
@@ -2007,6 +2004,7 @@ fn raw_payload_record_from_row(row: sqlx::sqlite::SqliteRow) -> RawPayloadRecord
     }
 }
 
+#[cfg(test)]
 fn postprocess_run_record_from_row(row: sqlx::sqlite::SqliteRow) -> PostprocessRunRecord {
     PostprocessRunRecord {
         postprocess_hash: row.get("postprocess_hash"),

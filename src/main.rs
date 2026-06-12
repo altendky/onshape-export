@@ -1691,16 +1691,15 @@ async fn artifact_status(
 
     let mut selected_job = None;
     for work_key in work_keys {
-        if let Some(job) = state.db.job(work_key).await? {
-            if selected_job
+        if let Some(job) = state.db.job(work_key).await?
+            && selected_job
                 .as_ref()
                 .map(|current: &db::JobRecord| {
                     job_status_priority(&job.status) > job_status_priority(&current.status)
                 })
                 .unwrap_or(true)
-            {
-                selected_job = Some(job);
-            }
+        {
+            selected_job = Some(job);
         }
     }
 
@@ -2975,6 +2974,7 @@ async fn mark_artifact_upload_failed(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn refresh_preview(
     state: &AppState,
     model: &catalog::Model,
@@ -3468,6 +3468,7 @@ fn read_zip_entry(
     Ok(bytes)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn refresh_download(
     state: &AppState,
     model: &catalog::Model,
@@ -3974,6 +3975,7 @@ fn download_work_key(
     )
 }
 
+#[cfg(test)]
 async fn export_status_job_keys(
     state: &AppState,
     source_hash: &str,
