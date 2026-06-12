@@ -57,7 +57,7 @@ const POSTPROCESS_STATUS_STAGED: &str = "staged";
 const POSTPROCESS_STATUS_READY: &str = "ready";
 const POSTPROCESS_STATUS_FAILED: &str = "failed";
 const PREVIEW_POSTPROCESSOR_NAME: &str = "preview_extract";
-const PREVIEW_POSTPROCESSOR_VERSION: &str = "1";
+const PREVIEW_POSTPROCESSOR_VERSION: &str = "2";
 const DOWNLOAD_POSTPROCESSOR_NAME: &str = "download_identity";
 const DOWNLOAD_POSTPROCESSOR_VERSION: &str = "1";
 const STRICT_UPLOAD_VERIFICATION: bool = false;
@@ -3208,9 +3208,11 @@ fn preview_artifact_from_gltf_zip(
     };
     let primary_name = safe_zip_asset_name(archive.by_index(primary_index)?.name())?;
     let primary_bytes = read_zip_entry(&mut archive, primary_index)?;
-    validate_gltf_json(&primary_bytes).context("validating zipped glTF preview JSON")?;
+    let referenced_assets = referenced_gltf_sidecar_assets(&primary_name, &primary_bytes)
+        .context("validating zipped glTF preview JSON")?;
 
     let mut sidecars = Vec::new();
+    let mut sidecar_paths = HashSet::new();
     for index in 0..archive.len() {
         if index == primary_index {
             continue;
@@ -3222,6 +3224,7 @@ fn preview_artifact_from_gltf_zip(
         let asset_name = safe_zip_asset_name(file.name())?;
         let mut bytes = Vec::with_capacity(file.size() as usize);
         file.read_to_end(&mut bytes)?;
+        sidecar_paths.insert(asset_name.clone());
         sidecars.push(PreviewAsset {
             role: "sidecar",
             logical_path: asset_name.clone(),
@@ -3231,6 +3234,13 @@ fn preview_artifact_from_gltf_zip(
         });
     }
 
+    for referenced_asset in referenced_assets {
+        anyhow::ensure!(
+            sidecar_paths.contains(&referenced_asset),
+            "glTF preview ZIP is missing referenced sidecar asset: {referenced_asset}"
+        );
+    }
+
     Ok(PreviewArtifact {
         logical_path: primary_name.clone(),
         original_path: Some(primary_name.clone()),
@@ -3238,6 +3248,97 @@ fn preview_artifact_from_gltf_zip(
         bytes: primary_bytes,
         sidecars,
     })
+}
+
+fn referenced_gltf_sidecar_assets(
+    primary_name: &str,
+    bytes: &[u8],
+) -> anyhow::Result<HashSet<String>> {
+    let value = serde_json::from_slice::<Value>(bytes)?;
+    anyhow::ensure!(
+        value
+            .get("asset")
+            .and_then(|asset| asset.get("version"))
+            .and_then(Value::as_str)
+            .is_some(),
+        "glTF JSON did not include asset.version"
+    );
+
+    let mut assets = HashSet::new();
+    collect_gltf_uri_references(primary_name, value.get("buffers"), "buffer", &mut assets)?;
+    collect_gltf_uri_references(primary_name, value.get("images"), "image", &mut assets)?;
+    Ok(assets)
+}
+
+fn collect_gltf_uri_references(
+    primary_name: &str,
+    values: Option<&Value>,
+    kind: &str,
+    assets: &mut HashSet<String>,
+) -> anyhow::Result<()> {
+    let Some(values) = values.and_then(Value::as_array) else {
+        return Ok(());
+    };
+    for value in values {
+        let Some(uri) = value.get("uri").and_then(Value::as_str) else {
+            continue;
+        };
+        let normalized = normalize_gltf_reference_uri(primary_name, uri)
+            .with_context(|| format!("glTF {kind} URI is unsupported: {uri}"))?;
+        assets.insert(normalized);
+    }
+    Ok(())
+}
+
+fn normalize_gltf_reference_uri(primary_name: &str, uri: &str) -> anyhow::Result<String> {
+    anyhow::ensure!(!uri.is_empty(), "URI is empty");
+    anyhow::ensure!(
+        uri == uri.trim(),
+        "URI must not have surrounding whitespace"
+    );
+    let lower = uri.to_ascii_lowercase();
+    anyhow::ensure!(
+        !lower.starts_with("data:"),
+        "data URI sidecars are not supported"
+    );
+    anyhow::ensure!(
+        !uri.contains("://"),
+        "external URI sidecars are not supported"
+    );
+    anyhow::ensure!(
+        !uri.starts_with('/') && !uri.starts_with('\\'),
+        "absolute sidecar paths are not supported"
+    );
+    anyhow::ensure!(
+        !uri.contains('\\'),
+        "backslash sidecar paths are not supported"
+    );
+    anyhow::ensure!(
+        !uri.contains('?') && !uri.contains('#'),
+        "URI query and fragment components are not supported"
+    );
+
+    let mut parts = Vec::new();
+    if let Some(parent) = std::path::Path::new(primary_name).parent() {
+        for component in parent.components() {
+            if let std::path::Component::Normal(part) = component {
+                parts.push(part.to_string_lossy().into_owned());
+            }
+        }
+    }
+    for part in uri.split('/') {
+        anyhow::ensure!(!part.is_empty(), "URI contains an empty path segment");
+        anyhow::ensure!(
+            part != "." && part != "..",
+            "URI contains an unsafe path segment"
+        );
+        anyhow::ensure!(
+            !part.chars().any(char::is_control),
+            "URI contains control characters"
+        );
+        parts.push(part.to_owned());
+    }
+    Ok(parts.join("/"))
 }
 
 fn largest_zip_entry(
@@ -5506,6 +5607,86 @@ mod tests {
                 .sidecars
                 .iter()
                 .any(|sidecar| sidecar.logical_path == "scene.bin")
+        );
+    }
+
+    #[test]
+    fn extracts_nested_gltf_asset_set_from_zipped_preview_exports() {
+        let bytes = test_zip(&[
+            (
+                "scene/model.gltf",
+                br#"{"asset":{"version":"2.0"},"buffers":[{"uri":"scene.bin"}],"images":[{"uri":"textures/albedo.png"}]}"#.as_slice(),
+            ),
+            ("scene/scene.bin", b"loose buffer".as_slice()),
+            ("scene/textures/albedo.png", b"png".as_slice()),
+        ]);
+
+        let artifact = preview_artifact_from_onshape_bytes(bytes).unwrap();
+
+        assert_eq!(artifact.logical_path, "scene/model.gltf");
+        assert!(
+            artifact
+                .sidecars
+                .iter()
+                .any(|sidecar| sidecar.logical_path == "scene/scene.bin")
+        );
+        assert!(
+            artifact
+                .sidecars
+                .iter()
+                .any(|sidecar| sidecar.logical_path == "scene/textures/albedo.png")
+        );
+    }
+
+    #[test]
+    fn rejects_gltf_zip_with_missing_referenced_sidecars() {
+        let bytes = test_zip(&[(
+            "scene.gltf",
+            br#"{"asset":{"version":"2.0"},"buffers":[{"uri":"scene.bin"}]}"#.as_slice(),
+        )]);
+
+        let error = preview_artifact_from_onshape_bytes(bytes).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("missing referenced sidecar asset: scene.bin")
+        );
+    }
+
+    #[test]
+    fn rejects_gltf_zip_with_unsafe_referenced_sidecar_paths() {
+        let bytes = test_zip(&[
+            (
+                "scene/model.gltf",
+                br#"{"asset":{"version":"2.0"},"buffers":[{"uri":"../scene.bin"}]}"#.as_slice(),
+            ),
+            ("scene.bin", b"loose buffer".as_slice()),
+        ]);
+
+        let error = preview_artifact_from_onshape_bytes(bytes).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("validating zipped glTF preview JSON")
+        );
+    }
+
+    #[test]
+    fn rejects_gltf_zip_with_data_uri_sidecars() {
+        let bytes = test_zip(&[(
+            "scene.gltf",
+            br#"{"asset":{"version":"2.0"},"images":[{"uri":"data:image/png;base64,AAAA"}]}"#
+                .as_slice(),
+        )]);
+
+        let error = preview_artifact_from_onshape_bytes(bytes).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("validating zipped glTF preview JSON")
         );
     }
 
