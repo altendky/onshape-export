@@ -175,11 +175,9 @@ impl OnshapeClient {
         );
         let mut url = self.base_url.clone();
         url.set_path(&path);
-        match &source.link_document_id {
-            Some(link_document_id) => {
-                url.set_query(Some(&format!("linkDocumentId={link_document_id}")))
-            }
-            None => url.set_query(None),
+        if let Some(link_document_id) = &source.link_document_id {
+            url.query_pairs_mut()
+                .append_pair("linkDocumentId", link_document_id);
         }
 
         let mut headers = signed_headers(
@@ -222,11 +220,17 @@ impl OnshapeClient {
             "Onshape credentials are not configured"
         );
 
-        let (path, query, body) = configuration_encoding_request(source, values);
+        let (path, body) = configuration_encoding_request(source, values);
         let request_json = serde_json::to_string(&body)?;
         let mut url = self.base_url.clone();
         url.set_path(&path);
-        url.set_query(Some(&query));
+        url.query_pairs_mut()
+            .append_pair("versionId", &source.version_id);
+        if let Some(link_document_id) = &source.link_document_id {
+            url.query_pairs_mut()
+                .append_pair("linkDocumentId", link_document_id);
+        }
+        let query = url.query().unwrap_or_default().to_owned();
 
         let mut headers = self.signed_json_headers(Method::POST, url.path(), &query)?;
         headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
@@ -533,17 +537,11 @@ fn api_host_class(base_url: &Url) -> String {
 fn configuration_encoding_request(
     source: &OnshapeSource,
     values: &BTreeMap<String, String>,
-) -> (String, String, Value) {
+) -> (String, Value) {
     let path = format!(
         "/api/elements/d/{}/e/{}/configurationencodings",
         source.document_id, source.element_id
     );
-
-    let mut query = format!("versionId={}", source.version_id);
-    if let Some(link_document_id) = &source.link_document_id {
-        query.push_str("&linkDocumentId=");
-        query.push_str(link_document_id);
-    }
 
     let parameters = values
         .keys()
@@ -555,7 +553,7 @@ fn configuration_encoding_request(
         })
         .collect::<Vec<_>>();
 
-    (path, query, json!({ "parameters": parameters }))
+    (path, json!({ "parameters": parameters }))
 }
 
 fn parse_configuration_encoding_response(
@@ -1018,7 +1016,7 @@ mod tests {
     }
 
     #[test]
-    fn configuration_encoding_request_uses_version_query_and_sorted_parameters() {
+    fn configuration_encoding_request_uses_sorted_parameters() {
         let source = OnshapeSource {
             document_id: "did".to_owned(),
             version_id: "vid".to_owned(),
@@ -1031,10 +1029,9 @@ mod tests {
             ("enabled".to_owned(), "true".to_owned()),
         ]);
 
-        let (path, query, body) = configuration_encoding_request(&source, &values);
+        let (path, body) = configuration_encoding_request(&source, &values);
 
         assert_eq!(path, "/api/elements/d/did/e/eid/configurationencodings");
-        assert_eq!(query, "versionId=vid&linkDocumentId=ldid");
         assert_eq!(
             body,
             json!({
@@ -1050,6 +1047,29 @@ mod tests {
                 ]
             })
         );
+    }
+
+    #[test]
+    fn source_queries_are_url_encoded_before_signing() {
+        let mut configuration_url = Url::parse("https://cad.onshape.com").unwrap();
+        configuration_url.set_path("/api/elements/d/did/e/eid/configurationencodings");
+        configuration_url
+            .query_pairs_mut()
+            .append_pair("versionId", "vid&= value")
+            .append_pair("linkDocumentId", "ld/id?");
+
+        assert_eq!(
+            configuration_url.query(),
+            Some("versionId=vid%26%3D+value&linkDocumentId=ld%2Fid%3F")
+        );
+
+        let mut version_url = Url::parse("https://cad.onshape.com").unwrap();
+        version_url.set_path("/api/documents/d/did/versions/vid");
+        version_url
+            .query_pairs_mut()
+            .append_pair("linkDocumentId", "ld/id?");
+
+        assert_eq!(version_url.query(), Some("linkDocumentId=ld%2Fid%3F"));
     }
 
     #[test]
