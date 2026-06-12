@@ -66,7 +66,7 @@ Implemented foundation:
 - Strict GLB preview artifact handling.
 - Supersession-based artifact invalidation and pruning.
 - Worker-only runtime mode and configurable worker concurrency.
-- CLI maintenance commands for catalog validation, parameter refresh, pre-generation, job/failure inspection and retry, artifact inspection/invalidation, pruning, and manifest inspection.
+- CLI maintenance commands for catalog validation, parameter refresh, pre-generation, job/failure inspection and retry, artifact inspection/invalidation, and pruning.
 - Catalog-defined parameter presets, UI overrides, preview options, and STEP export option defaults.
 - Deploy-time `ops check` and operator-triggered SQLite backup snapshots.
 - Temporary placeholder GitHub Actions job named exactly `all`.
@@ -176,16 +176,16 @@ Implemented on branch:
 - Public URL generation.
 - Preview and download uploads.
 - Content type and download content disposition for downloads.
-- Manifest materialization from SQLite artifact records.
-- v1 object keys for parameter metadata, previews, downloads, and manifests.
+- DB-backed artifact/status state for cached outputs.
+- Versioned object keys for parameter metadata, previews, and downloads.
 - Ready artifact metadata including public URL, SHA-256, byte length, source/options hashes, producing job key, and supersession state.
-- Manifest inspection and rewrite CLI.
+- Artifact inspection, invalidation, and pruning CLI.
 
 TODO gaps:
 
 - Verify uploaded objects before marking jobs ready.
 - Add reconciliation for object-store/SQLite drift.
-- Materialize missing outputs, replacement pointers, and full supersession history in manifests.
+- If public manifests return later, materialize missing outputs, replacement pointers, and full supersession history from DB state.
 - Store content disposition in SQLite if operations need it outside object metadata.
 
 ## Phase 5: Onshape Auth And Metadata Read Path
@@ -217,7 +217,7 @@ Implemented on branch:
 
 - Preview generation route and status route.
 - Server-side parameter validation before enqueue.
-- Worker export request, polling, external data download, Tigris upload, artifact record, and manifest rewrite.
+- Worker export request, polling, external data download, Tigris upload, artifact record, and DB-backed readiness update.
 - `<model-viewer>` rendering for cached preview URLs.
 - Status polling in the product page.
 - GLB preview extraction from direct and zipped Onshape responses, plus single-asset zipped glTF fallback when Onshape does not return GLB.
@@ -262,7 +262,6 @@ Implemented on branch:
 - `failures list`.
 - `failures retry`.
 - `artifacts list`.
-- `artifacts manifest`.
 - `artifacts invalidate`.
 - `artifacts prune`.
 - `ops check`.

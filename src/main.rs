@@ -45,7 +45,6 @@ use crate::{
 };
 
 const EXPORTER_VERSION: &str = env!("CARGO_PKG_VERSION");
-const MANIFEST_SCHEMA_VERSION: u32 = 1;
 const PREVIEW_OPTIONS_VERSION: &str = "mesh-grouped-v2";
 const DOWNLOAD_OPTIONS_VERSION: &str = "default-v1";
 const CONFIG_HASH_JOB_VERSION: u32 = 1;
@@ -139,54 +138,6 @@ enum FailureRetrySelector<'a> {
     All,
     Kind(&'a str),
     WorkKey(&'a str),
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ArtifactManifest {
-    manifest_schema_version: u32,
-    group_id: String,
-    model_slug: String,
-    onshape: ManifestOnshapeSource,
-    configuration: ManifestConfiguration,
-    outputs: BTreeMap<String, ManifestOutput>,
-    created_at: Option<String>,
-    exporter_version: &'static str,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ManifestOnshapeSource {
-    document_id: String,
-    version_id: String,
-    element_id: String,
-    element_kind: String,
-    link_document_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ManifestConfiguration {
-    hash: String,
-    values: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ManifestOutput {
-    artifact_key: String,
-    object_key: String,
-    public_url: Option<String>,
-    status: String,
-    content_type: String,
-    size_bytes: Option<i64>,
-    sha256: Option<String>,
-    job_id: Option<String>,
-    source_hash: Option<String>,
-    options_hash: Option<String>,
-    schema_version: Option<i64>,
-    created_at: String,
-    superseded_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -505,34 +456,6 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             );
             Ok(())
         }
-        ("artifacts", [subcommand, slug, config_hash, manifest_args @ ..])
-            if subcommand == "manifest" =>
-        {
-            parse_manifest_options(manifest_args)?;
-            let state = cli_state(config).await?;
-            let model = state
-                .catalog
-                .find(slug)
-                .ok_or_else(|| anyhow::anyhow!("unknown model slug: {slug}"))?;
-            let artifacts = state
-                .db
-                .artifacts_for_configuration(&model.slug, config_hash)
-                .await?;
-            let source_hash = artifacts
-                .first()
-                .and_then(|artifact| artifact.source_hash.clone())
-                .unwrap_or(resolve_source_hash(&state, model).await?);
-            let manifest = build_manifest(
-                &source_hash,
-                model,
-                config_hash,
-                None,
-                &artifacts,
-                state.storage.public_base_url(),
-            );
-            println!("{}", serde_json::to_string_pretty(&manifest)?);
-            Ok(())
-        }
         ("artifacts", [subcommand, selector, prune_args @ ..]) if subcommand == "prune" => {
             let options = parse_prune_options(prune_args)?;
             let state = cli_state(config).await?;
@@ -729,14 +652,6 @@ fn parse_prune_options(args: &[String]) -> anyhow::Result<PruneOptions> {
             .ok_or_else(|| anyhow::anyhow!("--older-than-days is required"))?,
         dry_run,
     })
-}
-
-fn parse_manifest_options(args: &[String]) -> anyhow::Result<()> {
-    if let Some(arg) = args.first() {
-        anyhow::bail!("unknown manifest option: {arg}");
-    }
-
-    Ok(())
 }
 
 async fn cli_state(config: Config) -> anyhow::Result<AppState> {
@@ -1032,7 +947,7 @@ fn validated_parameter_set(
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export ops check\n  onshape-export ops backup <destination.db>\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export jobs list [--json]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts manifest <slug> <config-hash>\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
+        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export ops check\n  onshape-export ops backup <destination.db>\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export jobs list [--json]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
     );
 }
 
@@ -3768,76 +3683,6 @@ async fn supersede_published_artifact(
     Ok(())
 }
 
-fn build_manifest(
-    source_hash: &str,
-    model: &catalog::Model,
-    config_hash: &str,
-    values: Option<&HashMap<String, String>>,
-    artifacts: &[db::ArtifactRecord],
-    public_base_url: Option<&str>,
-) -> ArtifactManifest {
-    let configuration_values = values
-        .map(cache_model::canonical_values)
-        .unwrap_or_else(|| manifest_values_from_artifacts(artifacts));
-    let outputs = artifacts
-        .iter()
-        .map(|artifact| {
-            (
-                artifact.output_kind.clone(),
-                ManifestOutput {
-                    artifact_key: artifact.artifact_key.clone(),
-                    object_key: artifact.object_key.clone(),
-                    public_url: public_base_url
-                        .map(|base| public_url_from_base(base, &artifact.object_key)),
-                    status: artifact.status.clone(),
-                    content_type: artifact.content_type.clone(),
-                    size_bytes: artifact.byte_len,
-                    sha256: artifact.sha256.clone(),
-                    job_id: artifact.producing_job_key.clone(),
-                    source_hash: artifact.source_hash.clone(),
-                    options_hash: artifact.options_hash.clone(),
-                    schema_version: artifact.parameter_schema_version,
-                    created_at: artifact.created_at.clone(),
-                    superseded_at: artifact.superseded_at.clone(),
-                },
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let created_at = artifacts
-        .iter()
-        .map(|artifact| artifact.created_at.as_str())
-        .min()
-        .map(str::to_owned);
-
-    ArtifactManifest {
-        manifest_schema_version: MANIFEST_SCHEMA_VERSION,
-        group_id: manifest_group_id(source_hash, config_hash),
-        model_slug: model.slug.clone(),
-        onshape: ManifestOnshapeSource {
-            document_id: model.onshape.document_id.clone(),
-            version_id: model.onshape.version_id.clone(),
-            element_id: model.onshape.element_id.clone(),
-            element_kind: model.onshape.element_kind.key().to_owned(),
-            link_document_id: model.onshape.link_document_id.clone(),
-        },
-        configuration: ManifestConfiguration {
-            hash: config_hash.to_owned(),
-            values: configuration_values,
-        },
-        outputs,
-        created_at,
-        exporter_version: EXPORTER_VERSION,
-    }
-}
-
-fn manifest_values_from_artifacts(artifacts: &[db::ArtifactRecord]) -> BTreeMap<String, String> {
-    artifacts
-        .iter()
-        .filter_map(|artifact| artifact.config_values_json.as_deref())
-        .find_map(|values| serde_json::from_str(values).ok())
-        .unwrap_or_default()
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WorkKeyPayload {
@@ -3848,10 +3693,6 @@ struct WorkKeyPayload {
     options_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     format: Option<&'static str>,
-}
-
-fn manifest_group_id(source_hash: &str, config_hash: &str) -> String {
-    format!("group-v1:{source_hash}:{config_hash}")
 }
 
 fn parameter_refresh_work_key(source_hash: &str) -> String {
@@ -4130,30 +3971,6 @@ fn download_filename(model: &catalog::Model, format: catalog::DownloadFormat) ->
     )
 }
 
-fn public_url_from_base(base: &str, object_key: &str) -> String {
-    format!(
-        "{}/{}",
-        base.trim_end_matches('/'),
-        object_key
-            .split('/')
-            .map(url_path_segment)
-            .collect::<Vec<_>>()
-            .join("/")
-    )
-}
-
-fn url_path_segment(value: &str) -> String {
-    value
-        .bytes()
-        .flat_map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                vec![byte as char]
-            }
-            byte => format!("%{byte:02X}").chars().collect(),
-        })
-        .collect()
-}
-
 fn preview_status_path(model: &catalog::Model, config_hash: &str) -> String {
     format!("/models/{}/preview/{config_hash}/status", model.slug)
 }
@@ -4351,8 +4168,8 @@ where
 
 fn work_key(kind: &'static str, payload: &WorkKeyPayload) -> String {
     format!(
-        "work-v1:{kind}:{}",
-        cache_key::hash_json("work-v1", payload).expect("work key payload serializes")
+        "work-v2:{kind}:{}",
+        cache_key::hash_json("work-v2", payload).expect("work key payload serializes")
     )
 }
 
@@ -5498,75 +5315,6 @@ mod tests {
     }
 
     #[test]
-    fn builds_manifest_with_outputs_by_kind() {
-        let model = test_model();
-        let values = HashMap::from([("width".to_owned(), "10".to_owned())]);
-        let artifacts = vec![db::ArtifactRecord {
-            artifact_key: "download-step:model:key".to_owned(),
-            model_slug: model.slug.clone(),
-            config_hash: "abc".to_owned(),
-            output_kind: "step".to_owned(),
-            status: "ready".to_owned(),
-            object_key: "artifacts/demo/file.step".to_owned(),
-            content_type: "model/step".to_owned(),
-            byte_len: Some(42),
-            sha256: Some("abc123".to_owned()),
-            producing_job_key: Some("work-v1:download:abc".to_owned()),
-            source_hash: Some("sourcehash".to_owned()),
-            options_hash: Some("optionshash".to_owned()),
-            parameter_schema_version: Some(SCHEMA_VERSION.into()),
-            config_values_json: Some(r#"{"width":"10"}"#.to_owned()),
-            created_at: "2026-06-09T00:00:00.000Z".to_owned(),
-            superseded_at: None,
-        }];
-
-        let manifest = build_manifest(
-            "sourcehash",
-            &model,
-            "abc",
-            Some(&values),
-            &artifacts,
-            Some("https://cdn.example.com/root"),
-        );
-
-        assert_eq!(manifest.manifest_schema_version, MANIFEST_SCHEMA_VERSION);
-        assert_eq!(manifest.model_slug, "demo");
-        assert_eq!(manifest.onshape.element_kind, "part_studio");
-        assert_eq!(manifest.configuration.values["width"], "10");
-        assert_eq!(
-            manifest.outputs["step"].object_key,
-            "artifacts/demo/file.step"
-        );
-        assert_eq!(manifest.outputs["step"].status, "ready");
-        assert_eq!(manifest.outputs["step"].size_bytes, Some(42));
-        assert_eq!(manifest.outputs["step"].sha256.as_deref(), Some("abc123"));
-        assert_eq!(
-            manifest.outputs["step"].job_id.as_deref(),
-            Some("work-v1:download:abc")
-        );
-        assert_eq!(
-            manifest.outputs["step"].public_url.as_deref(),
-            Some("https://cdn.example.com/root/artifacts/demo/file.step")
-        );
-        assert_eq!(
-            manifest.created_at.as_deref(),
-            Some("2026-06-09T00:00:00.000Z")
-        );
-
-        let rewritten_manifest =
-            build_manifest("sourcehash", &model, "abc", None, &artifacts, None);
-        assert_eq!(rewritten_manifest.configuration.values["width"], "10");
-    }
-
-    #[test]
-    fn public_urls_escape_object_key_segments() {
-        assert_eq!(
-            public_url_from_base("https://cdn.example.com/", "a b/file.step"),
-            "https://cdn.example.com/a%20b/file.step"
-        );
-    }
-
-    #[test]
     fn retry_backoff_uses_capped_full_jitter_windows() {
         for (attempt, max_delay) in [(1, 30), (2, 60), (5, 300), (20, 300)] {
             for _ in 0..50 {
@@ -5603,8 +5351,8 @@ mod tests {
             FailureRetrySelector::All
         );
         assert_eq!(
-            optional_failure_retry_selector(&["work-v1:preview:demo:abc".to_owned()]).unwrap(),
-            FailureRetrySelector::WorkKey("work-v1:preview:demo:abc")
+            optional_failure_retry_selector(&["work-v2:preview:demo:abc".to_owned()]).unwrap(),
+            FailureRetrySelector::WorkKey("work-v2:preview:demo:abc")
         );
         assert_eq!(
             optional_failure_retry_selector(&["--kind".to_owned(), "preview_export".to_owned()])
@@ -5623,13 +5371,6 @@ mod tests {
             Some("small")
         );
         assert!(optional_parameter_selector(&["a".to_owned(), "b".to_owned()]).is_err());
-    }
-
-    #[test]
-    fn parses_manifest_options() {
-        parse_manifest_options(&[]).unwrap();
-        assert!(parse_manifest_options(&["--rewrite".to_owned()]).is_err());
-        assert!(parse_manifest_options(&["--missing".to_owned()]).is_err());
     }
 
     async fn test_state() -> AppState {

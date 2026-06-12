@@ -100,7 +100,7 @@ The product is a public anonymous catalog, so completed GLB, STEP, STL, and 3MF 
 
 Public artifact objects are immutable in normal operation. Exporter, schema, catalog, option, or parameter changes produce new artifact keys and update manifests or index state to point at newer outputs. Older public URLs may remain addressable and can be marked superseded for operational visibility. Deletion is reserved for explicit operator cleanup, legal or IP concerns, or storage-cost management.
 
-Current branch status: `artifacts invalidate` and `artifacts prune` mark ready SQLite artifact records superseded, leave public object-store artifacts untouched, and rewrite manifests from remaining ready records. Destructive deletion remains reserved for a future explicit cleanup command.
+Current branch status: `artifacts invalidate` and `artifacts prune` mark ready SQLite artifact records superseded and leave public object-store artifacts untouched. Destructive deletion remains reserved for a future explicit cleanup command.
 
 ## Admin Surface
 

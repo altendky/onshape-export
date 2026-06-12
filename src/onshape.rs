@@ -252,42 +252,6 @@ impl OnshapeClient {
         })
     }
 
-    pub async fn export_glb(
-        &self,
-        source: &OnshapeSource,
-        configuration: &str,
-        options: &PreviewOptions,
-    ) -> anyhow::Result<Vec<u8>> {
-        let request = self.build_preview_glb_export_request(
-            source,
-            &EncodedConfigurationIdentity {
-                encoded_id: configuration.to_owned(),
-                query_param: format!("configuration={configuration}"),
-            },
-            options,
-        );
-        self.execute_export_request(&request).await
-    }
-
-    pub async fn export_download(
-        &self,
-        source: &OnshapeSource,
-        configuration: &str,
-        format: DownloadFormat,
-        options: &DownloadOptions,
-    ) -> anyhow::Result<Vec<u8>> {
-        let request = self.build_download_export_request(
-            source,
-            &EncodedConfigurationIdentity {
-                encoded_id: configuration.to_owned(),
-                query_param: format!("configuration={configuration}"),
-            },
-            format,
-            options,
-        );
-        self.execute_export_request(&request).await
-    }
-
     pub fn build_preview_glb_export_request(
         &self,
         source: &OnshapeSource,
@@ -335,30 +299,6 @@ impl OnshapeClient {
                 self.build_translation_export_request(source, configuration, format)
             }
         }
-    }
-
-    pub async fn execute_export_request(
-        &self,
-        request: &CanonicalExportRequest,
-    ) -> anyhow::Result<Vec<u8>> {
-        let started = self.start_export_request(request).await?;
-        let polled = self
-            .poll_translation(request.document_id()?, &started.translation_id)
-            .await?;
-        anyhow::ensure!(
-            polled.state == "DONE",
-            "Onshape translation {} failed: {}",
-            started.translation_id,
-            polled
-                .failure_reason
-                .as_deref()
-                .unwrap_or(&polled.final_response_json)
-        );
-        let external_data_id = polled.single_external_data_id()?;
-        Ok(self
-            .download_external_data(request.document_id()?, &external_data_id)
-            .await?
-            .bytes)
     }
 
     fn build_step_export_request(
@@ -843,14 +783,6 @@ fn hex_nibble(byte: u8) -> Option<u8> {
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
     }
-}
-
-fn first_array_string(value: &Value, name: &str) -> Option<String> {
-    value
-        .get(name)?
-        .as_array()?
-        .iter()
-        .find_map(|value| value.as_str().map(ToOwned::to_owned))
 }
 
 fn array_strings(value: &Value, name: &str) -> Vec<String> {

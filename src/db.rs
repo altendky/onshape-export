@@ -1453,39 +1453,6 @@ impl Database {
         .map(|rows| rows.into_iter().map(artifact_record_from_v2_row).collect())
     }
 
-    pub async fn artifacts_for_configuration(
-        &self,
-        model_slug: &str,
-        config_hash: &str,
-    ) -> sqlx::Result<Vec<ArtifactRecord>> {
-        sqlx::query(
-            r#"
-            SELECT artifact_sets.artifact_set_hash AS artifact_key,
-                   artifact_sets.config_hash,
-                   artifact_sets.output_kind,
-                   artifact_sets.status,
-                   artifact_sets.primary_object_key AS object_key,
-                   artifact_sets.source_hash,
-                   artifact_sets.options_hash,
-                   artifact_sets.metadata_json,
-                   artifact_sets.created_at,
-                   artifact_sets.superseded_at,
-                   artifact_files.content_type,
-                   artifact_files.byte_len,
-                   artifact_files.sha256
-            FROM artifact_sets
-            LEFT JOIN artifact_files ON artifact_files.object_key = artifact_sets.primary_object_key
-            WHERE json_extract(artifact_sets.metadata_json, '$.modelSlug') = ? AND artifact_sets.config_hash = ? AND artifact_sets.status = 'ready'
-            ORDER BY artifact_sets.output_kind
-            "#,
-        )
-        .bind(model_slug)
-        .bind(config_hash)
-        .fetch_all(&self.pool)
-        .await
-        .map(|rows| rows.into_iter().map(artifact_record_from_v2_row).collect())
-    }
-
     pub async fn latest_ready_artifact_for_output(
         &self,
         source_hash: &str,
@@ -1829,27 +1796,6 @@ impl Database {
         pool.execute("PRAGMA foreign_keys = ON").await?;
         pool.execute("PRAGMA busy_timeout = 5000").await?;
         Ok(())
-    }
-}
-
-fn artifact_record_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactRecord {
-    ArtifactRecord {
-        artifact_key: row.get("artifact_key"),
-        model_slug: row.get("model_slug"),
-        config_hash: row.get("config_hash"),
-        output_kind: row.get("output_kind"),
-        status: row.get("status"),
-        object_key: row.get("object_key"),
-        content_type: row.get("content_type"),
-        byte_len: row.get("byte_len"),
-        sha256: row.get("sha256"),
-        producing_job_key: row.get("producing_job_key"),
-        source_hash: row.get("source_hash"),
-        options_hash: row.get("options_hash"),
-        parameter_schema_version: row.get("parameter_schema_version"),
-        config_values_json: row.get("config_values_json"),
-        created_at: row.get("created_at"),
-        superseded_at: row.get("superseded_at"),
     }
 }
 
