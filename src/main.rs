@@ -45,7 +45,6 @@ use crate::{
     storage::StorageClient,
 };
 
-const EXPORTER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PREVIEW_OPTIONS_VERSION: &str = "mesh-grouped-v2";
 const DOWNLOAD_OPTIONS_VERSION: &str = "default-v1";
 const CONFIG_HASH_JOB_VERSION: u32 = 1;
@@ -2508,6 +2507,12 @@ async fn execute_staged_export_request(
             .onshape
             .poll_translation(request.document_id()?, &translation.translation_id)
             .await?;
+        let response_hash = translation_response_hash(
+            &translation.translation_id,
+            translation.start_response_json.as_deref().unwrap_or("{}"),
+            &polled.final_response_json,
+            &polled.poll_state_json,
+        )?;
         state
             .db
             .update_translation_final(TranslationFinalUpdate {
@@ -2519,7 +2524,7 @@ async fn execute_staged_export_request(
                     &polled.result_external_data_ids,
                 )?,
                 result_element_ids_json: &serde_json::to_string(&polled.result_element_ids)?,
-                response_hash: Some(&polled.response_hash),
+                response_hash: Some(&response_hash),
                 failure_reason: polled.failure_reason.as_deref(),
             })
             .await?;
@@ -2580,6 +2585,12 @@ async fn start_and_download_translation(
         .onshape
         .poll_translation(request.document_id()?, &started.translation_id)
         .await?;
+    let response_hash = translation_response_hash(
+        &started.translation_id,
+        &started.response_json,
+        &polled.final_response_json,
+        &polled.poll_state_json,
+    )?;
     state
         .db
         .update_translation_final(TranslationFinalUpdate {
@@ -2591,7 +2602,7 @@ async fn start_and_download_translation(
                 &polled.result_external_data_ids,
             )?,
             result_element_ids_json: &serde_json::to_string(&polled.result_element_ids)?,
-            response_hash: Some(&polled.response_hash),
+            response_hash: Some(&response_hash),
             failure_reason: polled.failure_reason.as_deref(),
         })
         .await?;
@@ -2728,6 +2739,21 @@ fn persisted_result_external_data_id(
 
 fn parse_json_string_vec(json: &str) -> anyhow::Result<Vec<String>> {
     Ok(serde_json::from_str(json)?)
+}
+
+fn translation_response_hash(
+    translation_id: &str,
+    start_response_json: &str,
+    final_response_json: &str,
+    poll_state_json: &str,
+) -> anyhow::Result<String> {
+    cache_model::response_hash(&cache_model::ResponseIdentity {
+        translation_id: translation_id.to_owned(),
+        start_response: serde_json::from_str::<Value>(start_response_json)?,
+        final_response: serde_json::from_str::<Value>(final_response_json)?,
+        poll_state: serde_json::from_str::<Value>(poll_state_json)?,
+        response_shape_version: cache_model::RESPONSE_SHAPE_VERSION,
+    })
 }
 
 async fn persist_downloaded_raw_payload(
@@ -4342,8 +4368,7 @@ fn options_hash<T>(format: &str, options_version: &'static str, options: &T) -> 
 where
     T: Serialize,
 {
-    cache_model::options_hash(format, EXPORTER_VERSION, options_version, options)
-        .expect("export options serialize")
+    cache_model::options_hash(format, options_version, options).expect("export options serialize")
 }
 
 fn work_key(kind: &'static str, payload: &WorkKeyPayload) -> String {

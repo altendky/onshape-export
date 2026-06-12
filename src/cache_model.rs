@@ -112,7 +112,6 @@ struct ConfigHashPayload<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OptionsHashPayload<'a, T> {
-    exporter_version: &'static str,
     options_version: &'static str,
     format: &'a str,
     options: &'a T,
@@ -160,7 +159,6 @@ pub fn parameter_schema_hash(schema: &ParameterSchema) -> anyhow::Result<String>
 
 pub fn options_hash<T>(
     format: &str,
-    exporter_version: &'static str,
     options_version: &'static str,
     options: &T,
 ) -> anyhow::Result<String>
@@ -170,7 +168,6 @@ where
     cache_key::hash_json(
         "options-v2",
         &OptionsHashPayload {
-            exporter_version,
             options_version,
             format,
             options,
@@ -366,6 +363,44 @@ mod tests {
         assert_ne!(
             response_hash(&first).unwrap(),
             response_hash(&second).unwrap()
+        );
+    }
+
+    #[test]
+    fn response_hash_uses_canonical_response_v2_payload() {
+        let first = ResponseIdentity {
+            translation_id: "translation-1".to_owned(),
+            start_response: json!({"b": 2, "a": 1}),
+            final_response: json!({"requestState": "DONE", "resultExternalDataIds": ["fid"]}),
+            poll_state: json!({"state": "DONE", "resultExternalDataIds": ["fid"]}),
+            response_shape_version: RESPONSE_SHAPE_VERSION,
+        };
+        let second = ResponseIdentity {
+            start_response: json!({"a": 1, "b": 2}),
+            ..first.clone()
+        };
+
+        assert_eq!(
+            response_hash(&first).unwrap(),
+            response_hash(&second).unwrap()
+        );
+    }
+
+    #[test]
+    fn options_hash_excludes_exporter_package_version() {
+        let options = json!({"resolution": "MEDIUM"});
+
+        assert_eq!(
+            options_hash("glb", "mesh-grouped-v2", &options).unwrap(),
+            cache_key::hash_json(
+                "options-v2",
+                &json!({
+                    "optionsVersion": "mesh-grouped-v2",
+                    "format": "glb",
+                    "options": {"resolution": "MEDIUM"}
+                })
+            )
+            .unwrap()
         );
     }
 

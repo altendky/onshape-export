@@ -432,15 +432,24 @@ impl Database {
     ) -> sqlx::Result<Option<SourceResolutionRecord>> {
         sqlx::query(
             r#"
-            SELECT source_hash, model_slug, document_id, version_id, microversion_id,
-                   element_id, element_kind, link_document_id, diagnostics_json,
-                   created_at, updated_at
-            FROM source_resolutions
-            WHERE document_id = ?
-              AND version_id = ?
-              AND element_id = ?
-              AND element_kind = ?
-              AND ifnull(link_document_id, '') = ifnull(?, '')
+            SELECT source_resolutions.source_hash AS source_hash,
+                   source_resolutions.model_slug AS model_slug,
+                   source_resolution_aliases.document_id AS document_id,
+                   source_resolution_aliases.version_id AS version_id,
+                   source_resolutions.microversion_id AS microversion_id,
+                   source_resolution_aliases.element_id AS element_id,
+                   source_resolution_aliases.element_kind AS element_kind,
+                   source_resolution_aliases.link_document_id AS link_document_id,
+                   source_resolutions.diagnostics_json AS diagnostics_json,
+                   source_resolutions.created_at AS created_at,
+                   source_resolutions.updated_at AS updated_at
+            FROM source_resolution_aliases
+            JOIN source_resolutions USING (source_hash)
+            WHERE source_resolution_aliases.document_id = ?
+              AND source_resolution_aliases.version_id = ?
+              AND source_resolution_aliases.element_id = ?
+              AND source_resolution_aliases.element_kind = ?
+              AND ifnull(source_resolution_aliases.link_document_id, '') = ifnull(?, '')
             "#,
         )
         .bind(document_id)
@@ -457,6 +466,7 @@ impl Database {
         &self,
         resolution: SourceResolutionUpsert<'_>,
     ) -> sqlx::Result<()> {
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             r#"
             INSERT INTO source_resolutions (
@@ -467,7 +477,6 @@ impl Database {
             ON CONFLICT(source_hash) DO UPDATE SET
                 model_slug = excluded.model_slug,
                 document_id = excluded.document_id,
-                version_id = excluded.version_id,
                 microversion_id = excluded.microversion_id,
                 element_id = excluded.element_id,
                 element_kind = excluded.element_kind,
@@ -485,8 +494,28 @@ impl Database {
         .bind(resolution.element_kind)
         .bind(resolution.link_document_id)
         .bind(resolution.diagnostics_json)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO source_resolution_aliases (
+                document_id, version_id, element_id, element_kind, link_document_id, source_hash
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT DO UPDATE SET
+                source_hash = excluded.source_hash,
+                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            "#,
+        )
+        .bind(resolution.document_id)
+        .bind(resolution.version_id)
+        .bind(resolution.element_id)
+        .bind(resolution.element_kind)
+        .bind(resolution.link_document_id)
+        .bind(resolution.source_hash)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -2576,6 +2605,33 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(by_version.source_hash, "sourcehash");
+
+        db.upsert_source_resolution(SourceResolutionUpsert {
+            source_hash: "sourcehash",
+            model_slug: "demo",
+            document_id: "did",
+            version_id: "vid-alias",
+            microversion_id: "mid",
+            element_id: "eid",
+            element_kind: "part_studio",
+            link_document_id: None,
+            diagnostics_json: r#"{"microversionId":"mid"}"#,
+        })
+        .await
+        .unwrap();
+
+        let first_alias = db
+            .source_resolution_for_version("did", "vid", "eid", "part_studio", None)
+            .await
+            .unwrap()
+            .unwrap();
+        let second_alias = db
+            .source_resolution_for_version("did", "vid-alias", "eid", "part_studio", None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first_alias.source_hash, "sourcehash");
+        assert_eq!(second_alias.source_hash, "sourcehash");
     }
 
     #[tokio::test]

@@ -11,7 +11,6 @@ use reqwest::Url;
 use serde_json::{Value, json};
 use sha2::Sha256;
 
-use crate::cache_key;
 use crate::config::OnshapeConfig;
 use crate::{
     cache_model::{EncodedConfigurationIdentity, RequestIdentity, ResolvedOnshapeSourceIdentity},
@@ -82,7 +81,6 @@ pub struct PolledTranslation {
     pub poll_state_json: String,
     pub result_external_data_ids: Vec<String>,
     pub result_element_ids: Vec<String>,
-    pub response_hash: String,
     pub failure_reason: Option<String>,
 }
 
@@ -603,7 +601,6 @@ fn parse_polled_translation(response: &Value) -> anyhow::Result<PolledTranslatio
     Ok(PolledTranslation {
         state,
         poll_state_json: final_response_json.clone(),
-        response_hash: cache_key::hex_sha256(final_response_json.as_bytes()),
         final_response_json,
         result_external_data_ids,
         result_element_ids,
