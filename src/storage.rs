@@ -133,8 +133,11 @@ impl StorageClient {
             .key(key)
             .send()
             .await?;
+        let content_length = output
+            .content_length
+            .ok_or_else(|| anyhow::anyhow!("missing content_length in HEAD response for key: {key}"))?;
         Ok(ObjectMetadata {
-            content_length: output.content_length.unwrap_or_default(),
+            content_length,
             content_type: output.content_type,
         })
     }
