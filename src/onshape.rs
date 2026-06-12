@@ -217,7 +217,7 @@ impl OnshapeClient {
     pub async fn encode_configuration(
         &self,
         source: &OnshapeSource,
-        values: &std::collections::HashMap<String, String>,
+        values: &BTreeMap<String, String>,
     ) -> anyhow::Result<EncodedConfiguration> {
         anyhow::ensure!(
             self.has_credentials(),
@@ -534,7 +534,7 @@ fn api_host_class(base_url: &Url) -> String {
 
 fn configuration_encoding_request(
     source: &OnshapeSource,
-    values: &std::collections::HashMap<String, String>,
+    values: &BTreeMap<String, String>,
 ) -> (String, String, Value) {
     let path = format!(
         "/api/elements/d/{}/e/{}/configurationencodings",
@@ -547,10 +547,8 @@ fn configuration_encoding_request(
         query.push_str(link_document_id);
     }
 
-    let mut keys = values.keys().collect::<Vec<_>>();
-    keys.sort();
-    let parameters = keys
-        .into_iter()
+    let parameters = values
+        .keys()
         .map(|key| {
             json!({
                 "parameterId": key,
@@ -865,7 +863,7 @@ fn nonce() -> String {
 mod tests {
     use super::*;
     use crate::catalog::ElementKind;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     #[test]
     fn gltf_export_body_requests_grouped_preview() {
@@ -1031,7 +1029,7 @@ mod tests {
             element_kind: ElementKind::PartStudio,
             link_document_id: Some("ldid".to_owned()),
         };
-        let values = HashMap::from([
+        let values = BTreeMap::from([
             ("width".to_owned(), "10 mm".to_owned()),
             ("enabled".to_owned(), "true".to_owned()),
         ]);

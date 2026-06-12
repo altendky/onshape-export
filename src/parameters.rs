@@ -103,6 +103,25 @@ pub enum CanonicalParameterValue {
     },
 }
 
+pub fn encoding_request_values(
+    typed_values: &BTreeMap<String, CanonicalParameterValue>,
+) -> BTreeMap<String, String> {
+    typed_values
+        .iter()
+        .map(|(parameter_id, value)| {
+            let request_value = match value {
+                CanonicalParameterValue::Text { value }
+                | CanonicalParameterValue::Enum { value } => value.clone(),
+                CanonicalParameterValue::Boolean { value } => value.to_string(),
+                CanonicalParameterValue::Number { expression, units } => {
+                    canonical_request_number_value(expression, units.as_deref())
+                }
+            };
+            (parameter_id.clone(), request_value)
+        })
+        .collect()
+}
+
 pub fn normalize_configuration(source: &OnshapeSource, raw: &Value) -> ParameterSchema {
     let parameters = find_parameter_array(raw)
         .map(|items| {
@@ -382,8 +401,8 @@ fn canonicalize_dimensioned_number(
 
     let expression = if let Some(number) = canonical_number_string(trimmed) {
         parameter.configuration_value(&number)
-    } else if is_supported_quantity_expression(trimmed) {
-        trimmed.to_owned()
+    } else if let Some(expression) = canonical_quantity_expression(trimmed) {
+        expression
     } else {
         return None;
     };
@@ -402,25 +421,55 @@ fn canonical_number_string(value: &str) -> Option<String> {
     Some(number.to_string())
 }
 
-fn number_request_value(parameter: &Parameter, value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.parse::<f64>().is_ok() {
-        parameter.configuration_value(trimmed)
-    } else {
-        trimmed.to_owned()
+fn canonical_request_number_value(expression: &str, units: Option<&str>) -> String {
+    let trimmed = expression.trim();
+    if let Some(number) = canonical_number_string(trimmed) {
+        return request_number_with_default_units(&number, units);
+    }
+
+    if let Some(expression) = canonical_quantity_expression(trimmed) {
+        return expression;
+    }
+
+    trimmed.to_owned()
+}
+
+fn canonical_quantity_expression(value: &str) -> Option<String> {
+    let (unit_start, unit) = trailing_quantity_unit(value)?;
+    let number = canonical_number_string(value[..unit_start].trim())?;
+    let unit = canonical_quantity_unit(unit)?;
+    Some(format!("{number} {unit}"))
+}
+
+fn canonical_quantity_unit(unit: &str) -> Option<&'static str> {
+    match unit {
+        "mm" | "millimeter" => Some("mm"),
+        "cm" | "centimeter" => Some("cm"),
+        "m" | "meter" => Some("m"),
+        "in" | "inch" => Some("in"),
+        "ft" | "foot" => Some("ft"),
+        "deg" | "degree" => Some("deg"),
+        "rad" | "radian" => Some("rad"),
+        _ => None,
     }
 }
 
-fn is_supported_quantity_expression(value: &str) -> bool {
-    let Some((unit_start, unit)) = trailing_quantity_unit(value) else {
-        return false;
-    };
-    let prefix = &value[..unit_start];
-    prefix.chars().any(|character| character.is_ascii_digit())
-        && !prefix
-            .chars()
-            .any(|character| character.is_ascii_alphabetic())
-        && is_supported_quantity_unit(unit)
+fn request_number_with_default_units(number: &str, units: Option<&str>) -> String {
+    match units.and_then(onshape_unit_suffix) {
+        Some(unit) => format!("{number} {unit}"),
+        None => number.to_owned(),
+    }
+}
+
+fn number_request_value(parameter: &Parameter, value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.parse::<f64>().is_ok() {
+        request_number_with_default_units(trimmed, parameter.units.as_deref())
+    } else if let Some(expression) = canonical_quantity_expression(trimmed) {
+        expression
+    } else {
+        trimmed.to_owned()
+    }
 }
 
 fn trailing_quantity_unit(value: &str) -> Option<(usize, &str)> {
@@ -434,25 +483,6 @@ fn trailing_quantity_unit(value: &str) -> Option<(usize, &str)> {
         .unwrap_or(0);
     let unit = &trimmed[start..];
     (!unit.is_empty()).then_some((start, unit))
-}
-
-fn is_supported_quantity_unit(unit: &str) -> bool {
-    matches!(
-        unit,
-        "mm" | "cm"
-            | "m"
-            | "in"
-            | "ft"
-            | "deg"
-            | "rad"
-            | "millimeter"
-            | "centimeter"
-            | "meter"
-            | "inch"
-            | "foot"
-            | "degree"
-            | "radian"
-    )
 }
 
 fn range_and_default_message(message: &serde_json::Map<String, Value>) -> Option<&Value> {
@@ -967,7 +997,17 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(compact.values["wallThickness"], "0.125in");
+        assert_eq!(compact.values["wallThickness"], "0.125 in");
+        assert_eq!(compact.typed_values, validated.typed_values);
+
+        let long_unit = validate_values(
+            &schema,
+            &HashMap::from([("wallThickness".to_owned(), "0.125 inch".to_owned())]),
+            false,
+        )
+        .unwrap();
+        assert_eq!(long_unit.values["wallThickness"], "0.125 in");
+        assert_eq!(long_unit.typed_values, validated.typed_values);
     }
 
     #[test]
@@ -1031,6 +1071,55 @@ mod tests {
         assert_eq!(first.values["enabled"], "true");
         assert_eq!(first.values["count"], "01.0");
         assert_eq!(first.typed_values, second.typed_values);
+        assert_eq!(
+            encoding_request_values(&first.typed_values),
+            encoding_request_values(&second.typed_values)
+        );
+    }
+
+    #[test]
+    fn canonicalizes_encoding_request_values_for_dimensioned_numbers() {
+        let schema = ParameterSchema {
+            schema_version: SCHEMA_VERSION,
+            source: source(),
+            parameters: vec![Parameter {
+                id: "wallThickness".to_owned(),
+                label: "Wall Thickness".to_owned(),
+                description: None,
+                kind: ParameterKind::Number,
+                required: true,
+                default_value: None,
+                options: Vec::new(),
+                hidden: false,
+                visibility_condition: None,
+                precision: None,
+                widget: None,
+                units: Some("millimeter".to_owned()),
+                raw: Value::Null,
+            }],
+        };
+
+        let default_units = validate_values(
+            &schema,
+            &HashMap::from([("wallThickness".to_owned(), "1.0".to_owned())]),
+            false,
+        )
+        .unwrap();
+        let explicit_units = validate_values(
+            &schema,
+            &HashMap::from([("wallThickness".to_owned(), "01.000 mm".to_owned())]),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            encoding_request_values(&default_units.typed_values),
+            encoding_request_values(&explicit_units.typed_values)
+        );
+        assert_eq!(
+            encoding_request_values(&default_units.typed_values)["wallThickness"],
+            "1 mm"
+        );
     }
 
     #[test]
