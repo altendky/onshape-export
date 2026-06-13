@@ -6,6 +6,12 @@
       "name": "Onshape Model",
       "description": "Onshape model export test.",
       "published": true
+    },
+    {
+      "slug": "box-slide-print",
+      "name": "Box Slide Print",
+      "description": "Box slide print assembly.",
+      "published": true
     }
   ]
 }
