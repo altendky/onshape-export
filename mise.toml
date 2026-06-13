@@ -1,7 +1,5 @@
 [settings]
-# Disable GitHub attestation verification and increase HTTP timeout to reduce
-# flaky tool installation failures. mise.lock still pins checksums.
-github_attestations = false
+# Increase HTTP timeout to reduce flaky tool installation failures.
 http_timeout = "120s"
 locked = true
 
