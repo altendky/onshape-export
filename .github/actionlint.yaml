@@ -1,0 +1,8 @@
+self-hosted-runner:
+  labels: []
+
+config-variables: null
+
+paths:
+#  .github/workflows/**/*.yml:
+#    ignore: []
