@@ -39,6 +39,8 @@ Initial policy:
 
 Cached preview and download URLs are stable public Tigris artifact URLs. The Fly app should not proxy artifact bytes in the intended production path.
 
+Because the browser viewer fetches preview assets directly from the Tigris public hostname, the Tigris bucket must allow cross-origin `GET` and `HEAD` requests from the public app origin. This applies to direct GLB, direct glTF JSON, and any glTF sidecar assets. Downloads through normal links are less sensitive to CORS, but the same bucket policy covers them harmlessly.
+
 ## User Flow
 
 1. Model page loads default parameters.
