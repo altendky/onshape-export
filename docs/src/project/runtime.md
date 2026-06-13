@@ -131,13 +131,52 @@ Worker concurrency is explicit through `WORKER_CONCURRENCY`. The default is `1`,
 
 The repository includes a Dockerfile and `fly.toml` for the initial Fly deployment. The default config runs one app machine with `WORKER_ENABLED=true`, so public routes and queued work share the same SQLite database on the mounted `/data` volume.
 
+`fly.toml` owns non-secret app configuration, including the Tigris endpoint, bucket name, public artifact base URL, and AWS region. Keep only credentials in Fly secrets. Bucket-level settings such as public access and CORS are Tigris/S3 configuration and cannot be expressed in `fly.toml`.
+
 Create the volume before first deploy:
 
 ```sh
 fly volumes create onshape_export_data --size 1 --region ord
 ```
 
-Set Onshape and Tigris credentials plus `TIGRIS_PUBLIC_BASE_URL` as Fly secrets or environment variables. Change `primary_region` and the volume region together if `ord` is not the intended deployment region.
+Create or confirm the public Tigris bucket. For a new bucket matching the default `fly.toml` values:
+
+```sh
+fly storage create --name onshape-export --public
+```
+
+For an existing bucket, confirm it is public:
+
+```sh
+fly storage status onshape-export
+```
+
+Set Onshape and Tigris credentials as Fly secrets. Do not set non-secret Tigris names, endpoint URLs, public base URLs, or regions as secrets unless they differ from `fly.toml` intentionally:
+
+```sh
+fly secrets set ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...
+```
+
+Change `primary_region` and the volume region together if `ord` is not the intended deployment region. If the app name, bucket name, public Tigris hostname, or local development port changes, update `fly.toml` and `scripts/tigris-cors.json` together.
+
+Set bucket CORS before browser preview testing. The Fly app returns public Tigris URLs for cached previews, and `<model-viewer>` fetches GLB, glTF, and glTF sidecar assets cross-origin. A missing CORS policy can make a ready preview artifact load as an empty viewer in the browser.
+
+After credentials are set, this command runs a temporary AWS CLI machine with the app environment and secrets injected. It applies `scripts/tigris-cors.json` without printing secret values:
+
+```sh
+fly console --image amazon/aws-cli:latest \
+  --file-local /tmp/apply-tigris-cors.sh=scripts/apply-tigris-cors.sh \
+  --file-local /tmp/tigris-cors.json=scripts/tigris-cors.json \
+  -C "sh /tmp/apply-tigris-cors.sh /tmp/tigris-cors.json"
+```
+
+Verify CORS with an existing public preview artifact URL:
+
+```sh
+curl -fsSI -H "Origin: https://onshape-export.fly.dev" "https://onshape-export.t3.tigrisfiles.io/path/to/preview.glb"
+```
+
+The response should include `Access-Control-Allow-Origin: https://onshape-export.fly.dev`. Add any custom production domain and active local development origins to `scripts/tigris-cors.json` before using them.
 
 Run a deploy-time readiness check after setting secrets or changing runtime configuration:
 

@@ -84,12 +84,17 @@ Fly deployment foundation:
 
 ```sh
 fly volumes create onshape_export_data --size 1 --region ord
-fly secrets set ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... TIGRIS_BUCKET=... TIGRIS_PUBLIC_BASE_URL=...
+fly storage create --name onshape-export --public
+fly secrets set ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...
 fly deploy
+fly console --image amazon/aws-cli:latest \
+  --file-local /tmp/apply-tigris-cors.sh=scripts/apply-tigris-cors.sh \
+  --file-local /tmp/tigris-cors.json=scripts/tigris-cors.json \
+  -C "sh /tmp/apply-tigris-cors.sh /tmp/tigris-cors.json"
 fly ssh console -C "/app/onshape-export ops check"
 ```
 
-The included `fly.toml` runs a single web machine with the in-process worker enabled so SQLite coordination stays on one mounted Fly volume at `/data`.
+The included `fly.toml` runs a single web machine with the in-process worker enabled so SQLite coordination stays on one mounted Fly volume at `/data`. Non-secret Tigris settings live in `fly.toml`; keep only Onshape and Tigris/S3 credentials as Fly secrets. Set Tigris bucket CORS before browser preview testing because previews are loaded directly from public Tigris URLs.
 
 ## Product Direction
 

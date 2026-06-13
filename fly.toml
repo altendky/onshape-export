@@ -5,10 +5,14 @@ primary_region = "ord"
   dockerfile = "Dockerfile"
 
 [env]
+  AWS_REGION = "auto"
   BIND_ADDR = "0.0.0.0:8080"
   CATALOG_PATH = "catalog/v1/models.json"
   DATABASE_URL = "sqlite:///data/onshape-export.db?mode=rwc"
   RUST_LOG = "info,onshape_export=debug,tower_http=info"
+  TIGRIS_BUCKET = "onshape-export"
+  TIGRIS_ENDPOINT_URL = "https://fly.storage.tigris.dev"
+  TIGRIS_PUBLIC_BASE_URL = "https://onshape-export.t3.tigrisfiles.io"
   WORKER_ENABLED = "true"
   WORKER_CONCURRENCY = "1"
 
