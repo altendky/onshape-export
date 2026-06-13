@@ -1,0 +1,25 @@
+{
+  "catalogSchemaVersion": 1,
+  "entryVersion": 1,
+  "slug": "box-slide-print",
+  "name": "Box Slide Print",
+  "description": "Box slide print assembly.",
+  "published": true,
+  "tags": ["box", "assembly"],
+  "thumbnail": null,
+  "onshape": {
+    "documentId": "4c4ae7e331e2d02ac02ee567",
+    "versionId": "de456a8c877cb9116f00d863",
+    "elementId": "9d6b03732a796c430889d5c3",
+    "elementKind": "assembly"
+  },
+  "exports": {
+    "downloads": ["step", "stl", "3mf"],
+    "preview": "glb"
+  },
+  "parameterPolicy": {
+    "source": "onshape",
+    "allowUnknown": false,
+    "autoRefresh": true
+  }
+}
