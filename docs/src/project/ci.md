@@ -1,43 +1,69 @@
 # CI And Local Tooling
 
-## Current Branch Status
+## Current Status
 
-The branch currently has `.github/workflows/ci.yml` with a temporary job named exactly `all`. That job exists only to satisfy the required aggregate GitHub check while the real workflow set is rebuilt.
+The repository has a real GitHub Actions workflow in `.github/workflows/ci.yml`.
+It runs on pull requests and pushes to `main`, uses reusable `reflow-*.yml` workflows, and keeps the required aggregate status check named exactly `all`.
 
-The placeholder does not run Rust formatting, linting, tests, mdBook, pre-commit, Mergify validation, Renovate validation, or release checks. Do not treat a passing `all` check as implementation quality evidence yet.
+The aggregate `all` job currently requires these workflow groups:
 
-Rust application code, Cargo files, migrations, scripts, and `mise.toml` already exist on this branch. The older main-branch wording that avoided Rust checks because the repository contained planning docs only is no longer accurate for this branch.
+- `mise`: verifies the checked-in `mise.lock` with `mise install --locked --dry-run`.
+- `pre-commit`: runs `pre-commit run --show-diff-on-failure --color=always --all-files`.
+- `docs`: runs `mise exec -- mdbook build docs` and `mise exec -- mdbook test docs`.
+- `rust`: runs Rust formatting, clippy, `cargo deny check`, and `cargo nextest run`.
 
-## Direction
+GitHub Actions are pinned to full commit SHAs.
+Renovate is configured to maintain dependencies, pre-commit hooks, mise tools, and pinned action digests.
 
-Use `onshape-mcp` as the reference for GitHub repository policy, local checks, Mergify, Renovate, and reusable GitHub Actions patterns. Start with a smaller workflow set, then add Rust-specific checks now that a Rust crate exists.
-
-The immediate workflow requirement is a GitHub status check named `all`. The durable target is for `all` to aggregate real required jobs with `re-actors/alls-green` or an equivalent aggregate-check pattern.
-
-## Local Tooling Target
+## Local Tooling
 
 Use `mise` for reproducible local and CI tools.
+The tool versions are declared in `mise.toml` and locked in `mise.lock` for the supported reference platforms.
 
-Initial tools from the main plan:
+Configured tools include:
 
+- `node` for JavaScript-based hook tools when required.
 - `python` for `pre-commit`.
 - `pipx:pre-commit` for hook execution.
-- `node` for JavaScript-based hook tools when required.
-- `cargo:mdbook = "0.5.3"` for documentation builds and tests.
-- `lychee` for Markdown link checking.
+- `cargo:mdbook` for documentation builds and tests.
+- `cargo:lychee` for Markdown link checking.
+- `github:nextest-rs/nextest` for Rust test execution.
+- `aqua:EmbarkStudios/cargo-deny` for Rust dependency policy checks.
+- `aqua:superfly/flyctl` for Fly operations.
 
-Run mdBook through the pinned tool once the mise configuration is verified:
+Rust itself is pinned separately in `rust-toolchain.toml`.
+`Cargo.toml` declares the same `rust-version` so package metadata matches the toolchain used by CI.
 
-```text
-mise exec -- mdbook build docs
-mise exec -- mdbook test docs
+## Local Checks
+
+Install tools and run the default hook set:
+
+```sh
+mise install --locked
+mise exec -- pre-commit run --show-diff-on-failure --color=always --all-files
 ```
 
-Direct `mdbook build docs` and `mdbook test docs` are acceptable local verification only when `mdbook` is already available outside mise.
+Run the manual Rust hooks that CI also requires:
 
-## Pre-commit Target
+```sh
+mise exec -- pre-commit run --hook-stage manual --all-files
+```
 
-Copy the general-purpose `onshape-mcp` hook set first:
+Equivalent direct checks are:
+
+```sh
+mise install --locked --dry-run
+mise exec -- mdbook build docs
+mise exec -- mdbook test docs
+mise exec -- bash scripts/cargo-pinned.sh fmt --all --check
+mise exec -- bash scripts/cargo-pinned.sh clippy --locked --all-targets --all-features -- -D warnings
+mise exec -- bash scripts/cargo-pinned.sh deny check
+mise exec -- bash scripts/cargo-pinned.sh nextest run --locked --all-features
+```
+
+## Pre-commit Hooks
+
+The default hook set covers:
 
 - Trailing whitespace.
 - End-of-file fixer.
@@ -51,43 +77,38 @@ Copy the general-purpose `onshape-mcp` hook set first:
 - `actionlint`.
 - `action-validator`.
 - `shellcheck`.
-
-Add local documentation hooks:
-
-- `mdbook-build` with `entry: mise exec -- mdbook build docs`, `files: ^docs/`, and `pass_filenames: false`.
-- `mdbook-test` with `entry: mise exec -- mdbook test docs`, `files: ^docs/`, and `pass_filenames: false`.
-
-Add Rust hooks now that `Cargo.toml` exists:
-
 - `cargo fmt --all --check`.
-- `cargo clippy --all-targets --all-features -- -D warnings`.
-- `cargo test --all-targets --all-features` or `cargo nextest run --all-features` once nextest is configured.
+- `cargo clippy --locked --all-targets --all-features -- -D warnings`.
+- `mise install --locked --dry-run` when mise files change.
+- `mdbook build` and `mdbook test` when docs change.
 
-## GitHub Actions Target
+`cargo nextest` and `cargo deny` are configured as manual hooks because they are heavier checks.
+The Rust CI workflow still runs both on every required CI run.
 
-The current committed workflow is intentionally smaller than the target. It should be expanded in a tooling-focused change.
+## Renovate
 
-Target jobs:
+Renovate is configured by `renovate.json5` and `.github/workflows/renovate.yml`.
+The workflow runs every 6 hours and supports manual dispatch with optional debug logging.
 
-- `mise`: verify `mise.lock` with `mise install --locked --dry-run` once the lockfile is committed intentionally.
-- `pre-commit`: run `pre-commit run --show-diff-on-failure --color=always --all-files`.
-- `docs`: run `mise exec -- mdbook build docs` and `mise exec -- mdbook test docs`.
-- `rust`: run formatting, clippy, and tests for the crate.
-- `all`: aggregate the required jobs and remain named exactly `all`.
+The workflow expects repository or organization credentials for the Renovate GitHub App:
 
-The top-level workflow should eventually run on pushes to `main` and on pull requests. It should keep the same concurrency behavior as `onshape-mcp`, cancelling older pull request runs for the same pull request.
+- `RENOVATE_CLIENT_ID` as a GitHub Actions variable.
+- `RENOVATE_APP_PRIVATE_KEY` as a GitHub Actions secret.
+
+Renovate is allowed to run mise lock update commands so `mise.lock` stays synchronized with `mise.toml` changes.
+
+## Reference
+
+`onshape-mcp` remains the reference for repository policy and reusable workflow patterns.
+This repository intentionally uses a smaller Rust workflow than `onshape-mcp`: a single Ubuntu Rust job with `cargo nextest`, not the full archive/test platform matrix.
 
 ## Deferred Workflows
 
-Do not copy the full `onshape-mcp` workflow set yet.
+Defer until the Rust checks are stable or the project needs broader platform guarantees:
 
-Defer until the Rust checks are stable:
-
-- `reflow-rust.yml` split workflows.
-- `reflow-coverage.yml`.
-- `deny.toml`.
-- Rust setup composite actions.
-- `cargo nextest` archive/test matrix.
+- Split Rust archive/test matrix.
+- Coverage workflow.
+- Additional Rust setup/resolve helpers for matrix builds.
 
 Defer until package or binary release requirements exist:
 
@@ -99,11 +120,3 @@ Defer until package or binary release requirements exist:
 - npm publishing.
 - crates.io publishing.
 - npm staging cleanup.
-
-## TODO Sequence
-
-1. Keep the placeholder `all` check until a real aggregate workflow is ready.
-2. Reconcile `mise.toml` and `mise.lock` intentionally before wiring CI to them.
-3. Add `.pre-commit-config.yaml`, `.lychee.toml`, `.mergify.yml`, and Renovate config in a tooling-scoped change.
-4. Add docs and Rust jobs under the aggregate `all` check.
-5. Run local `mdbook build docs`, `mdbook test docs`, Rust checks, and pre-commit checks before requiring those jobs in repository rules.

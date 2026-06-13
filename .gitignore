@@ -1,4 +1,6 @@
 /target/
+/docs/book/
+/.lycheecache
 /.sqlx/
 *.db
 *.db-shm
