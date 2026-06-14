@@ -8,6 +8,7 @@ pub struct Config {
     pub worker_concurrency: usize,
     pub rebuild_interval: Option<Duration>,
     pub storage: StorageConfig,
+    pub backup_storage: Option<StorageConfig>,
     pub onshape: OnshapeConfig,
 }
 
@@ -37,21 +38,25 @@ impl Config {
         let worker_concurrency = env_usize("WORKER_CONCURRENCY", 1)?;
         let rebuild_interval = env_optional_duration("REBUILD_INTERVAL_SECONDS")?;
 
+        let storage = StorageConfig {
+            bucket: env_or("TIGRIS_BUCKET", "onshape-export"),
+            endpoint_url: env::var("TIGRIS_ENDPOINT_URL").ok(),
+            region: env_or("AWS_REGION", "auto"),
+            access_key_id: env::var("AWS_ACCESS_KEY_ID").ok(),
+            secret_access_key: env::var("AWS_SECRET_ACCESS_KEY").ok(),
+            public_base_url: env::var("TIGRIS_PUBLIC_BASE_URL").ok(),
+            force_path_style: env_bool("TIGRIS_FORCE_PATH_STYLE", false)?,
+        };
+        let backup_storage = backup_storage_from_env(&storage)?;
+
         Ok(Self {
             bind_addr,
             database_url,
             worker_enabled,
             worker_concurrency,
             rebuild_interval,
-            storage: StorageConfig {
-                bucket: env_or("TIGRIS_BUCKET", "onshape-export"),
-                endpoint_url: env::var("TIGRIS_ENDPOINT_URL").ok(),
-                region: env_or("AWS_REGION", "auto"),
-                access_key_id: env::var("AWS_ACCESS_KEY_ID").ok(),
-                secret_access_key: env::var("AWS_SECRET_ACCESS_KEY").ok(),
-                public_base_url: env::var("TIGRIS_PUBLIC_BASE_URL").ok(),
-                force_path_style: env_bool("TIGRIS_FORCE_PATH_STYLE", false)?,
-            },
+            storage,
+            backup_storage,
             onshape: OnshapeConfig {
                 base_url: env_or("ONSHAPE_BASE_URL", "https://cad.onshape.com"),
                 access_key: env::var("ONSHAPE_ACCESS_KEY").ok(),
@@ -59,6 +64,24 @@ impl Config {
             },
         })
     }
+}
+
+fn backup_storage_from_env(storage: &StorageConfig) -> anyhow::Result<Option<StorageConfig>> {
+    let Ok(bucket) = env::var("BACKUP_TIGRIS_BUCKET") else {
+        return Ok(None);
+    };
+
+    Ok(Some(StorageConfig {
+        bucket,
+        endpoint_url: env::var("BACKUP_TIGRIS_ENDPOINT_URL")
+            .ok()
+            .or_else(|| storage.endpoint_url.clone()),
+        region: env::var("BACKUP_AWS_REGION").unwrap_or_else(|_| storage.region.clone()),
+        access_key_id: env::var("BACKUP_AWS_ACCESS_KEY_ID").ok(),
+        secret_access_key: env::var("BACKUP_AWS_SECRET_ACCESS_KEY").ok(),
+        public_base_url: None,
+        force_path_style: env_bool("BACKUP_TIGRIS_FORCE_PATH_STYLE", storage.force_path_style)?,
+    }))
 }
 
 fn env_or(name: &str, default: &str) -> String {

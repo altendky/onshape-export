@@ -153,10 +153,17 @@ For an existing bucket, confirm it is public:
 fly storage status onshape-export
 ```
 
-Set Onshape and Tigris credentials as Fly secrets. Do not set non-secret Tigris names, endpoint URLs, public base URLs, or regions as secrets unless they differ from `fly.toml` intentionally:
+Create or confirm the private backup bucket. Do not make this bucket public and do not apply browser CORS to it:
+
+```sh
+fly storage create --name onshape-export-backup
+```
+
+Set Onshape and Tigris credentials as Fly secrets. Use separate credentials for the public artifact bucket and the private backup bucket when possible. Do not set non-secret Tigris names, endpoint URLs, public base URLs, or regions as secrets unless they differ from `fly.toml` intentionally:
 
 ```sh
 fly secrets set ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...
+fly secrets set BACKUP_AWS_ACCESS_KEY_ID=... BACKUP_AWS_SECRET_ACCESS_KEY=...
 ```
 
 Change `primary_region` and the volume region together if `ord` is not the intended deployment region. If the app name, bucket name, public Tigris hostname, or local development port changes, update `fly.toml` and `scripts/tigris-cors.json` together.
@@ -186,7 +193,7 @@ Run a deploy-time readiness check after setting secrets or changing runtime conf
 fly ssh console -C "/app/onshape-export ops check"
 ```
 
-The check validates catalog loading, SQLite connectivity, storage client construction, Tigris public URL configuration, and required Onshape/Tigris credential presence without issuing Onshape or object-store API calls.
+The check validates non-empty catalog loading, SQLite connectivity, storage client construction, Tigris public URL configuration, and required Onshape/Tigris credential presence without issuing Onshape or object-store API calls.
 
 For a new database, seed the catalog before expecting public model pages to appear:
 
@@ -194,9 +201,33 @@ For a new database, seed the catalog before expecting public model pages to appe
 fly ssh console -C "/app/onshape-export catalog import catalog/v1/models.json"
 ```
 
+## Deploy Workflow
+
+Manual deploys run through `.github/workflows/deploy.yml`. Configure the `production` GitHub Environment with required reviewers and set `FLY_API_TOKEN` as an environment secret. Optionally set repository or environment variable `FLY_APP` if the Fly app name is not `onshape-export`.
+
+The workflow follows one operational pattern for every manual deploy:
+
+1. Build and push the target image.
+2. Update the single app machine to run `sleep infinity`, which leaves the `/data` volume mounted while the public HTTP service is down.
+3. Execute `/app/onshape-export ops deploy-maintenance` inside that quiesced machine.
+4. Upload a SQLite backup to the private backup bucket.
+5. Apply selected reset options.
+6. Deploy the normal app command from the same image.
+7. Run `ops check` and `/healthz`.
+
+The workflow currently expects exactly one Fly app machine. If the app is later split into separate web and worker machines or process groups, update the deployment workflow before enabling multi-machine production deployment.
+
+Destructive workflow inputs default to `false` and require `confirm_destructive` to be `WIPE`:
+
+- `reset_generated_state`: deletes generated Tigris object prefixes and generated SQLite cache/job state while preserving the live catalog.
+- `reset_catalog_from_seed`: replaces live SQLite catalog rows from `catalog/v1/models.json`.
+- `fresh_database`: deletes `/data/onshape-export.db`, `/data/onshape-export.db-wal`, and `/data/onshape-export.db-shm`, recreates the schema, and imports `catalog/v1/models.json` during maintenance.
+
+Generated Tigris prefixes are `onshape/source/v2/`, `onshape/raw/v2/`, `previews/v2/`, and `artifacts/v2/`. The backup bucket is not touched by generated-state resets.
+
 ## SQLite Backups
 
-The MVP backup policy is an explicit operator-triggered SQLite snapshot before deployments or cache maintenance that could affect job/artifact state:
+The MVP backup policy is an explicit SQLite snapshot before deployments or cache maintenance that could affect job/artifact state. The deploy workflow uploads this backup to the private backup bucket before any selected reset. Operators can still create a local volume snapshot manually:
 
 ```sh
 fly ssh console -C "/app/onshape-export ops backup /data/backups/onshape-export-$(date +%Y%m%d%H%M%S).db"

@@ -1,0 +1,123 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      reset_generated_state:
+        description: "Delete generated cache objects and generated SQLite state"
+        required: false
+        default: false
+        type: boolean
+      reset_catalog_from_seed:
+        description: "Replace live SQLite catalog from catalog/v1/models.json"
+        required: false
+        default: false
+        type: boolean
+      fresh_database:
+        description: "Delete the SQLite database and recreate it from migrations plus catalog seed"
+        required: false
+        default: false
+        type: boolean
+      confirm_destructive:
+        description: "Required value: WIPE when any reset option is enabled"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_APP: ${{ vars.FLY_APP || 'onshape-export' }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4
+
+      - name: Validate destructive inputs
+        run: |
+          set -euo pipefail
+          destructive="${{ inputs.reset_generated_state == true || inputs.reset_catalog_from_seed == true || inputs.fresh_database == true }}"
+          if [ "${destructive}" = "true" ] && [ "${{ inputs.confirm_destructive }}" != "WIPE" ]; then
+            printf '%s\n' 'Destructive deploy options require confirm_destructive=WIPE' >&2
+            exit 1
+          fi
+
+      - name: Build and push image
+        id: build
+        run: |
+          set -euo pipefail
+          image_label="deploy-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          image="registry.fly.io/${FLY_APP}:${image_label}"
+          mise exec -- fly deploy --app "${FLY_APP}" --remote-only --build-only --push --image-label "${image_label}" --yes
+          printf 'image=%s\n' "${image}" >> "${GITHUB_OUTPUT}"
+
+      - name: Select app machine
+        id: machine
+        run: |
+          set -euo pipefail
+          mapfile -t machines < <(mise exec -- fly machine list --app "${FLY_APP}" --quiet)
+          if [ "${#machines[@]}" -ne 1 ]; then
+            printf 'Expected exactly one app machine for deploy maintenance, found %s\n' "${#machines[@]}" >&2
+            exit 1
+          fi
+          printf 'id=%s\n' "${machines[0]}" >> "${GITHUB_OUTPUT}"
+
+      - name: Quiesce app machine
+        run: |
+          set -euo pipefail
+          mise exec -- fly machine update "${{ steps.machine.outputs.id }}" \
+            --app "${FLY_APP}" \
+            --image "${{ steps.build.outputs.image }}" \
+            --command "sleep infinity" \
+            --restart no \
+            --skip-health-checks \
+            --wait-timeout 300 \
+            --yes
+
+      - name: Run deploy maintenance
+        run: |
+          set -euo pipefail
+          maintenance_command="/app/onshape-export ops deploy-maintenance --backup-label ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA}"
+          if [ "${{ inputs.reset_generated_state }}" = "true" ]; then
+            maintenance_command="${maintenance_command} --reset-generated-state"
+          fi
+          if [ "${{ inputs.reset_catalog_from_seed }}" = "true" ]; then
+            maintenance_command="${maintenance_command} --reset-catalog-from-seed"
+          fi
+          if [ "${{ inputs.fresh_database }}" = "true" ]; then
+            maintenance_command="${maintenance_command} --fresh-database"
+          fi
+          if [ "${{ inputs.reset_generated_state == true || inputs.reset_catalog_from_seed == true || inputs.fresh_database == true }}" = "true" ]; then
+            maintenance_command="${maintenance_command} --confirm WIPE"
+          fi
+          mise exec -- fly machine exec "${{ steps.machine.outputs.id }}" "${maintenance_command}" \
+            --app "${FLY_APP}" \
+            --timeout 1200
+
+      - name: Deploy app
+        run: |
+          set -euo pipefail
+          mise exec -- fly deploy --app "${FLY_APP}" --remote-only --image "${{ steps.build.outputs.image }}" --strategy immediate --yes
+
+      - name: Run ops check
+        run: |
+          set -euo pipefail
+          mise exec -- fly ssh console --app "${FLY_APP}" -C "/app/onshape-export ops check"
+
+      - name: Check health endpoint
+        run: |
+          set -euo pipefail
+          curl -fsS "https://${FLY_APP}.fly.dev/healthz"

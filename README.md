@@ -26,11 +26,11 @@ Implemented foundation:
 - Supersession-based artifact invalidation and pruning that leave public object-store artifacts immutable.
 - Worker-only runtime mode for separate Fly process groups.
 - Configurable worker concurrency through `WORKER_CONCURRENCY`.
-- CLI maintenance commands for catalog import/validation/list/show, parameter refresh, pre-generation, job/failure inspection and retry, and artifact inspection/invalidation.
+- CLI maintenance commands for catalog import/validation/list/show, deploy maintenance, parameter refresh, pre-generation, job/failure inspection and retry, and artifact inspection/invalidation.
 - Catalog-defined parameter presets for targeted preview/export pre-generation.
 - Catalog-defined parameter UI overrides and preview/STEP export option defaults.
 - Deploy-time `ops check` command for SQL-backed catalog, SQLite, storage, public URL, and credential readiness.
-- Operator-triggered SQLite backup snapshots through `ops backup <destination.db>`.
+- Operator-triggered SQLite backup snapshots through `ops backup <destination.db>` and deploy-time private backup-bucket uploads.
 - GitHub Actions CI with Rust, docs, pre-commit, mise lockfile checks, and an aggregate job named exactly `all`.
 - Scheduled Renovate workflow and repository tooling configuration.
 
@@ -100,7 +100,9 @@ Fly deployment foundation:
 ```sh
 fly volumes create onshape_export_data --size 1 --region ord
 fly storage create --name onshape-export --public
+fly storage create --name onshape-export-backup
 fly secrets set ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...
+fly secrets set BACKUP_AWS_ACCESS_KEY_ID=... BACKUP_AWS_SECRET_ACCESS_KEY=...
 fly deploy
 fly console --image amazon/aws-cli:latest \
   --file-local /tmp/apply-tigris-cors.sh=scripts/apply-tigris-cors.sh \
@@ -109,7 +111,9 @@ fly console --image amazon/aws-cli:latest \
 fly ssh console -C "/app/onshape-export ops check"
 ```
 
-The included `fly.toml` runs a single web machine with the in-process worker enabled so SQLite coordination stays on one mounted Fly volume at `/data`. Non-secret Tigris settings live in `fly.toml`; keep only Onshape and Tigris/S3 credentials as Fly secrets. Set Tigris bucket CORS before browser preview testing because previews are loaded directly from public Tigris URLs.
+The included `fly.toml` runs a single web machine with the in-process worker enabled so SQLite coordination stays on one mounted Fly volume at `/data`. Non-secret Tigris settings live in `fly.toml`; keep only Onshape and Tigris/S3 credentials as Fly secrets. Set Tigris bucket CORS before browser preview testing because previews are loaded directly from public Tigris URLs. Keep the backup bucket private and use per-bucket backup credentials.
+
+Manual deploys use `.github/workflows/deploy.yml` and require GitHub Environment approval for `production`. Every workflow run builds a Fly image, quiesces the app machine, uploads a SQLite backup to the private backup bucket, optionally runs destructive reset modes, deploys the normal app, and runs `ops check` plus `/healthz`. The destructive workflow inputs default to `false` and require `confirm_destructive` to equal `WIPE` when enabled.
 
 ## Product Direction
 

@@ -2,6 +2,7 @@ use aws_credential_types::Credentials;
 use aws_sdk_s3::{
     config::{Builder, Region, SharedCredentialsProvider},
     primitives::ByteStream,
+    types::{Delete, ObjectIdentifier},
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -18,6 +19,11 @@ pub struct StorageClient {
 pub struct ObjectMetadata {
     pub content_length: i64,
     pub content_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DeletedPrefixSummary {
+    pub objects: usize,
 }
 
 impl StorageClient {
@@ -102,6 +108,16 @@ impl StorageClient {
         Ok(())
     }
 
+    pub async fn put_file(
+        &self,
+        key: &str,
+        path: &std::path::Path,
+        content_type: &str,
+    ) -> anyhow::Result<()> {
+        let body = std::fs::read(path)?;
+        self.put_bytes(key, body, content_type).await
+    }
+
     pub async fn get_json<T: DeserializeOwned>(&self, key: &str) -> anyhow::Result<T> {
         let output = self
             .client
@@ -153,6 +169,50 @@ impl StorageClient {
                     .join("/")
             )
         })
+    }
+
+    pub async fn delete_prefix(&self, prefix: &str) -> anyhow::Result<DeletedPrefixSummary> {
+        let mut continuation_token = None;
+        let mut deleted = 0usize;
+
+        loop {
+            let output = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .prefix(prefix)
+                .set_continuation_token(continuation_token)
+                .send()
+                .await?;
+
+            let mut objects = Vec::new();
+            for object in output.contents() {
+                if let Some(key) = object.key() {
+                    objects.push(ObjectIdentifier::builder().key(key).build()?);
+                }
+            }
+
+            if !objects.is_empty() {
+                deleted += objects.len();
+                let delete = Delete::builder()
+                    .set_objects(Some(objects))
+                    .quiet(true)
+                    .build()?;
+                self.client
+                    .delete_objects()
+                    .bucket(&self.bucket)
+                    .delete(delete)
+                    .send()
+                    .await?;
+            }
+
+            if !output.is_truncated().unwrap_or(false) {
+                break;
+            }
+            continuation_token = output.next_continuation_token().map(ToOwned::to_owned);
+        }
+
+        Ok(DeletedPrefixSummary { objects: deleted })
     }
 }
 
