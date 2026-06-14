@@ -70,7 +70,17 @@ jobs:
         id: machine
         run: |
           set -euo pipefail
-          mapfile -t machines < <(mise exec -- fly machine list --app "${FLY_APP}" --quiet)
+          machines_json="$(mise exec -- fly machine list --app "${FLY_APP}" --json)"
+          mapfile -t machines < <(
+            MACHINES_JSON="${machines_json}" python - <<'PY'
+          import json
+          import os
+
+          for machine in json.loads(os.environ["MACHINES_JSON"]):
+              if machine.get("config", {}).get("metadata", {}).get("fly_process_group") == "app":
+                  print(machine["id"])
+          PY
+          )
           if [ "${#machines[@]}" -ne 1 ]; then
             printf 'Expected exactly one app machine for deploy maintenance, found %s\n' "${#machines[@]}" >&2
             exit 1
