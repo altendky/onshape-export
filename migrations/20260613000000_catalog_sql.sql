@@ -15,7 +15,7 @@ CREATE TABLE catalog_models (
     element_kind TEXT NOT NULL CHECK (element_kind IN ('part_studio', 'assembly')),
     link_document_id TEXT,
     downloads_json TEXT NOT NULL,
-    preview_format TEXT NOT NULL DEFAULT 'glb',
+    preview_format TEXT NOT NULL DEFAULT 'glb' CHECK (preview_format IN ('glb')),
     preview_options_json TEXT NOT NULL DEFAULT '{}',
     download_options_json TEXT NOT NULL DEFAULT '{}',
     parameter_source TEXT NOT NULL DEFAULT 'onshape' CHECK (parameter_source IN ('onshape')),

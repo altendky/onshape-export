@@ -2481,6 +2481,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn catalog_sql_rejects_invalid_preview_format() {
+        let db = test_database().await;
+        let error = sqlx::query(
+            r#"
+            INSERT INTO catalog_models (
+                display_order, catalog_schema_version, entry_version, slug, name,
+                description, published, tags_json, document_id, version_id,
+                element_id, element_kind, downloads_json, preview_format,
+                preview_options_json, download_options_json, parameter_source,
+                parameter_allow_unknown, parameter_auto_refresh
+            )
+            VALUES (0, 1, 1, 'demo', 'Name', 'Description', 1, '[]',
+                    'did', 'vid', 'eid', 'part_studio', '["step"]', 'stl',
+                    '{}', '{}', 'onshape', 0, 1)
+            "#,
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("preview_format"));
+    }
+
+    #[tokio::test]
     async fn catalog_sql_import_rejects_duplicate_slugs_and_sources() {
         let db = test_database().await;
         let duplicate_slugs: Catalog = serde_json::from_value(serde_json::json!({
