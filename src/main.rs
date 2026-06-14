@@ -9,10 +9,10 @@ mod storage;
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    env,
+    env, fs,
     io::{Cursor, Read},
-    path::Path as FsPath,
-    time::Duration,
+    path::{Path as FsPath, PathBuf},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Context;
@@ -61,6 +61,13 @@ const DOWNLOAD_POSTPROCESSOR_NAME: &str = "download_identity";
 const DOWNLOAD_POSTPROCESSOR_VERSION: &str = "1";
 const STRICT_UPLOAD_VERIFICATION: bool = false;
 const V2_EXPORT_WORK_KEY_PREFIX: &str = "work-v2:export:";
+const DEFAULT_CATALOG_SEED_PATH: &str = "catalog/v1/models.json";
+const GENERATED_OBJECT_PREFIXES: &[&str] = &[
+    "onshape/source/v2/",
+    "onshape/raw/v2/",
+    "previews/v2/",
+    "artifacts/v2/",
+];
 
 #[derive(Clone)]
 struct AppState {
@@ -131,6 +138,17 @@ struct SelectedParameterSet {
 struct PruneOptions {
     older_than_days: i64,
     dry_run: bool,
+}
+
+#[derive(Debug, Clone)]
+struct DeployMaintenanceOptions {
+    reset_generated_state: bool,
+    reset_catalog_from_seed: bool,
+    fresh_database: bool,
+    catalog_seed: String,
+    backup_label: Option<String>,
+    backup_prefix: String,
+    confirm: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -365,6 +383,10 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             Ok(())
         }
         ("ops", [subcommand]) if subcommand == "check" => run_ops_check(config).await,
+        ("ops", [subcommand, maintenance_args @ ..]) if subcommand == "deploy-maintenance" => {
+            let options = parse_deploy_maintenance_options(maintenance_args)?;
+            run_deploy_maintenance(config, options).await
+        }
         ("ops", [subcommand, destination]) if subcommand == "backup" => {
             let db = Database::connect(&config.database_url)
                 .await
@@ -638,6 +660,62 @@ fn optional_output_format(args: &[String]) -> anyhow::Result<OutputFormat> {
     }
 }
 
+fn parse_deploy_maintenance_options(args: &[String]) -> anyhow::Result<DeployMaintenanceOptions> {
+    let mut reset_generated_state = false;
+    let mut reset_catalog_from_seed = false;
+    let mut fresh_database = false;
+    let mut catalog_seed = DEFAULT_CATALOG_SEED_PATH.to_owned();
+    let mut backup_label = None;
+    let mut backup_prefix = "sqlite".to_owned();
+    let mut confirm = None;
+    let mut args = args.iter();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--reset-generated-state" => reset_generated_state = true,
+            "--reset-catalog-from-seed" => reset_catalog_from_seed = true,
+            "--fresh-database" => fresh_database = true,
+            "--catalog-seed" => {
+                catalog_seed = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--catalog-seed requires a value"))?
+                    .to_owned();
+            }
+            "--backup-label" => {
+                backup_label = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--backup-label requires a value"))?
+                        .to_owned(),
+                );
+            }
+            "--backup-prefix" => {
+                backup_prefix = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--backup-prefix requires a value"))?
+                    .to_owned();
+            }
+            "--confirm" => {
+                confirm = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--confirm requires a value"))?
+                        .to_owned(),
+                );
+            }
+            _ => anyhow::bail!("unknown deploy maintenance option: {arg}"),
+        }
+    }
+
+    Ok(DeployMaintenanceOptions {
+        reset_generated_state,
+        reset_catalog_from_seed,
+        fresh_database,
+        catalog_seed,
+        backup_label,
+        backup_prefix,
+        confirm,
+    })
+}
+
 async fn run_ops_check(config: Config) -> anyhow::Result<()> {
     let mut failures = Vec::new();
 
@@ -648,6 +726,9 @@ async fn run_ops_check(config: Config) -> anyhow::Result<()> {
                 Err(error) => failures.push(format!("database ping failed: {error:#}")),
             }
             match db.catalog().await {
+                Ok(catalog) if catalog.models().is_empty() => {
+                    failures.push("catalog load failed: catalog is empty".to_owned())
+                }
                 Ok(catalog) => println!("catalog ok: {} models", catalog.models().len()),
                 Err(error) => failures.push(format!("catalog load failed: {error:#}")),
             }
@@ -692,6 +773,209 @@ async fn run_ops_check(config: Config) -> anyhow::Result<()> {
         }
         anyhow::bail!("ops check failed with {} issue(s)", failures.len())
     }
+}
+
+async fn run_deploy_maintenance(
+    config: Config,
+    options: DeployMaintenanceOptions,
+) -> anyhow::Result<()> {
+    ensure_destructive_options_confirmed(&options)?;
+    let database_path = sqlite_database_path(&config.database_url).with_context(|| {
+        format!(
+            "unsupported DATABASE_URL for deploy maintenance: {}",
+            config.database_url
+        )
+    })?;
+
+    backup_database_to_private_storage(&config, &options, &database_path).await?;
+
+    if options.fresh_database {
+        remove_sqlite_database_files(&database_path)?;
+        println!(
+            "deleted sqlite database files for {}",
+            database_path.display()
+        );
+    }
+
+    let db = Database::connect(&config.database_url)
+        .await
+        .context("connecting to database after maintenance preparation")?;
+
+    if options.fresh_database || options.reset_catalog_from_seed {
+        import_catalog_seed(&db, &options.catalog_seed).await?;
+    }
+
+    if options.reset_generated_state {
+        let storage = StorageClient::new(config.storage.clone()).await?;
+        reset_generated_objects(&storage).await?;
+        let deleted = db.clear_generated_state().await?;
+        for table in deleted {
+            println!("deleted {} row(s) from {}", table.rows, table.table);
+        }
+    }
+
+    ensure_database_ready_for_serve(&db).await?;
+    println!("deploy maintenance ok");
+    Ok(())
+}
+
+fn ensure_destructive_options_confirmed(options: &DeployMaintenanceOptions) -> anyhow::Result<()> {
+    if options.reset_generated_state || options.reset_catalog_from_seed || options.fresh_database {
+        anyhow::ensure!(
+            options.confirm.as_deref() == Some("WIPE"),
+            "destructive deploy maintenance options require --confirm WIPE"
+        );
+    }
+    Ok(())
+}
+
+async fn backup_database_to_private_storage(
+    config: &Config,
+    options: &DeployMaintenanceOptions,
+    database_path: &FsPath,
+) -> anyhow::Result<Option<String>> {
+    let Some(backup_storage_config) = config.backup_storage.clone() else {
+        anyhow::bail!("BACKUP_TIGRIS_BUCKET is required for deploy maintenance backups");
+    };
+    anyhow::ensure!(
+        backup_storage_config.access_key_id.is_some()
+            && backup_storage_config.secret_access_key.is_some(),
+        "backup storage credentials are incomplete; set BACKUP_AWS_ACCESS_KEY_ID and BACKUP_AWS_SECRET_ACCESS_KEY"
+    );
+
+    if !database_path.exists() {
+        println!(
+            "database file does not exist yet; no sqlite backup was uploaded for {}",
+            database_path.display()
+        );
+        return Ok(None);
+    }
+
+    let label = options
+        .backup_label
+        .clone()
+        .unwrap_or_else(default_backup_label);
+    let label = safe_backup_label(&label)?;
+    let prefix = options.backup_prefix.trim_matches('/');
+    let backup_key = if prefix.is_empty() {
+        format!("{label}.db")
+    } else {
+        format!("{prefix}/{label}.db")
+    };
+    let backup_path = env::temp_dir().join(format!("onshape-export-{label}.db"));
+    if backup_path.exists() {
+        fs::remove_file(&backup_path).with_context(|| {
+            format!("removing stale temporary backup {}", backup_path.display())
+        })?;
+    }
+
+    let db = Database::connect_without_migrations(&config.database_url)
+        .await
+        .context("connecting to database for pre-deploy backup")?;
+    db.backup_to_path(&backup_path).await?;
+    drop(db);
+
+    let backup_storage = StorageClient::new(backup_storage_config).await?;
+    let upload_result = backup_storage
+        .put_file(&backup_key, &backup_path, "application/vnd.sqlite3")
+        .await
+        .with_context(|| format!("uploading sqlite backup to {backup_key}"));
+    let cleanup_result = fs::remove_file(&backup_path)
+        .with_context(|| format!("removing temporary backup {}", backup_path.display()));
+    upload_result?;
+    cleanup_result?;
+    println!("uploaded sqlite backup to {backup_key}");
+    Ok(Some(backup_key))
+}
+
+fn default_backup_label() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("manual-{seconds}")
+}
+
+fn safe_backup_label(label: &str) -> anyhow::Result<String> {
+    let trimmed = label.trim();
+    anyhow::ensure!(!trimmed.is_empty(), "backup label cannot be empty");
+    anyhow::ensure!(
+        trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')),
+        "backup label may only contain ASCII letters, numbers, dots, underscores, and hyphens"
+    );
+    Ok(trimmed.to_owned())
+}
+
+fn sqlite_database_path(database_url: &str) -> Option<PathBuf> {
+    let database_url = database_url
+        .split_once('?')
+        .map_or(database_url, |(path, _)| path);
+    if database_url == "sqlite::memory:" || database_url.ends_with(":memory:") {
+        return None;
+    }
+
+    database_url
+        .strip_prefix("sqlite://")
+        .or_else(|| database_url.strip_prefix("sqlite:"))
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+}
+
+fn remove_sqlite_database_files(database_path: &FsPath) -> anyhow::Result<()> {
+    for path in sqlite_database_files(database_path) {
+        match fs::remove_file(&path) {
+            Ok(()) => println!("removed {}", path.display()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("removing sqlite file {}", path.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn sqlite_database_files(database_path: &FsPath) -> Vec<PathBuf> {
+    let mut paths = Vec::with_capacity(3);
+    paths.push(database_path.to_owned());
+    let path = database_path.as_os_str().to_string_lossy();
+    paths.push(PathBuf::from(format!("{path}-wal")));
+    paths.push(PathBuf::from(format!("{path}-shm")));
+    paths
+}
+
+async fn import_catalog_seed(db: &Database, catalog_seed: &str) -> anyhow::Result<()> {
+    let catalog = Catalog::load(catalog_seed)
+        .with_context(|| format!("loading catalog seed from {catalog_seed}"))?;
+    db.replace_catalog(&catalog)
+        .await
+        .with_context(|| format!("importing catalog seed from {catalog_seed}"))?;
+    println!("imported catalog seed: {} models", catalog.models().len());
+    Ok(())
+}
+
+async fn reset_generated_objects(storage: &StorageClient) -> anyhow::Result<()> {
+    for prefix in GENERATED_OBJECT_PREFIXES {
+        let summary = storage
+            .delete_prefix(prefix)
+            .await
+            .with_context(|| format!("deleting generated objects under {prefix}"))?;
+        println!("deleted {} object(s) under {prefix}", summary.objects);
+    }
+    Ok(())
+}
+
+async fn ensure_database_ready_for_serve(db: &Database) -> anyhow::Result<()> {
+    db.ping().await?;
+    let catalog = db.catalog().await?;
+    anyhow::ensure!(
+        !catalog.models().is_empty(),
+        "catalog is empty after deploy maintenance"
+    );
+    println!("maintenance catalog ok: {} models", catalog.models().len());
+    Ok(())
 }
 
 fn optional_failure_retry_selector(args: &[String]) -> anyhow::Result<FailureRetrySelector<'_>> {
@@ -1037,7 +1321,7 @@ fn validated_parameter_set(
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export catalog import <models.json>\n  onshape-export catalog list [--json]\n  onshape-export catalog show <slug>\n  onshape-export ops check\n  onshape-export ops backup <destination.db>\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export jobs list [--json]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
+        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export catalog import <models.json>\n  onshape-export catalog list [--json]\n  onshape-export catalog show <slug>\n  onshape-export ops check\n  onshape-export ops backup <destination.db>\n  onshape-export ops deploy-maintenance [--catalog-seed <models.json>] [--backup-label <label>] [--backup-prefix <prefix>] [--reset-generated-state] [--reset-catalog-from-seed] [--fresh-database] [--confirm WIPE]\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export jobs list [--json]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
     );
 }
 
@@ -6115,6 +6399,54 @@ mod tests {
         );
         assert!(optional_failure_retry_selector(&["--missing".to_owned()]).is_err());
         assert!(optional_failure_retry_selector(&["one".to_owned(), "two".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn parses_deploy_maintenance_options() {
+        let options = parse_deploy_maintenance_options(&[
+            "--reset-generated-state".to_owned(),
+            "--reset-catalog-from-seed".to_owned(),
+            "--fresh-database".to_owned(),
+            "--catalog-seed".to_owned(),
+            "catalog/custom.json".to_owned(),
+            "--backup-label".to_owned(),
+            "123-abc".to_owned(),
+            "--backup-prefix".to_owned(),
+            "sqlite/manual".to_owned(),
+            "--confirm".to_owned(),
+            "WIPE".to_owned(),
+        ])
+        .unwrap();
+
+        assert!(options.reset_generated_state);
+        assert!(options.reset_catalog_from_seed);
+        assert!(options.fresh_database);
+        assert_eq!(options.catalog_seed, "catalog/custom.json");
+        assert_eq!(options.backup_label.as_deref(), Some("123-abc"));
+        assert_eq!(options.backup_prefix, "sqlite/manual");
+        ensure_destructive_options_confirmed(&options).unwrap();
+    }
+
+    #[test]
+    fn deploy_maintenance_destructive_options_require_confirmation() {
+        let options = parse_deploy_maintenance_options(&["--fresh-database".to_owned()]).unwrap();
+
+        let error = ensure_destructive_options_confirmed(&options).unwrap_err();
+
+        assert!(error.to_string().contains("--confirm WIPE"));
+    }
+
+    #[test]
+    fn parses_sqlite_database_paths() {
+        assert_eq!(
+            sqlite_database_path("sqlite:///data/onshape-export.db?mode=rwc").unwrap(),
+            PathBuf::from("/data/onshape-export.db")
+        );
+        assert_eq!(
+            sqlite_database_path("sqlite://onshape-export.db?mode=rwc").unwrap(),
+            PathBuf::from("onshape-export.db")
+        );
+        assert!(sqlite_database_path("sqlite::memory:").is_none());
     }
 
     #[test]

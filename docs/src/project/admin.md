@@ -13,6 +13,7 @@ Initial admin operations:
 - Generate missing STEP, STL, and 3MF exports.
 - Inspect recent job status and failures.
 - Create a consistent SQLite backup snapshot for Fly volume recovery.
+- Run deploy maintenance with private backup upload and explicit reset modes.
 - Retry all failed jobs, one failed job by work key, or failed jobs by kind.
 - Invalidate artifacts after exporter option changes by superseding old public artifacts in normal operation.
 - Prune artifacts older than an explicit age threshold, with dry-run support.
@@ -27,6 +28,7 @@ onshape-export catalog list [--json]
 onshape-export catalog show <slug>
 onshape-export ops check
 onshape-export ops backup <destination.db>
+onshape-export ops deploy-maintenance [--reset-generated-state] [--reset-catalog-from-seed] [--fresh-database] [--confirm WIPE]
 onshape-export parameters refresh <slug|--all>
 onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]
 onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]
@@ -43,6 +45,18 @@ onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]
 `catalog import` replaces the live SQLite catalog from a JSON catalog index such as `catalog/v1/models.json`. Runtime `serve`, `worker`, and `catalog validate` read from SQLite, not from `CATALOG_PATH` or Tigris.
 
 `ops backup` writes a consistent SQLite snapshot to a new local database file using SQLite's native online backup path. On Fly, run it through `fly ssh console` to a path on the mounted volume or a temporary path that can be copied out separately. The command refuses to overwrite an existing destination.
+
+`ops deploy-maintenance` is intended for the manual GitHub deploy workflow while the Fly machine is quiesced. It always attempts to upload a SQLite backup to the private backup bucket configured by `BACKUP_TIGRIS_BUCKET`, `BACKUP_AWS_ACCESS_KEY_ID`, and `BACKUP_AWS_SECRET_ACCESS_KEY`. It can also apply explicit reset modes. Destructive reset modes require `--confirm WIPE`.
+
+SQLite state domains:
+
+- Schema: migration bookkeeping and table definitions, recreated by migrations.
+- Live catalog: `catalog_models`, `catalog_parameter_overrides`, `catalog_parameter_presets`, and `catalog_parameter_preset_values`.
+- Generated source and parameter cache: `source_resolutions`, `source_resolution_aliases`, and `parameter_metadata`.
+- Generated export cache: `configuration_selections`, `configuration_encodings`, `export_requests`, `translations`, `raw_payloads`, `raw_payload_sources`, and `postprocess_runs`.
+- Artifact index and queue state: `artifact_sets`, `artifact_files`, legacy `artifacts`, and `jobs`.
+
+`--reset-generated-state` clears generated source/parameter cache, generated export cache, artifact index, queue state, and generated Tigris object prefixes while preserving live catalog rows. `--reset-catalog-from-seed` replaces live catalog rows from `catalog/v1/models.json`. `--fresh-database` removes the SQLite database file and sidecars, recreates schema through migrations, and imports `catalog/v1/models.json` before the normal app restarts.
 
 `failures retry` without arguments preserves the broad all-failures behavior.
 Use a listed work key or `--kind <job-kind>` when only one failed operation class

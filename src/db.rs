@@ -381,16 +381,27 @@ pub struct Database {
     pool: SqlitePool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DeletedTableRows {
+    pub table: &'static str,
+    pub rows: u64,
+}
+
 impl Database {
     pub async fn connect(database_url: &str) -> sqlx::Result<Self> {
+        let db = Self::connect_without_migrations(database_url).await?;
+        sqlx::migrate!().run(&db.pool).await?;
+
+        Ok(db)
+    }
+
+    pub async fn connect_without_migrations(database_url: &str) -> sqlx::Result<Self> {
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
             .connect(database_url)
             .await?;
 
         Self::apply_pragmas(&pool).await?;
-        sqlx::migrate!().run(&pool).await?;
-
         Ok(Self { pool })
     }
 
@@ -421,6 +432,39 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn clear_generated_state(&self) -> sqlx::Result<Vec<DeletedTableRows>> {
+        const GENERATED_TABLES: &[&str] = &[
+            "artifact_files",
+            "artifact_sets",
+            "postprocess_runs",
+            "raw_payload_sources",
+            "raw_payloads",
+            "translations",
+            "export_requests",
+            "configuration_encodings",
+            "configuration_selections",
+            "parameter_metadata",
+            "source_resolution_aliases",
+            "source_resolutions",
+            "artifacts",
+            "jobs",
+        ];
+
+        let mut tx = self.pool.begin().await?;
+        let mut deleted = Vec::with_capacity(GENERATED_TABLES.len());
+        for &table in GENERATED_TABLES {
+            let result = sqlx::query(&format!("DELETE FROM {table}"))
+                .execute(&mut *tx)
+                .await?;
+            deleted.push(DeletedTableRows {
+                table,
+                rows: result.rows_affected(),
+            });
+        }
+        tx.commit().await?;
+        Ok(deleted)
     }
 
     pub async fn catalog(&self) -> anyhow::Result<Catalog> {
@@ -3767,6 +3811,66 @@ mod tests {
         assert_eq!(
             db.artifact_set("artifact").await.unwrap().unwrap().status,
             "upload_failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn clearing_generated_state_preserves_catalog() {
+        let db = test_database().await;
+        let catalog = Catalog::from_models(vec![test_catalog_model("demo", "did")]).unwrap();
+        db.replace_catalog(&catalog).await.unwrap();
+        db.enqueue_job(
+            "work",
+            "parameter_refresh",
+            r#"{"kind":"parameter_refresh","model_slug":"demo"}"#,
+        )
+        .await
+        .unwrap();
+        db.upsert_source_resolution(SourceResolutionUpsert {
+            source_hash: "sourcehash",
+            model_slug: "demo",
+            document_id: "did",
+            version_id: "vid",
+            microversion_id: "mid",
+            element_id: "eid",
+            element_kind: "part_studio",
+            link_document_id: None,
+            diagnostics_json: r#"{"microversionId":"mid"}"#,
+        })
+        .await
+        .unwrap();
+        db.upsert_parameter_metadata(
+            "sourcehash",
+            "onshape/source/v2/sourcehash/configuration.raw.json",
+            "onshape/source/v2/sourcehash/parameters.normalized/schemahash.json",
+            "schemahash",
+            2,
+        )
+        .await
+        .unwrap();
+        db.upsert_artifact(test_artifact_upsert(
+            "artifact",
+            "confighash",
+            "step",
+            "artifacts/v2/artifact/demo.step",
+            "model/step",
+            10,
+        ))
+        .await
+        .unwrap();
+
+        let deleted = db.clear_generated_state().await.unwrap();
+
+        assert!(deleted.iter().any(|entry| entry.rows > 0));
+        assert_eq!(db.catalog().await.unwrap().models().len(), 1);
+        assert!(db.job("work").await.unwrap().is_none());
+        assert!(db.parameter_metadata("sourcehash").await.unwrap().is_none());
+        assert!(db.artifact("artifact").await.unwrap().is_none());
+        assert!(
+            db.source_resolution_for_version("did", "vid", "eid", "part_studio", None)
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 
