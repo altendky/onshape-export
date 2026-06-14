@@ -90,14 +90,24 @@ jobs:
       - name: Quiesce app machine
         run: |
           set -euo pipefail
-          mise exec -- fly machine update "${{ steps.machine.outputs.id }}" \
-            --app "${FLY_APP}" \
-            --image "${{ steps.build.outputs.image }}" \
-            --command "sleep infinity" \
-            --restart no \
-            --skip-health-checks \
-            --wait-timeout 300 \
-            --yes
+          for attempt in 1 2 3 4 5; do
+            if mise exec -- fly machine update "${{ steps.machine.outputs.id }}" \
+              --app "${FLY_APP}" \
+              --image "${{ steps.build.outputs.image }}" \
+              --command "sleep infinity" \
+              --restart no \
+              --skip-health-checks \
+              --wait-timeout 300 \
+              --yes; then
+              exit 0
+            fi
+            if [ "${attempt}" -eq 5 ]; then
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 10))
+            printf 'fly machine update failed; retrying in %s seconds\n' "${sleep_seconds}" >&2
+            sleep "${sleep_seconds}"
+          done
 
       - name: Run deploy maintenance
         run: |
