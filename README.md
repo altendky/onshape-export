@@ -31,7 +31,8 @@ Implemented foundation:
 - Catalog-defined parameter UI overrides and preview/STEP export option defaults.
 - Deploy-time `ops check` command for SQL-backed catalog, SQLite, storage, public URL, and credential readiness.
 - Operator-triggered SQLite backup snapshots through `ops backup <destination.db>`.
-- Temporary GitHub Actions placeholder job named exactly `all` for the required aggregate check.
+- GitHub Actions CI with Rust, docs, pre-commit, mise lockfile checks, and an aggregate job named exactly `all`.
+- Scheduled Renovate workflow and repository tooling configuration.
 
 Known plan gaps:
 
@@ -39,6 +40,14 @@ Known plan gaps:
 - Failure records and public status errors still need stable public-safe error codes and user messages.
 - Uploaded-object verification and cache reconciliation for partial writes are not implemented yet.
 - Public manifests are not part of the initial v2 flow; DB-backed status and artifact state are the source of truth.
+
+Local verification:
+
+```sh
+mise install --locked
+mise exec -- pre-commit run --show-diff-on-failure --color=always --all-files
+mise exec -- pre-commit run --hook-stage manual --all-files
+```
 
 Local run:
 

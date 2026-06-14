@@ -1,11 +1,14 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use num_bigint::BigInt;
+use num_rational::BigRational;
+use num_traits::{One, Signed, Zero};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::catalog::{OnshapeSource, ParameterOverride};
 
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,9 +95,14 @@ pub enum CanonicalParameterValue {
         value: String,
     },
     Number {
-        expression: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        units: Option<String>,
+        numerator: String,
+        denominator: String,
+    },
+    Quantity {
+        dimension: QuantityDimension,
+        numerator: String,
+        denominator: String,
+        unit: String,
     },
     Boolean {
         value: bool,
@@ -103,6 +111,53 @@ pub enum CanonicalParameterValue {
         value: String,
     },
 }
+
+#[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuantityDimension {
+    Length,
+    Angle,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct QuantityUnitOption {
+    pub value: &'static str,
+    pub label: &'static str,
+}
+
+const LENGTH_UNIT_OPTIONS: &[QuantityUnitOption] = &[
+    QuantityUnitOption {
+        value: "mm",
+        label: "mm",
+    },
+    QuantityUnitOption {
+        value: "cm",
+        label: "cm",
+    },
+    QuantityUnitOption {
+        value: "m",
+        label: "m",
+    },
+    QuantityUnitOption {
+        value: "in",
+        label: "in",
+    },
+    QuantityUnitOption {
+        value: "ft",
+        label: "ft",
+    },
+];
+
+const ANGLE_UNIT_OPTIONS: &[QuantityUnitOption] = &[
+    QuantityUnitOption {
+        value: "deg",
+        label: "deg",
+    },
+    QuantityUnitOption {
+        value: "rad",
+        label: "rad",
+    },
+];
 
 pub fn encoding_request_values(
     typed_values: &BTreeMap<String, CanonicalParameterValue>,
@@ -114,9 +169,16 @@ pub fn encoding_request_values(
                 CanonicalParameterValue::Text { value }
                 | CanonicalParameterValue::Enum { value } => value.clone(),
                 CanonicalParameterValue::Boolean { value } => value.to_string(),
-                CanonicalParameterValue::Number { expression, units } => {
-                    canonical_request_number_value(expression, units.as_deref())
-                }
+                CanonicalParameterValue::Number {
+                    numerator,
+                    denominator,
+                } => fraction_expression(numerator, denominator),
+                CanonicalParameterValue::Quantity {
+                    numerator,
+                    denominator,
+                    unit,
+                    ..
+                } => format!("{} {unit}", fraction_expression(numerator, denominator)),
             };
             (parameter_id.clone(), request_value)
         })
@@ -218,23 +280,14 @@ pub fn validate_values(
                     let canonical = if parameter.units.is_some() {
                         canonicalize_dimensioned_number(parameter, value)
                     } else {
-                        canonical_number_string(value).map(|expression| {
-                            CanonicalParameterValue::Number {
-                                expression,
-                                units: None,
-                            }
-                        })
+                        canonicalize_unitless_number(parameter, value)
                     };
-                    if let Some(canonical) = canonical {
-                        let request_value = if parameter.units.is_some() {
-                            number_request_value(parameter, value)
-                        } else {
-                            value.clone()
-                        };
-                        values.insert(parameter.id.clone(), request_value);
-                        typed_values.insert(parameter.id.clone(), canonical);
-                    } else {
-                        errors.push(format!("{} must be a number", parameter.label));
+                    match canonical {
+                        Ok((canonical, value)) => {
+                            values.insert(parameter.id.clone(), value);
+                            typed_values.insert(parameter.id.clone(), canonical);
+                        }
+                        Err(error) => errors.push(error),
                     }
                 }
                 ParameterKind::Boolean => match value.as_str() {
@@ -348,7 +401,7 @@ fn normalize_parameter(value: &Value) -> Option<Parameter> {
         || type_hint.contains("angle")
         || default_value
             .as_deref()
-            .is_some_and(|value| value.parse::<f64>().is_ok())
+            .is_some_and(|value| parse_decimal_rational(value).is_some())
     {
         ParameterKind::Number
     } else if type_hint.contains("string") || type_hint.contains("text") {
@@ -388,79 +441,86 @@ impl Parameter {
     }
 
     fn configuration_value(&self, value: &str) -> String {
-        if value.parse::<f64>().is_err() {
+        let Some(number) = parse_decimal_rational(value) else {
             return value.to_owned();
-        }
+        };
+        let number = rational_decimal_string(&number).expect("decimal input terminates");
 
-        match self.units.as_deref().and_then(onshape_unit_suffix) {
-            Some(unit) => format!("{value} {unit}"),
-            None => value.to_owned(),
+        match self
+            .units
+            .as_deref()
+            .and_then(QuantityUnit::from_onshape_unit)
+        {
+            Some(unit) => format!("{number} {}", unit.abbreviation()),
+            None => number,
         }
     }
+}
+
+pub fn quantity_unit_options(parameter: &Parameter) -> Option<&'static [QuantityUnitOption]> {
+    let unit = parameter
+        .units
+        .as_deref()
+        .and_then(QuantityUnit::from_onshape_unit)?;
+    match unit.dimension() {
+        QuantityDimension::Length => Some(LENGTH_UNIT_OPTIONS),
+        QuantityDimension::Angle => Some(ANGLE_UNIT_OPTIONS),
+    }
+}
+
+pub fn default_quantity_unit(parameter: &Parameter) -> Option<&'static str> {
+    parameter
+        .units
+        .as_deref()
+        .and_then(QuantityUnit::from_onshape_unit)
+        .map(QuantityUnit::abbreviation)
 }
 
 fn canonicalize_dimensioned_number(
     parameter: &Parameter,
     value: &str,
-) -> Option<CanonicalParameterValue> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
+) -> Result<(CanonicalParameterValue, String), String> {
+    let default_unit = parameter
+        .units
+        .as_deref()
+        .and_then(QuantityUnit::from_onshape_unit)
+        .ok_or_else(|| format!("{} uses an unsupported unit", parameter.label))?;
+    let (number, unit) = parse_quantity(value, default_unit)
+        .map_err(|error| quantity_error_message(parameter, error, default_unit.dimension()))?;
+    let canonical = canonical_quantity_value(number, unit);
+    let normalized = format!(
+        "{} {}",
+        rational_decimal_string(&canonical.value).expect("canonical value terminates"),
+        canonical.unit.abbreviation()
+    );
+    let (numerator, denominator) = rational_parts(&canonical.value);
 
-    let expression = if let Some(number) = canonical_number_string(trimmed) {
-        parameter.configuration_value(&number)
-    } else if let Some(expression) = canonical_quantity_expression(trimmed) {
-        expression
-    } else {
-        return None;
-    };
-
-    Some(CanonicalParameterValue::Number {
-        expression,
-        units: parameter.units.clone(),
-    })
+    Ok((
+        CanonicalParameterValue::Quantity {
+            dimension: canonical.unit.dimension(),
+            numerator,
+            denominator,
+            unit: canonical.unit.abbreviation().to_owned(),
+        },
+        normalized,
+    ))
 }
 
-fn canonical_number_string(value: &str) -> Option<String> {
-    let number = value.trim().parse::<f64>().ok()?;
-    if !number.is_finite() {
-        return None;
-    }
-    Some(number.to_string())
-}
-
-fn canonical_request_number_value(expression: &str, units: Option<&str>) -> String {
-    let trimmed = expression.trim();
-    if let Some(number) = canonical_number_string(trimmed) {
-        return request_number_with_default_units(&number, units);
-    }
-
-    if let Some(expression) = canonical_quantity_expression(trimmed) {
-        return expression;
-    }
-
-    trimmed.to_owned()
-}
-
-fn canonical_quantity_expression(value: &str) -> Option<String> {
-    let (unit_start, unit) = trailing_quantity_unit(value)?;
-    let number = canonical_number_string(value[..unit_start].trim())?;
-    let unit = canonical_quantity_unit(unit)?;
-    Some(format!("{number} {unit}"))
-}
-
-fn canonical_quantity_unit(unit: &str) -> Option<&'static str> {
-    match unit {
-        "mm" | "millimeter" => Some("mm"),
-        "cm" | "centimeter" => Some("cm"),
-        "m" | "meter" => Some("m"),
-        "in" | "inch" => Some("in"),
-        "ft" | "foot" => Some("ft"),
-        "deg" | "degree" => Some("deg"),
-        "rad" | "radian" => Some("rad"),
-        _ => None,
-    }
+fn canonicalize_unitless_number(
+    parameter: &Parameter,
+    value: &str,
+) -> Result<(CanonicalParameterValue, String), String> {
+    let number = parse_decimal_rational(value)
+        .ok_or_else(|| format!("{} must be a plain decimal number", parameter.label))?;
+    let normalized = rational_decimal_string(&number).expect("decimal input terminates");
+    let (numerator, denominator) = rational_parts(&number);
+    Ok((
+        CanonicalParameterValue::Number {
+            numerator,
+            denominator,
+        },
+        normalized,
+    ))
 }
 
 fn unsupported_parameter_message(parameter: &Parameter) -> String {
@@ -470,21 +530,232 @@ fn unsupported_parameter_message(parameter: &Parameter) -> String {
     )
 }
 
-fn request_number_with_default_units(number: &str, units: Option<&str>) -> String {
-    match units.and_then(onshape_unit_suffix) {
-        Some(unit) => format!("{number} {unit}"),
-        None => number.to_owned(),
+fn fraction_expression(numerator: &str, denominator: &str) -> String {
+    format!("({numerator}/{denominator})")
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum QuantityUnit {
+    Millimeter,
+    Centimeter,
+    Meter,
+    Inch,
+    Foot,
+    Degree,
+    Radian,
+}
+
+impl QuantityUnit {
+    fn from_onshape_unit(unit: &str) -> Option<Self> {
+        match unit {
+            "millimeter" => Some(Self::Millimeter),
+            "centimeter" => Some(Self::Centimeter),
+            "meter" => Some(Self::Meter),
+            "inch" => Some(Self::Inch),
+            "foot" => Some(Self::Foot),
+            "degree" => Some(Self::Degree),
+            "radian" => Some(Self::Radian),
+            _ => None,
+        }
+    }
+
+    fn from_abbreviation(unit: &str) -> Option<Self> {
+        match unit {
+            "mm" => Some(Self::Millimeter),
+            "cm" => Some(Self::Centimeter),
+            "m" => Some(Self::Meter),
+            "in" => Some(Self::Inch),
+            "ft" => Some(Self::Foot),
+            "deg" => Some(Self::Degree),
+            "rad" => Some(Self::Radian),
+            _ => None,
+        }
+    }
+
+    fn abbreviation(self) -> &'static str {
+        match self {
+            Self::Millimeter => "mm",
+            Self::Centimeter => "cm",
+            Self::Meter => "m",
+            Self::Inch => "in",
+            Self::Foot => "ft",
+            Self::Degree => "deg",
+            Self::Radian => "rad",
+        }
+    }
+
+    fn dimension(self) -> QuantityDimension {
+        match self {
+            Self::Millimeter | Self::Centimeter | Self::Meter | Self::Inch | Self::Foot => {
+                QuantityDimension::Length
+            }
+            Self::Degree | Self::Radian => QuantityDimension::Angle,
+        }
+    }
+
+    fn length_meters_factor(self) -> Option<BigRational> {
+        match self {
+            Self::Millimeter => Some(rational(1, 1000)),
+            Self::Centimeter => Some(rational(1, 100)),
+            Self::Meter => Some(rational(1, 1)),
+            Self::Inch => Some(rational(127, 5000)),
+            Self::Foot => Some(rational(381, 1250)),
+            Self::Degree | Self::Radian => None,
+        }
     }
 }
 
-fn number_request_value(parameter: &Parameter, value: &str) -> String {
+struct CanonicalQuantity {
+    value: BigRational,
+    unit: QuantityUnit,
+}
+
+enum QuantityParseError {
+    Number,
+    UnknownUnit,
+    IncompatibleUnit,
+}
+
+fn parse_quantity(
+    value: &str,
+    default_unit: QuantityUnit,
+) -> Result<(BigRational, QuantityUnit), QuantityParseError> {
     let trimmed = value.trim();
-    if trimmed.parse::<f64>().is_ok() {
-        request_number_with_default_units(trimmed, parameter.units.as_deref())
-    } else if let Some(expression) = canonical_quantity_expression(trimmed) {
-        expression
+    let (number, unit) = match trailing_quantity_unit(trimmed) {
+        Some((unit_start, unit)) => {
+            if unit_start == 0 {
+                return Err(QuantityParseError::Number);
+            }
+            let unit =
+                QuantityUnit::from_abbreviation(unit).ok_or(QuantityParseError::UnknownUnit)?;
+            (trimmed[..unit_start].trim(), unit)
+        }
+        None => (trimmed, default_unit),
+    };
+    if unit.dimension() != default_unit.dimension() {
+        return Err(QuantityParseError::IncompatibleUnit);
+    }
+    let number = parse_decimal_rational(number).ok_or(QuantityParseError::Number)?;
+    Ok((number, unit))
+}
+
+fn canonical_quantity_value(value: BigRational, unit: QuantityUnit) -> CanonicalQuantity {
+    match unit.dimension() {
+        QuantityDimension::Length => CanonicalQuantity {
+            value: value * unit.length_meters_factor().expect("length unit has factor"),
+            unit: QuantityUnit::Meter,
+        },
+        QuantityDimension::Angle => CanonicalQuantity { value, unit },
+    }
+}
+
+fn quantity_error_message(
+    parameter: &Parameter,
+    error: QuantityParseError,
+    dimension: QuantityDimension,
+) -> String {
+    match error {
+        QuantityParseError::Number => {
+            format!("{} must be a plain decimal number", parameter.label)
+        }
+        QuantityParseError::UnknownUnit => format!("{} has an unknown unit", parameter.label),
+        QuantityParseError::IncompatibleUnit => match dimension {
+            QuantityDimension::Length => format!("{} must use a length unit", parameter.label),
+            QuantityDimension::Angle => format!("{} must use an angle unit", parameter.label),
+        },
+    }
+}
+
+fn parse_decimal_rational(value: &str) -> Option<BigRational> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let (negative, unsigned) = match trimmed.as_bytes()[0] {
+        b'-' => (true, &trimmed[1..]),
+        b'+' => (false, &trimmed[1..]),
+        _ => (false, trimmed),
+    };
+    if unsigned.is_empty() {
+        return None;
+    }
+
+    let mut pieces = unsigned.split('.');
+    let integer = pieces.next()?;
+    let fractional = pieces.next();
+    if pieces.next().is_some() {
+        return None;
+    }
+    let fractional = fractional.unwrap_or("");
+    if integer.is_empty() && fractional.is_empty() {
+        return None;
+    }
+    if !integer.bytes().all(|byte| byte.is_ascii_digit())
+        || !fractional.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+
+    let digits = format!("{integer}{fractional}");
+    let mut numerator = BigInt::parse_bytes(digits.as_bytes(), 10)?;
+    if negative {
+        numerator = -numerator;
+    }
+    let denominator = BigInt::from(10_u32).pow(fractional.len() as u32);
+    Some(BigRational::new(numerator, denominator))
+}
+
+fn rational(numerator: i64, denominator: i64) -> BigRational {
+    BigRational::new(BigInt::from(numerator), BigInt::from(denominator))
+}
+
+fn rational_parts(value: &BigRational) -> (String, String) {
+    (value.numer().to_string(), value.denom().to_string())
+}
+
+fn rational_decimal_string(value: &BigRational) -> Option<String> {
+    let mut denominator = value.denom().clone();
+    let two = BigInt::from(2);
+    let five = BigInt::from(5);
+    while (&denominator % &two).is_zero() {
+        denominator /= &two;
+    }
+    while (&denominator % &five).is_zero() {
+        denominator /= &five;
+    }
+    if !denominator.is_one() {
+        return None;
+    }
+
+    let sign = if value.numer().is_negative() { "-" } else { "" };
+    let numerator = value.numer().abs();
+    let denominator = value.denom();
+    let integer = &numerator / denominator;
+    let mut remainder = &numerator % denominator;
+    if remainder.is_zero() {
+        if integer.is_zero() {
+            return Some("0".to_owned());
+        }
+        return Some(format!("{sign}{integer}"));
+    }
+
+    let ten = BigInt::from(10);
+    let mut fractional = String::new();
+    while !remainder.is_zero() {
+        remainder *= &ten;
+        let digit = &remainder / denominator;
+        fractional.push_str(&digit.to_string());
+        remainder %= denominator;
+    }
+    while fractional.ends_with('0') {
+        fractional.pop();
+    }
+
+    if integer.is_zero() && sign == "-" && fractional.bytes().all(|byte| byte == b'0') {
+        Some("0".to_owned())
     } else {
-        trimmed.to_owned()
+        Some(format!("{sign}{integer}.{fractional}"))
     }
 }
 
@@ -505,19 +776,6 @@ fn range_and_default_message(message: &serde_json::Map<String, Value>) -> Option
     message
         .get("rangeAndDefault")
         .and_then(|value| value.get("message"))
-}
-
-fn onshape_unit_suffix(units: &str) -> Option<&'static str> {
-    match units {
-        "millimeter" => Some("mm"),
-        "centimeter" => Some("cm"),
-        "meter" => Some("m"),
-        "inch" => Some("in"),
-        "foot" => Some("ft"),
-        "degree" => Some("deg"),
-        "radian" => Some("rad"),
-        _ => None,
-    }
 }
 
 fn find_parameter_array(value: &Value) -> Option<&Vec<Value>> {
@@ -685,14 +943,15 @@ fn first_text(object: &serde_json::Map<String, Value>, names: &[&str]) -> Option
 }
 
 fn normalize_default_value(value: Option<&Value>, is_integer: bool) -> Option<String> {
+    let value = value.and_then(value_to_string)?;
     if is_integer
-        && let Some(number) = value.and_then(Value::as_f64)
-        && number.fract() == 0.0
+        && let Some(number) = parse_decimal_rational(&value)
+        && number.denom().is_one()
     {
-        return Some((number as i64).to_string());
+        return Some(number.numer().to_string());
     }
 
-    value.and_then(value_to_string)
+    Some(value)
 }
 
 fn value_to_string(value: &Value) -> Option<String> {
@@ -997,18 +1256,20 @@ mod tests {
 
         let validated = validate_values(&schema, &submitted, false).unwrap();
 
-        assert_eq!(validated.values["wallThickness"], "1.5 mm");
+        assert_eq!(validated.values["wallThickness"], "0.0015 m");
         assert_eq!(
             validated.typed_values["wallThickness"],
-            CanonicalParameterValue::Number {
-                expression: "1.5 mm".to_owned(),
-                units: Some("millimeter".to_owned()),
+            CanonicalParameterValue::Quantity {
+                dimension: QuantityDimension::Length,
+                numerator: "3".to_owned(),
+                denominator: "2000".to_owned(),
+                unit: "m".to_owned(),
             }
         );
     }
 
     #[test]
-    fn preserves_user_entered_quantity_units() {
+    fn canonicalizes_length_quantities_to_meters() {
         let schema = ParameterSchema {
             schema_version: SCHEMA_VERSION,
             source: source(),
@@ -1036,12 +1297,14 @@ mod tests {
             schema.parameters[0].display_value().as_deref(),
             Some("1.5 mm")
         );
-        assert_eq!(validated.values["wallThickness"], "0.125 in");
+        assert_eq!(validated.values["wallThickness"], "0.003175 m");
         assert_eq!(
             validated.typed_values["wallThickness"],
-            CanonicalParameterValue::Number {
-                expression: "0.125 in".to_owned(),
-                units: Some("millimeter".to_owned()),
+            CanonicalParameterValue::Quantity {
+                dimension: QuantityDimension::Length,
+                numerator: "127".to_owned(),
+                denominator: "40000".to_owned(),
+                unit: "m".to_owned(),
             }
         );
 
@@ -1051,17 +1314,124 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(compact.values["wallThickness"], "0.125 in");
+        assert_eq!(compact.values["wallThickness"], "0.003175 m");
         assert_eq!(compact.typed_values, validated.typed_values);
 
-        let long_unit = validate_values(
+        let meters = validate_values(
             &schema,
-            &HashMap::from([("wallThickness".to_owned(), "0.125 inch".to_owned())]),
+            &HashMap::from([("wallThickness".to_owned(), "0.003175 m".to_owned())]),
             false,
         )
         .unwrap();
-        assert_eq!(long_unit.values["wallThickness"], "0.125 in");
-        assert_eq!(long_unit.typed_values, validated.typed_values);
+        assert_eq!(meters.values["wallThickness"], "0.003175 m");
+        assert_eq!(meters.typed_values, validated.typed_values);
+
+        let millimeters = validate_values(
+            &schema,
+            &HashMap::from([("wallThickness".to_owned(), "3.175 mm".to_owned())]),
+            false,
+        )
+        .unwrap();
+        assert_eq!(millimeters.typed_values, validated.typed_values);
+        assert_eq!(
+            encoding_request_values(&validated.typed_values)["wallThickness"],
+            "(127/40000) m"
+        );
+    }
+
+    #[test]
+    fn equivalent_length_values_share_typed_values_and_config_hash() {
+        let schema = ParameterSchema {
+            schema_version: SCHEMA_VERSION,
+            source: source(),
+            parameters: vec![Parameter {
+                id: "length".to_owned(),
+                label: "Length".to_owned(),
+                description: None,
+                kind: ParameterKind::Number,
+                required: true,
+                default_value: None,
+                options: Vec::new(),
+                hidden: false,
+                visibility_condition: None,
+                precision: None,
+                widget: None,
+                units: Some("millimeter".to_owned()),
+                raw: Value::Null,
+            }],
+        };
+
+        let meter = validate_values(
+            &schema,
+            &HashMap::from([("length".to_owned(), "1m".to_owned())]),
+            false,
+        )
+        .unwrap();
+        let millimeter = validate_values(
+            &schema,
+            &HashMap::from([("length".to_owned(), "1000 mm".to_owned())]),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(meter.typed_values, millimeter.typed_values);
+        assert_eq!(
+            crate::cache_model::config_hash("source", SCHEMA_VERSION, &meter.typed_values).unwrap(),
+            crate::cache_model::config_hash("source", SCHEMA_VERSION, &millimeter.typed_values)
+                .unwrap()
+        );
+        assert_eq!(
+            encoding_request_values(&meter.typed_values)["length"],
+            "(1/1) m"
+        );
+    }
+
+    #[test]
+    fn canonicalizes_angle_values_without_cross_unit_conversion() {
+        let schema = ParameterSchema {
+            schema_version: SCHEMA_VERSION,
+            source: source(),
+            parameters: vec![Parameter {
+                id: "angle".to_owned(),
+                label: "Angle".to_owned(),
+                description: None,
+                kind: ParameterKind::Number,
+                required: true,
+                default_value: None,
+                options: Vec::new(),
+                hidden: false,
+                visibility_condition: None,
+                precision: None,
+                widget: None,
+                units: Some("degree".to_owned()),
+                raw: Value::Null,
+            }],
+        };
+
+        let degrees = validate_values(
+            &schema,
+            &HashMap::from([("angle".to_owned(), "180".to_owned())]),
+            false,
+        )
+        .unwrap();
+        let radians = validate_values(
+            &schema,
+            &HashMap::from([("angle".to_owned(), "3.14159 rad".to_owned())]),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(degrees.values["angle"], "180 deg");
+        assert_eq!(radians.values["angle"], "3.14159 rad");
+        assert_ne!(degrees.typed_values, radians.typed_values);
+        assert_eq!(
+            encoding_request_values(&degrees.typed_values)["angle"],
+            "(180/1) deg"
+        );
+        assert_eq!(
+            encoding_request_values(&radians.typed_values)["angle"],
+            "(314159/100000) rad"
+        );
     }
 
     #[test]
@@ -1123,11 +1493,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(first.values["enabled"], "true");
-        assert_eq!(first.values["count"], "01.0");
+        assert_eq!(first.values["count"], "1");
         assert_eq!(first.typed_values, second.typed_values);
         assert_eq!(
             encoding_request_values(&first.typed_values),
             encoding_request_values(&second.typed_values)
+        );
+        assert_eq!(
+            encoding_request_values(&first.typed_values)["count"],
+            "(1/1)"
         );
     }
 
@@ -1172,7 +1546,7 @@ mod tests {
         );
         assert_eq!(
             encoding_request_values(&default_units.typed_values)["wallThickness"],
-            "1 mm"
+            "(1/1000) m"
         );
     }
 
@@ -1204,7 +1578,10 @@ mod tests {
             false,
         )
         .unwrap_err();
-        assert_eq!(errors, vec!["Wall Thickness must be a number"]);
+        assert_eq!(
+            errors,
+            vec!["Wall Thickness must be a plain decimal number"]
+        );
 
         let errors = validate_values(
             &schema,
@@ -1212,15 +1589,45 @@ mod tests {
             false,
         )
         .unwrap_err();
-        assert_eq!(errors, vec!["Wall Thickness must be a number"]);
+        assert_eq!(errors, vec!["Wall Thickness has an unknown unit"]);
 
         let errors = validate_values(
             &schema,
-            &HashMap::from([("wallThickness".to_owned(), "foo 2 in bar".to_owned())]),
+            &HashMap::from([("wallThickness".to_owned(), "1.5 deg".to_owned())]),
             false,
         )
         .unwrap_err();
-        assert_eq!(errors, vec!["Wall Thickness must be a number"]);
+        assert_eq!(errors, vec!["Wall Thickness must use a length unit"]);
+
+        let errors = validate_values(
+            &schema,
+            &HashMap::from([("wallThickness".to_owned(), "1e-3 mm".to_owned())]),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(
+            errors,
+            vec!["Wall Thickness must be a plain decimal number"]
+        );
+
+        let errors = validate_values(
+            &schema,
+            &HashMap::from([("wallThickness".to_owned(), "1 MM".to_owned())]),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(errors, vec!["Wall Thickness has an unknown unit"]);
+
+        let errors = validate_values(
+            &schema,
+            &HashMap::from([("wallThickness".to_owned(), "NaN mm".to_owned())]),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(
+            errors,
+            vec!["Wall Thickness must be a plain decimal number"]
+        );
 
         let validated = validate_values(
             &schema,

@@ -1,0 +1,11 @@
+# Spell checker configuration
+# See: https://github.com/crate-ci/typos
+
+[default]
+extend-ignore-re = [
+    # alls-green GitHub Action (re-actors/alls-green)
+    "alls-green",
+]
+
+[default.extend-words]
+numer = "numer"

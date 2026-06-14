@@ -258,8 +258,8 @@ mod tests {
             (
                 "a".to_owned(),
                 CanonicalParameterValue::Number {
-                    expression: "1".to_owned(),
-                    units: None,
+                    numerator: "1".to_owned(),
+                    denominator: "1".to_owned(),
                 },
             ),
             (
@@ -275,8 +275,8 @@ mod tests {
             (
                 "a".to_owned(),
                 CanonicalParameterValue::Number {
-                    expression: "1".to_owned(),
-                    units: None,
+                    numerator: "1".to_owned(),
+                    denominator: "1".to_owned(),
                 },
             ),
         ]);

@@ -1,10 +1,41 @@
 name: CI
 
-on: pull_request
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: ["**"]
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow_ref, github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
+  mise:
+    name: Mise
+    uses: ./.github/workflows/reflow-mise.yml
+
+  pre-commit:
+    name: Pre-commit
+    uses: ./.github/workflows/reflow-pre-commit.yml
+
+  docs:
+    name: Docs
+    uses: ./.github/workflows/reflow-docs.yml
+
+  rust:
+    name: Rust
+    uses: ./.github/workflows/reflow-rust.yml
+
   all:
+    name: all
+    if: ${{ !cancelled() }}
+    needs: [mise, pre-commit, docs, rust]
     runs-on: ubuntu-latest
     steps:
-      # Temporary placeholder; rebuild this when implementing the real CI setup.
-      - run: true
+      - uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
