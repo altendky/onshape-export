@@ -441,50 +441,42 @@ impl Database {
 
         let mut models = Vec::with_capacity(rows.len());
         for row in rows {
-            let model_id: i64 = row.get("id");
-            let slug: String = row.get("slug");
-            let parameter_overrides = Self::catalog_parameter_overrides(&mut tx, model_id, &slug)
-                .await
-                .with_context(|| format!("loading catalog parameter overrides for {slug}"))?;
-            let parameter_presets = Self::catalog_parameter_presets(&mut tx, model_id, &slug)
-                .await
-                .with_context(|| format!("loading catalog parameter presets for {slug}"))?;
-
-            models.push(Model {
-                catalog_schema_version: u32_column(&row, "catalog_schema_version")?,
-                entry_version: u32_column(&row, "entry_version")?,
-                slug,
-                name: row.get("name"),
-                description: row.get("description"),
-                published: bool_column(&row, "published"),
-                tags: json_column(&row, "tags_json")?,
-                thumbnail: row.get("thumbnail"),
-                onshape: OnshapeSource {
-                    document_id: row.get("document_id"),
-                    version_id: row.get("version_id"),
-                    element_id: row.get("element_id"),
-                    element_kind: enum_text_column(&row, "element_kind")?,
-                    link_document_id: row.get("link_document_id"),
-                },
-                exports: ExportConfig {
-                    downloads: json_column(&row, "downloads_json")?,
-                    preview: enum_text_column(&row, "preview_format")?,
-                    preview_options: json_column(&row, "preview_options_json")?,
-                    download_options: json_column(&row, "download_options_json")?,
-                },
-                parameter_policy: ParameterPolicy {
-                    source: enum_text_column(&row, "parameter_source")?,
-                    allow_unknown: bool_column(&row, "parameter_allow_unknown"),
-                    auto_refresh: bool_column(&row, "parameter_auto_refresh"),
-                },
-                parameter_presets,
-                parameter_overrides,
-            });
+            models.push(Self::catalog_model_from_row(&mut tx, row).await?);
         }
 
         let catalog = Catalog::from_models(models)?;
         tx.commit().await?;
         Ok(catalog)
+    }
+
+    pub async fn published_catalog_model(&self, slug: &str) -> anyhow::Result<Option<Model>> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            r#"
+            SELECT id, catalog_schema_version, entry_version, slug, name, description,
+                   published, tags_json, thumbnail, document_id, version_id, element_id,
+                   element_kind, link_document_id, downloads_json, preview_format,
+                   preview_options_json, download_options_json, parameter_source,
+                   parameter_allow_unknown, parameter_auto_refresh
+            FROM catalog_models
+            WHERE slug = ? AND published = 1
+            "#,
+        )
+        .bind(slug)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let model = match row {
+            Some(row) => {
+                let model = Self::catalog_model_from_row(&mut tx, row).await?;
+                let catalog = Catalog::from_models(vec![model])?;
+                Some(catalog.models()[0].clone())
+            }
+            None => None,
+        };
+
+        tx.commit().await?;
+        Ok(model)
     }
 
     pub async fn replace_catalog(&self, catalog: &Catalog) -> anyhow::Result<()> {
@@ -642,6 +634,51 @@ impl Database {
         }
 
         Ok(overrides)
+    }
+
+    async fn catalog_model_from_row(
+        tx: &mut sqlx::Transaction<'_, Sqlite>,
+        row: sqlx::sqlite::SqliteRow,
+    ) -> anyhow::Result<Model> {
+        let model_id: i64 = row.get("id");
+        let slug: String = row.get("slug");
+        let parameter_overrides = Self::catalog_parameter_overrides(tx, model_id, &slug)
+            .await
+            .with_context(|| format!("loading catalog parameter overrides for {slug}"))?;
+        let parameter_presets = Self::catalog_parameter_presets(tx, model_id, &slug)
+            .await
+            .with_context(|| format!("loading catalog parameter presets for {slug}"))?;
+
+        Ok(Model {
+            catalog_schema_version: u32_column(&row, "catalog_schema_version")?,
+            entry_version: u32_column(&row, "entry_version")?,
+            slug,
+            name: row.get("name"),
+            description: row.get("description"),
+            published: bool_column(&row, "published"),
+            tags: json_column(&row, "tags_json")?,
+            thumbnail: row.get("thumbnail"),
+            onshape: OnshapeSource {
+                document_id: row.get("document_id"),
+                version_id: row.get("version_id"),
+                element_id: row.get("element_id"),
+                element_kind: enum_text_column(&row, "element_kind")?,
+                link_document_id: row.get("link_document_id"),
+            },
+            exports: ExportConfig {
+                downloads: json_column(&row, "downloads_json")?,
+                preview: enum_text_column(&row, "preview_format")?,
+                preview_options: json_column(&row, "preview_options_json")?,
+                download_options: json_column(&row, "download_options_json")?,
+            },
+            parameter_policy: ParameterPolicy {
+                source: enum_text_column(&row, "parameter_source")?,
+                allow_unknown: bool_column(&row, "parameter_allow_unknown"),
+                auto_refresh: bool_column(&row, "parameter_auto_refresh"),
+            },
+            parameter_presets,
+            parameter_overrides,
+        })
     }
 
     async fn catalog_parameter_presets(
@@ -2438,6 +2475,37 @@ mod tests {
         assert!(override_.hidden);
         assert_eq!(override_.precision, Some(3));
         assert_eq!(override_.widget.as_deref(), Some("number"));
+    }
+
+    #[tokio::test]
+    async fn published_catalog_model_loads_only_published_slug() {
+        let db = test_database().await;
+        let mut published = test_catalog_model("demo", "did");
+        published.tags = vec!["example".to_owned()];
+        published.parameter_presets = vec![ParameterPreset {
+            slug: "small".to_owned(),
+            name: "Small".to_owned(),
+            values: HashMap::from([("width".to_owned(), "10".to_owned())]),
+        }];
+        let mut unpublished = test_catalog_model("draft", "draft-did");
+        unpublished.published = false;
+        let catalog = Catalog::from_models(vec![published, unpublished]).unwrap();
+
+        db.replace_catalog(&catalog).await.unwrap();
+
+        let loaded = db.published_catalog_model("demo").await.unwrap().unwrap();
+        assert_eq!(loaded.slug, "demo");
+        assert!(loaded.published);
+        assert_eq!(loaded.tags, ["example"]);
+        assert_eq!(loaded.parameter_presets[0].slug, "small");
+        assert_eq!(loaded.parameter_presets[0].values["width"], "10");
+        assert!(db.published_catalog_model("draft").await.unwrap().is_none());
+        assert!(
+            db.published_catalog_model("missing")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]

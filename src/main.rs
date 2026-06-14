@@ -1710,11 +1710,14 @@ async fn preview_status(
     State(state): State<AppState>,
     Path((slug, config_hash)): Path<(String, String)>,
 ) -> Result<Json<ArtifactStatusResponse>, AppError> {
-    let catalog = state.db.catalog().await?;
-    let model = published_model(&catalog, &slug).ok_or(AppError::NotFound)?;
-    let source_hash = resolve_source_hash(&state, model).await?;
+    let model = state
+        .db
+        .published_catalog_model(&slug)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let source_hash = resolve_source_hash(&state, &model).await?;
     let request_hash =
-        current_preview_request_hash(&state, model, &source_hash, &config_hash).await?;
+        current_preview_request_hash(&state, &model, &source_hash, &config_hash).await?;
     let work_keys = request_hash
         .as_deref()
         .map(|request_hash| vec![export_job_key(request_hash)])
@@ -1733,7 +1736,7 @@ async fn preview_status(
     Ok(Json(
         artifact_status(
             &state,
-            preview_lookup_key(&source_hash, model, &config_hash),
+            preview_lookup_key(&source_hash, &model, &config_hash),
             artifact,
             artifact_set,
             &work_keys,
@@ -1746,15 +1749,18 @@ async fn download_status(
     State(state): State<AppState>,
     Path((slug, format_slug, config_hash)): Path<(String, String, String)>,
 ) -> Result<Json<ArtifactStatusResponse>, AppError> {
-    let catalog = state.db.catalog().await?;
-    let model = published_model(&catalog, &slug).ok_or(AppError::NotFound)?;
+    let model = state
+        .db
+        .published_catalog_model(&slug)
+        .await?
+        .ok_or(AppError::NotFound)?;
     let format = catalog::DownloadFormat::from_slug(&format_slug).ok_or(AppError::NotFound)?;
     if !model.exports.downloads.contains(&format) {
         return Err(AppError::NotFound);
     }
-    let source_hash = resolve_source_hash(&state, model).await?;
+    let source_hash = resolve_source_hash(&state, &model).await?;
     let request_hash =
-        current_download_request_hash(&state, model, &source_hash, &config_hash, format).await?;
+        current_download_request_hash(&state, &model, &source_hash, &config_hash, format).await?;
     let work_keys = request_hash
         .as_deref()
         .map(|request_hash| vec![export_job_key(request_hash)])
@@ -1773,7 +1779,7 @@ async fn download_status(
     Ok(Json(
         artifact_status(
             &state,
-            download_lookup_key(&source_hash, model, &config_hash, format),
+            download_lookup_key(&source_hash, &model, &config_hash, format),
             artifact,
             artifact_set,
             &work_keys,
