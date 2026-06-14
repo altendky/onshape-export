@@ -110,6 +110,7 @@ jobs:
           done
 
       - name: Run deploy maintenance
+        timeout-minutes: 20
         run: |
           set -euo pipefail
           maintenance_command="/app/onshape-export ops deploy-maintenance --backup-label ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA}"
@@ -125,9 +126,9 @@ jobs:
           if [ "${{ inputs.reset_generated_state == true || inputs.reset_catalog_from_seed == true || inputs.fresh_database == true }}" = "true" ]; then
             maintenance_command="${maintenance_command} --confirm WIPE"
           fi
-          mise exec -- fly machine exec "${{ steps.machine.outputs.id }}" "${maintenance_command}" \
+          mise exec -- fly ssh console --machine "${{ steps.machine.outputs.id }}" \
             --app "${FLY_APP}" \
-            --timeout 1200
+            -C "${maintenance_command}"
 
       - name: Deploy app
         run: |
