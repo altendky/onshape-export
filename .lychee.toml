@@ -32,6 +32,5 @@ exclude_path = [
 ]
 
 extensions = ["md"]
-include_fragments = true
 include_mail = false
 exclude_all_private = true
