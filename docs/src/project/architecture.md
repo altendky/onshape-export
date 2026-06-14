@@ -17,7 +17,7 @@ Fly.io Rust axum app
   |  ^
   |  | artifact uploads, cached metadata
   |
-  | queue, job uniqueness, status, artifact index
+  | live catalog, queue, job uniqueness, status, artifact index
   v
 SQLite on Fly volume
   ^
@@ -29,7 +29,7 @@ Worker loop in Fly app
 Onshape API
 ```
 
-The public site should be able to serve cached content even when no export job is running. The Rust service owns catalog validation, queue submission, status routes, Onshape calls, translation polling, and Tigris uploads. SQLite owns transactional coordination so duplicate Onshape work is not started for the same deterministic key.
+The public site should be able to serve cached content even when no export job is running. The Rust service owns catalog validation, queue submission, status routes, Onshape calls, translation polling, and Tigris uploads. SQLite owns live catalog data and transactional coordination so duplicate Onshape work is not started for the same deterministic key.
 
 ## Components
 
@@ -37,14 +37,14 @@ The public site should be able to serve cached content even when no export job i
 | --- | --- |
 | Public UI | Catalog browsing, parameter forms, preview viewer, export requests. |
 | Fly Rust app | Public routing, validation, cache checks, queue submission, status routes, Onshape orchestration, Tigris writes. |
-| SQLite on Fly volume | Queue coordination, unique work keys, job status, artifact index, failure summaries. |
+| SQLite on Fly volume | Live catalog rows, publication state, Onshape source IDs, export options, parameter presets/overrides, queue coordination, unique work keys, job status, artifact index, failure summaries. |
 | Tigris Object Storage | Durable public artifacts, previews, raw Onshape responses, normalized parameter metadata. |
 | Onshape API | Configuration discovery and export generation. |
 
 Current Rust boundaries are still mostly in one crate and several responsibilities remain in `main.rs`. The intended internal boundaries are:
 
 - `config`: environment, secrets, deployment settings.
-- `catalog`: in-repo catalog loading and validation.
+- `catalog`: catalog types, JSON seed import, and validation.
 - `routes`: product pages, enqueue/status handlers, health checks.
 - `onshape`: signed Onshape API requests and response models.
 - `jobs`: SQLite queue, leases, retries, failure records.
@@ -56,7 +56,7 @@ Current Rust boundaries are still mostly in one crate and several responsibiliti
 ## Public User Flow
 
 1. User opens a curated model page.
-2. The page loads normalized parameter metadata from repo data or Tigris.
+2. The page loads the live catalog snapshot from SQLite and normalized parameter metadata from Tigris when cached.
 3. User changes parameter selections.
 4. The site computes or requests a deterministic configuration hash.
 5. The site calls a public app route to check whether a preview artifact set exists for that configuration.
@@ -102,7 +102,7 @@ There is no web admin UI in the MVP. Maintenance operations are CLI-only or run 
 
 Initial operational commands:
 
-- Validate curated catalog entries.
+- Import, list, show, and validate SQL-backed catalog entries.
 - Fetch and cache parameter metadata for a model version.
 - Generate or rebuild missing previews.
 - Generate or rebuild download artifacts.
@@ -113,6 +113,6 @@ Authenticated `/admin` routes can be added later when browser-based administrati
 
 ## Database Scope
 
-SQLite is included in the MVP only for coordination and lightweight index state. The catalog remains in the repository, and large/permanent cache data remains in Tigris.
+SQLite is the MVP source of truth for catalog rows and coordination/index state. Large or blob-like cache data remains in Tigris; Tigris is not the catalog source of truth.
 
 Postgres becomes useful when SQLite-on-volume constraints become painful, such as multi-machine workers, stronger managed backups, richer admin queries, editable catalog workflows, users, quotas, audit logs, analytics, or robust long-term job history.

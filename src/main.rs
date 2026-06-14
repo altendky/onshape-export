@@ -11,7 +11,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     env,
     io::{Cursor, Read},
-    sync::Arc,
+    path::Path as FsPath,
     time::Duration,
 };
 
@@ -64,7 +64,6 @@ const V2_EXPORT_WORK_KEY_PREFIX: &str = "work-v2:export:";
 
 #[derive(Clone)]
 struct AppState {
-    catalog: Arc<Catalog>,
     db: Database,
     onshape: OnshapeClient,
     storage: StorageClient,
@@ -297,8 +296,72 @@ async fn run_worker(config: Config) -> anyhow::Result<()> {
 async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Result<()> {
     match (command, args) {
         ("catalog", [subcommand]) if subcommand == "validate" => {
-            let catalog = Catalog::load(&config.catalog_path).context("loading catalog")?;
+            let db = Database::connect(&config.database_url)
+                .await
+                .context("connecting to database")?;
+            let catalog = db
+                .catalog()
+                .await
+                .context("loading catalog from database")?;
             println!("catalog ok: {} models", catalog.models().len());
+            Ok(())
+        }
+        ("catalog", [subcommand, path]) if subcommand == "import" => {
+            let catalog = Catalog::load(path)
+                .with_context(|| format!("loading catalog import from {path}"))?;
+            let db = Database::connect(&config.database_url)
+                .await
+                .context("connecting to database")?;
+            db.replace_catalog(&catalog)
+                .await
+                .context("importing catalog into database")?;
+            println!("imported catalog: {} models", catalog.models().len());
+            Ok(())
+        }
+        ("catalog", [subcommand, output_args @ ..]) if subcommand == "list" => {
+            let output_format = optional_output_format(output_args)?;
+            let db = Database::connect(&config.database_url)
+                .await
+                .context("connecting to database")?;
+            let catalog = db
+                .catalog()
+                .await
+                .context("loading catalog from database")?;
+            match output_format {
+                OutputFormat::Json => {
+                    println!("{}", serde_json::to_string_pretty(catalog.models())?)
+                }
+                OutputFormat::Text if catalog.models().is_empty() => println!("no catalog models"),
+                OutputFormat::Text => {
+                    for model in catalog.models() {
+                        println!(
+                            "{}\t{}\t{}\t{}",
+                            model.slug,
+                            if model.published {
+                                "published"
+                            } else {
+                                "draft"
+                            },
+                            model.name,
+                            model.description
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
+        ("catalog", [subcommand, slug]) if subcommand == "show" => {
+            let db = Database::connect(&config.database_url)
+                .await
+                .context("connecting to database")?;
+            let catalog = db
+                .catalog()
+                .await
+                .context("loading catalog from database")?;
+            let model = catalog
+                .find(slug)
+                .ok_or_else(|| anyhow::anyhow!("unknown model slug: {slug}"))?;
+            println!("{}", serde_json::to_string_pretty(model)?);
             Ok(())
         }
         ("ops", [subcommand]) if subcommand == "check" => run_ops_check(config).await,
@@ -306,14 +369,19 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             let db = Database::connect(&config.database_url)
                 .await
                 .context("connecting to database")?;
-            let destination = std::path::Path::new(destination);
+            let destination = FsPath::new(destination);
             db.backup_to_path(destination).await?;
             println!("database backup written to {}", destination.display());
             Ok(())
         }
         ("parameters", [subcommand, selector]) if subcommand == "refresh" => {
             let state = cli_state(config).await?;
-            for model in selected_models(&state.catalog, selector)? {
+            let catalog = state
+                .db
+                .catalog()
+                .await
+                .context("loading catalog from database")?;
+            for model in selected_models(&catalog, selector)? {
                 refresh_parameters(&state, model).await?;
                 println!("refreshed parameters for {}", model.slug);
             }
@@ -324,7 +392,12 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
         {
             let parameter_selector = optional_parameter_selector(parameter_selector)?;
             let state = cli_state(config).await?;
-            for model in selected_models(&state.catalog, selector)? {
+            let catalog = state
+                .db
+                .catalog()
+                .await
+                .context("loading catalog from database")?;
+            for model in selected_models(&catalog, selector)? {
                 for parameter_set in
                     selected_parameter_sets(&state, model, parameter_selector).await?
                 {
@@ -344,7 +417,12 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
         {
             let parameter_selector = optional_parameter_selector(parameter_selector)?;
             let state = cli_state(config).await?;
-            for model in selected_models(&state.catalog, selector)? {
+            let catalog = state
+                .db
+                .catalog()
+                .await
+                .context("loading catalog from database")?;
+            for model in selected_models(&catalog, selector)? {
                 let formats = selected_formats(model, format)?;
                 for parameter_set in
                     selected_parameter_sets(&state, model, parameter_selector).await?
@@ -412,7 +490,12 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             let output_format = optional_output_format(output_args)?;
             let state = cli_state(config).await?;
             let mut all_artifacts = Vec::new();
-            for model in selected_models(&state.catalog, selector)? {
+            let catalog = state
+                .db
+                .catalog()
+                .await
+                .context("loading catalog from database")?;
+            for model in selected_models(&catalog, selector)? {
                 let artifacts = state.db.artifacts_for_model(&model.slug).await?;
                 match output_format {
                     OutputFormat::Json => all_artifacts.extend(artifacts),
@@ -462,7 +545,12 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             let state = cli_state(config).await?;
             let mut pruned = 0usize;
 
-            for model in selected_models(&state.catalog, selector)? {
+            let catalog = state
+                .db
+                .catalog()
+                .await
+                .context("loading catalog from database")?;
+            for model in selected_models(&catalog, selector)? {
                 let artifacts = state
                     .db
                     .artifacts_older_than_days(&model.slug, options.older_than_days)
@@ -553,16 +641,17 @@ fn optional_output_format(args: &[String]) -> anyhow::Result<OutputFormat> {
 async fn run_ops_check(config: Config) -> anyhow::Result<()> {
     let mut failures = Vec::new();
 
-    match Catalog::load(&config.catalog_path) {
-        Ok(catalog) => println!("catalog ok: {} models", catalog.models().len()),
-        Err(error) => failures.push(format!("catalog load failed: {error:#}")),
-    }
-
     match Database::connect(&config.database_url).await {
-        Ok(db) => match db.ping().await {
-            Ok(()) => println!("database ok: {}", config.database_url),
-            Err(error) => failures.push(format!("database ping failed: {error:#}")),
-        },
+        Ok(db) => {
+            match db.ping().await {
+                Ok(()) => println!("database ok: {}", config.database_url),
+                Err(error) => failures.push(format!("database ping failed: {error:#}")),
+            }
+            match db.catalog().await {
+                Ok(catalog) => println!("catalog ok: {} models", catalog.models().len()),
+                Err(error) => failures.push(format!("catalog load failed: {error:#}")),
+            }
+        }
         Err(error) => failures.push(format!("database connect failed: {error:#}")),
     }
 
@@ -660,15 +749,16 @@ async fn cli_state(config: Config) -> anyhow::Result<AppState> {
 }
 
 async fn build_state(config: Config) -> anyhow::Result<AppState> {
-    let catalog = Arc::new(Catalog::load(&config.catalog_path).context("loading catalog")?);
     let db = Database::connect(&config.database_url)
         .await
         .context("connecting to database")?;
+    db.catalog()
+        .await
+        .context("loading catalog from database")?;
     let storage = StorageClient::new(config.storage.clone()).await?;
     let onshape = OnshapeClient::new(config.onshape.clone())?;
 
     Ok(AppState {
-        catalog,
         db,
         onshape,
         storage,
@@ -947,7 +1037,7 @@ fn validated_parameter_set(
 
 fn print_usage() {
     eprintln!(
-        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export ops check\n  onshape-export ops backup <destination.db>\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export jobs list [--json]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
+        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export catalog import <models.json>\n  onshape-export catalog list [--json]\n  onshape-export catalog show <slug>\n  onshape-export ops check\n  onshape-export ops backup <destination.db>\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export jobs list [--json]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
     );
 }
 
@@ -986,20 +1076,17 @@ async fn healthz(State(state): State<AppState>) -> Result<&'static str, AppError
 }
 
 async fn metrics(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+    let catalog = state.db.catalog().await?;
     let job_metrics = state.db.job_metrics().await?;
     let artifact_metrics = state.db.artifact_metrics().await?;
-    let body = render_metrics(
-        state.catalog.models().len(),
-        &job_metrics,
-        &artifact_metrics,
-    );
+    let body = render_metrics(catalog.models().len(), &job_metrics, &artifact_metrics);
 
     Ok(([(CONTENT_TYPE, "text/plain; version=0.0.4")], body))
 }
 
-async fn index(State(state): State<AppState>) -> Html<String> {
-    let models = state
-        .catalog
+async fn index(State(state): State<AppState>) -> Result<Html<String>, AppError> {
+    let catalog = state.db.catalog().await?;
+    let models = catalog
         .models()
         .iter()
         .filter(|model| model.published)
@@ -1013,7 +1100,7 @@ async fn index(State(state): State<AppState>) -> Html<String> {
         })
         .collect::<String>();
 
-    Html(format!(
+    Ok(Html(format!(
         r#"<!doctype html>
 <html lang="en">
 <head>
@@ -1029,14 +1116,15 @@ async fn index(State(state): State<AppState>) -> Html<String> {
   </main>
 </body>
 </html>"#
-    ))
+    )))
 }
 
 async fn model_page(
     State(state): State<AppState>,
     Path(slug): Path<String>,
 ) -> Result<Html<String>, AppError> {
-    let model = published_model(&state.catalog, &slug).ok_or(AppError::NotFound)?;
+    let catalog = state.db.catalog().await?;
+    let model = published_model(&catalog, &slug).ok_or(AppError::NotFound)?;
     let parameters = load_or_refresh_parameters(&state, model).await?;
     let parameter_controls = parameters
         .as_ref()
@@ -1405,7 +1493,8 @@ async fn validate_model_config(
     Path(slug): Path<String>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
-    let model = published_model(&state.catalog, &slug).ok_or(AppError::NotFound)?;
+    let catalog = state.db.catalog().await?;
+    let model = published_model(&catalog, &slug).ok_or(AppError::NotFound)?;
     let Some(parameters) = load_or_refresh_parameters(&state, model).await? else {
         return Ok(Html(
             "Parameter metadata is still refreshing. Try again shortly.\n".to_owned(),
@@ -1434,7 +1523,8 @@ async fn generate_preview(
     Path(slug): Path<String>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
-    let model = published_model(&state.catalog, &slug).ok_or(AppError::NotFound)?;
+    let catalog = state.db.catalog().await?;
+    let model = published_model(&catalog, &slug).ok_or(AppError::NotFound)?;
     let Some(parameters) = load_or_refresh_parameters(&state, model).await? else {
         return Ok(Html(
             "Parameter metadata is still refreshing. Try again shortly.\n".to_owned(),
@@ -1506,7 +1596,8 @@ async fn generate_download(
     Path((slug, format_slug)): Path<(String, String)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
-    let model = published_model(&state.catalog, &slug).ok_or(AppError::NotFound)?;
+    let catalog = state.db.catalog().await?;
+    let model = published_model(&catalog, &slug).ok_or(AppError::NotFound)?;
     let format = catalog::DownloadFormat::from_slug(&format_slug).ok_or(AppError::NotFound)?;
     if !model.exports.downloads.contains(&format) {
         return Err(AppError::NotFound);
@@ -1589,7 +1680,8 @@ async fn preview_status(
     State(state): State<AppState>,
     Path((slug, config_hash)): Path<(String, String)>,
 ) -> Result<Json<ArtifactStatusResponse>, AppError> {
-    let model = published_model(&state.catalog, &slug).ok_or(AppError::NotFound)?;
+    let catalog = state.db.catalog().await?;
+    let model = published_model(&catalog, &slug).ok_or(AppError::NotFound)?;
     let source_hash = resolve_source_hash(&state, model).await?;
     let request_hash =
         current_preview_request_hash(&state, model, &source_hash, &config_hash).await?;
@@ -1624,7 +1716,8 @@ async fn download_status(
     State(state): State<AppState>,
     Path((slug, format_slug, config_hash)): Path<(String, String, String)>,
 ) -> Result<Json<ArtifactStatusResponse>, AppError> {
-    let model = published_model(&state.catalog, &slug).ok_or(AppError::NotFound)?;
+    let catalog = state.db.catalog().await?;
+    let model = published_model(&catalog, &slug).ok_or(AppError::NotFound)?;
     let format = catalog::DownloadFormat::from_slug(&format_slug).ok_or(AppError::NotFound)?;
     if !model.exports.downloads.contains(&format) {
         return Err(AppError::NotFound);
@@ -1970,7 +2063,8 @@ async fn scheduled_rebuild_loop(state: AppState, rebuild_interval: Duration) {
 
 async fn enqueue_scheduled_rebuild(state: &AppState) -> anyhow::Result<()> {
     let mut enqueued = 0usize;
-    for model in state.catalog.models() {
+    let catalog = state.db.catalog().await?;
+    for model in catalog.models() {
         if model.parameter_policy.auto_refresh
             && force_enqueue_parameter_refresh(state, model).await?
         {
@@ -2157,10 +2251,10 @@ fn retry_backoff_seconds(attempt: i64) -> i64 {
 
 async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()> {
     let payload: JobPayload = serde_json::from_str(&job.payload_json)?;
+    let catalog = state.db.catalog().await?;
     match payload {
         JobPayload::ParameterRefresh { model_slug } => {
-            let model = state
-                .catalog
+            let model = catalog
                 .find(&model_slug)
                 .ok_or_else(|| anyhow::anyhow!("unknown model slug: {model_slug}"))?;
             refresh_parameters(state, model).await?;
@@ -2180,8 +2274,7 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                 job.job_kind == "preview_export",
                 "unexpected preview job kind"
             );
-            let model = state
-                .catalog
+            let model = catalog
                 .find(&model_slug)
                 .ok_or_else(|| anyhow::anyhow!("unknown model slug: {model_slug}"))?;
             let parameters = load_or_refresh_parameters(state, model)
@@ -2264,8 +2357,7 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
                 job.job_kind == "download_export",
                 "unexpected download job kind"
             );
-            let model = state
-                .catalog
+            let model = catalog
                 .find(&model_slug)
                 .ok_or_else(|| anyhow::anyhow!("unknown model slug: {model_slug}"))?;
             anyhow::ensure!(
@@ -4754,7 +4846,6 @@ fn escape_html(value: &str) -> String {
 mod tests {
     use super::*;
     use std::io::Write;
-    use std::sync::Arc;
 
     #[test]
     fn escapes_html() {
@@ -5897,6 +5988,8 @@ mod tests {
         );
         let db = Database::connect(&database_url).await.unwrap();
         std::mem::forget(directory);
+        let catalog = test_catalog();
+        db.replace_catalog(&catalog).await.unwrap();
         let storage = StorageClient::new(crate::config::StorageConfig {
             bucket: "test-bucket".to_owned(),
             endpoint_url: Some("http://127.0.0.1:9000".to_owned()),
@@ -5916,7 +6009,6 @@ mod tests {
         .unwrap();
 
         AppState {
-            catalog: Arc::new(test_catalog()),
             db,
             onshape,
             storage,

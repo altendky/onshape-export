@@ -7,7 +7,6 @@ primary_region = "ord"
 [env]
   AWS_REGION = "auto"
   BIND_ADDR = "0.0.0.0:8080"
-  CATALOG_PATH = "catalog/v1/models.json"
   DATABASE_URL = "sqlite:///data/onshape-export.db?mode=rwc"
   RUST_LOG = "info,onshape_export=debug,tower_http=info"
   TIGRIS_BUCKET = "onshape-export"

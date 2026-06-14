@@ -235,6 +235,15 @@ struct CatalogIndexModel {
 }
 
 impl Catalog {
+    pub fn from_models(models: Vec<Model>) -> anyhow::Result<Self> {
+        let catalog = Self {
+            catalog_schema_version: CATALOG_SCHEMA_VERSION,
+            models,
+        };
+        catalog.validate()?;
+        Ok(catalog)
+    }
+
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
         let contents = fs::read_to_string(path)?;
@@ -250,12 +259,7 @@ impl Catalog {
         for reference in file.models {
             models.push(reference.load_model(base_path)?);
         }
-        let catalog = Self {
-            catalog_schema_version: file.catalog_schema_version,
-            models,
-        };
-        catalog.validate()?;
-        Ok(catalog)
+        Self::from_models(models)
     }
 
     pub fn models(&self) -> &[Model] {
@@ -266,7 +270,7 @@ impl Catalog {
         self.models.iter().find(|model| model.slug == slug)
     }
 
-    fn validate(&self) -> anyhow::Result<()> {
+    pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.catalog_schema_version == CATALOG_SCHEMA_VERSION,
             "unsupported catalog schema version: {}",

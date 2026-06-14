@@ -72,9 +72,9 @@ Use robust SQLite settings such as WAL mode, `synchronous = FULL`, foreign keys,
 
 ## Catalog Storage
 
-**Decision:** Start with in-repo catalog data and documentation.
+**Decision:** Store the live catalog in SQLite.
 
-Move to Tigris JSON or a relational database only when admin-editable catalog requirements exist.
+Catalog models, publication state, Onshape source IDs, export options, parameter presets, and parameter overrides are mutable application data. Keep Tigris for artifacts, raw Onshape payloads, thumbnails/media if needed, and blob-like cache data. The checked-in `catalog/v1` JSON is a seed/test fixture, not the production runtime source of truth.
 
 ## Runtime Shape
 
