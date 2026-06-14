@@ -208,7 +208,7 @@ Manual deploys run through `.github/workflows/deploy.yml`. Configure the `produc
 The workflow follows one operational pattern for every manual deploy:
 
 1. Build and push the target image.
-2. Update the single app machine to run `sleep infinity`, which leaves the `/data` volume mounted while the public HTTP service is down.
+2. Update the single app machine to run `sleep infinity`, which leaves the `/data` volume mounted while the public HTTP service is down. This update retries briefly because Fly's Machines API can see a just-pushed image tag before the corresponding registry manifest is fully available.
 3. Execute `/app/onshape-export ops deploy-maintenance` inside that quiesced machine.
 4. Upload a SQLite backup to the private backup bucket.
 5. Apply selected reset options.
