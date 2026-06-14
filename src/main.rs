@@ -1260,7 +1260,8 @@ fn render_model_html(
   }};
 
   const parameterValue = (form, parameterId) => {{
-    const controls = Array.from(form.elements).filter((control) => control.name === parameterId);
+    const formControls = Array.from(form.elements);
+    const controls = formControls.filter((control) => control.name === parameterId);
     for (const control of controls) {{
       if (control instanceof HTMLInputElement && control.type === "checkbox") {{
         if (control.checked) {{
@@ -1280,7 +1281,25 @@ fn render_model_html(
       !(control instanceof HTMLInputElement) ||
       (control.type !== "checkbox" && control.type !== "radio")
     );
-    return control?.value;
+    if (control) {{
+      return control.value;
+    }}
+
+    const quantityValueControl = formControls.find(
+      (control) => control.name === `${{parameterId}}__value`
+    );
+    if (!quantityValueControl) {{
+      return undefined;
+    }}
+    const value = quantityValueControl.value.trim();
+    if (!value) {{
+      return "";
+    }}
+    const quantityUnitControl = formControls.find(
+      (control) => control.name === `${{parameterId}}__unit`
+    );
+    const unit = quantityUnitControl?.value.trim() ?? "";
+    return unit ? `${{value}} ${{unit}}` : value;
   }};
 
   const evaluateVisibilityCondition = (condition, form) => {{
@@ -4930,6 +4949,8 @@ mod tests {
         assert!(html.contains("initializeParameterVisibility(nextMain)"));
         assert!(html.contains(r#"form.addEventListener("change", update)"#));
         assert!(html.contains("wrapper.hidden = !evaluateVisibilityCondition"));
+        assert!(html.contains(r#"control.name === `${parameterId}__value`"#));
+        assert!(html.contains(r#"return unit ? `${value} ${unit}` : value"#));
     }
 
     #[test]
