@@ -114,8 +114,16 @@ impl StorageClient {
         path: &std::path::Path,
         content_type: &str,
     ) -> anyhow::Result<()> {
-        let body = std::fs::read(path)?;
-        self.put_bytes(key, body, content_type).await
+        let body = ByteStream::from_path(path).await?;
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .content_type(content_type)
+            .body(body)
+            .send()
+            .await?;
+        Ok(())
     }
 
     pub async fn get_json<T: DeserializeOwned>(&self, key: &str) -> anyhow::Result<T> {
