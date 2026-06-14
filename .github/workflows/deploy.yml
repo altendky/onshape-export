@@ -86,15 +86,49 @@ jobs:
             exit 1
           fi
           printf 'id=%s\n' "${machines[0]}" >> "${GITHUB_OUTPUT}"
+          MACHINES_JSON="${machines_json}" MACHINE_ID="${machines[0]}" python - <<'PY' >> "${GITHUB_OUTPUT}"
+          import json
+          import os
+
+          machines = json.loads(os.environ["MACHINES_JSON"])
+          machine = next(item for item in machines if item["id"] == os.environ["MACHINE_ID"])
+          previous_image = machine.get("config", {}).get("image")
+          if not previous_image:
+              raise SystemExit("selected app machine is missing config.image")
+          print(f"previous_image={previous_image}")
+          PY
 
       - name: Quiesce app machine
         run: |
           set -euo pipefail
+          mapfile -t fly_env < <(
+            python - <<'PY'
+          import tomllib
+
+          with open("fly.toml", "rb") as config_file:
+              env = tomllib.load(config_file).get("env", {})
+
+          for name, value in sorted(env.items()):
+              if isinstance(value, bool):
+                  value = "true" if value else "false"
+              else:
+                  value = str(value)
+              if "\n" in value:
+                  raise SystemExit(f"fly.toml env value for {name} contains a newline")
+              print(f"{name}={value}")
+          PY
+          )
+          fly_env_flags=()
+          for env_var in "${fly_env[@]}"; do
+            fly_env_flags+=(--env "${env_var}")
+          done
+
           for attempt in 1 2 3 4 5; do
             if mise exec -- fly machine update "${{ steps.machine.outputs.id }}" \
               --app "${FLY_APP}" \
               --image "${{ steps.build.outputs.image }}" \
               --command "sleep infinity" \
+              "${fly_env_flags[@]}" \
               --restart no \
               --skip-health-checks \
               --wait-timeout 300 \
@@ -131,6 +165,7 @@ jobs:
             -C "${maintenance_command}"
 
       - name: Deploy app
+        id: deploy_app
         run: |
           set -euo pipefail
           mise exec -- fly deploy --app "${FLY_APP}" --remote-only --image "${{ steps.build.outputs.image }}" --strategy immediate --yes
@@ -141,6 +176,24 @@ jobs:
           mise exec -- fly ssh console --app "${FLY_APP}" -C "/app/onshape-export ops check"
 
       - name: Check health endpoint
+        run: |
+          set -euo pipefail
+          curl -fsS "https://${FLY_APP}.fly.dev/healthz"
+
+      - name: Restore previous app after failed deploy
+        id: restore_app
+        if: ${{ failure() && steps.deploy_app.outcome != 'success' && steps.machine.outputs.previous_image != '' }}
+        run: |
+          set -euo pipefail
+          mise exec -- fly deploy \
+            --app "${FLY_APP}" \
+            --remote-only \
+            --image "${{ steps.machine.outputs.previous_image }}" \
+            --strategy immediate \
+            --yes
+
+      - name: Check restored health endpoint
+        if: ${{ failure() && steps.deploy_app.outcome != 'success' && steps.machine.outputs.previous_image != '' && steps.restore_app.outcome == 'success' }}
         run: |
           set -euo pipefail
           curl -fsS "https://${FLY_APP}.fly.dev/healthz"

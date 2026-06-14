@@ -208,12 +208,14 @@ Manual deploys run through `.github/workflows/deploy.yml`. Configure the `produc
 The workflow follows one operational pattern for every manual deploy:
 
 1. Build and push the target image.
-2. Update the single app machine to run `sleep infinity`, which leaves the `/data` volume mounted while the public HTTP service is down. This update retries briefly because Fly's Machines API can see a just-pushed image tag before the corresponding registry manifest is fully available.
+2. Update the single app machine to run `sleep infinity`, which leaves the `/data` volume mounted while the public HTTP service is down. The workflow explicitly applies the non-secret `[env]` values from `fly.toml` to this quiesced machine so maintenance sees the same runtime configuration as the deployed app. This update retries briefly because Fly's Machines API can see a just-pushed image tag before the corresponding registry manifest is fully available.
 3. Execute `/app/onshape-export ops deploy-maintenance` inside that quiesced machine.
 4. Upload a SQLite backup to the private backup bucket.
 5. Apply selected reset options.
 6. Deploy the normal app command from the same image.
 7. Run `ops check` and `/healthz`.
+
+Before quiescing the machine, the workflow records the current app image. If the workflow fails before the normal app deploy succeeds, a recovery step redeploys that previous image so the app machine is not left running `sleep infinity`.
 
 The workflow currently expects exactly one Fly app machine. If the app is later split into separate web and worker machines or process groups, update the deployment workflow before enabling multi-machine production deployment.
 

@@ -17,7 +17,7 @@ Renovate is configured to maintain dependencies, pre-commit hooks, mise tools, a
 
 The repository also has a manual deploy workflow in `.github/workflows/deploy.yml`. It uses `workflow_dispatch`, the GitHub Environment named `production`, and `mise`-managed `flyctl`. Configure `FLY_API_TOKEN` as a `production` environment secret, and set `FLY_APP` as a repository or environment variable only if the Fly app name differs from `onshape-export`.
 
-Manual deploys quiesce the single Fly app machine, run app-owned deploy maintenance, upload a SQLite backup to the private backup bucket, optionally apply explicit destructive reset modes, deploy the normal app, and run readiness checks. Destructive inputs default to `false` and require `confirm_destructive` to be `WIPE`.
+Manual deploys quiesce the single Fly app machine, run app-owned deploy maintenance, upload a SQLite backup to the private backup bucket, optionally apply explicit destructive reset modes, deploy the normal app, and run readiness checks. The quiesced machine receives non-secret `[env]` values from `fly.toml`, and failures before the final app deploy trigger redeployment of the previously running image. Destructive inputs default to `false` and require `confirm_destructive` to be `WIPE`.
 
 ## Local Tooling
 
