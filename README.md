@@ -16,7 +16,7 @@ Implemented foundation:
 - SQLite connection setup with migrations and MVP durability PRAGMAs.
 - Tigris/S3-compatible client construction.
 - Signed Onshape API-key client for configuration metadata reads and export calls.
-- In-repo `catalog/v1/` JSON loading and validation.
+- SQLite-backed live catalog loading, validation, and CLI import/list/show operations.
 - Onshape parameter metadata refresh, normalization, Tigris caching, and SQLite deduplication.
 - RFC 8785 JSON canonicalization for source, configuration, options, and work-key hash preimages.
 - Server-rendered model parameter controls and submitted-value validation.
@@ -26,10 +26,10 @@ Implemented foundation:
 - Supersession-based artifact invalidation and pruning that leave public object-store artifacts immutable.
 - Worker-only runtime mode for separate Fly process groups.
 - Configurable worker concurrency through `WORKER_CONCURRENCY`.
-- CLI maintenance commands for catalog validation, parameter refresh, pre-generation, job/failure inspection and retry, and artifact inspection/invalidation.
+- CLI maintenance commands for catalog import/validation/list/show, parameter refresh, pre-generation, job/failure inspection and retry, and artifact inspection/invalidation.
 - Catalog-defined parameter presets for targeted preview/export pre-generation.
 - Catalog-defined parameter UI overrides and preview/STEP export option defaults.
-- Deploy-time `ops check` command for catalog, SQLite, storage, public URL, and credential readiness.
+- Deploy-time `ops check` command for SQL-backed catalog, SQLite, storage, public URL, and credential readiness.
 - Operator-triggered SQLite backup snapshots through `ops backup <destination.db>`.
 - GitHub Actions CI with Rust, docs, pre-commit, mise lockfile checks, and an aggregate job named exactly `all`.
 - Scheduled Renovate workflow and repository tooling configuration.
@@ -89,6 +89,12 @@ Set `WORKER_CONCURRENCY` to control how many queued jobs a worker process may ru
 
 The default local database is `onshape-export.db`. Set `DATABASE_URL` for deployment, for example to a SQLite file on a Fly volume.
 
+The runtime catalog is stored in SQLite. To seed a new local or deployed database from the checked-in fixture, run:
+
+```sh
+cargo run -- catalog import catalog/v1/models.json
+```
+
 Fly deployment foundation:
 
 ```sh
@@ -115,6 +121,7 @@ The included `fly.toml` runs a single web machine with the in-process worker ena
 - Runtime: Fly.io Rust app at `https://onshape-export.fly.dev` if the app name is available.
 - Cache backend: Tigris Object Storage via Fly, with public stable artifact URLs.
 - Coordination database: SQLite on a Fly volume for queue/job uniqueness.
+- Catalog database: SQLite live application data; checked-in JSON is only a seed/test fixture.
 - No public API initially; expose product/UI routes only.
 - No web admin UI initially; maintenance operations are CLI or Fly operational commands.
 

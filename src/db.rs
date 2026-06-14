@@ -1,7 +1,13 @@
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
-use serde::{Deserialize, Serialize};
-use sqlx::{Executor, Row, SqlitePool, sqlite::SqlitePoolOptions};
+use anyhow::Context;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sqlx::{Executor, Row, Sqlite, SqlitePool, sqlite::SqlitePoolOptions};
+
+use crate::catalog::{
+    Catalog, ExportConfig, Model, OnshapeSource, ParameterOverride, ParameterPolicy,
+    ParameterPreset, ParameterSource, PreviewFormat,
+};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -415,6 +421,313 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    pub async fn catalog(&self) -> anyhow::Result<Catalog> {
+        let mut tx = self.pool.begin().await?;
+        let rows = sqlx::query(
+            r#"
+            SELECT id, catalog_schema_version, entry_version, slug, name, description,
+                   published, tags_json, thumbnail, document_id, version_id, element_id,
+                   element_kind, link_document_id, downloads_json, preview_format,
+                   preview_options_json, download_options_json, parameter_source,
+                   parameter_allow_unknown, parameter_auto_refresh
+            FROM catalog_models
+            ORDER BY display_order, slug
+            "#,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+
+        let mut models = Vec::with_capacity(rows.len());
+        for row in rows {
+            models.push(Self::catalog_model_from_row(&mut tx, row).await?);
+        }
+
+        let catalog = Catalog::from_models(models)?;
+        tx.commit().await?;
+        Ok(catalog)
+    }
+
+    pub async fn published_catalog_model(&self, slug: &str) -> anyhow::Result<Option<Model>> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            r#"
+            SELECT id, catalog_schema_version, entry_version, slug, name, description,
+                   published, tags_json, thumbnail, document_id, version_id, element_id,
+                   element_kind, link_document_id, downloads_json, preview_format,
+                   preview_options_json, download_options_json, parameter_source,
+                   parameter_allow_unknown, parameter_auto_refresh
+            FROM catalog_models
+            WHERE slug = ? AND published = 1
+            "#,
+        )
+        .bind(slug)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let model = match row {
+            Some(row) => {
+                let model = Self::catalog_model_from_row(&mut tx, row).await?;
+                let catalog = Catalog::from_models(vec![model])?;
+                Some(catalog.models()[0].clone())
+            }
+            None => None,
+        };
+
+        tx.commit().await?;
+        Ok(model)
+    }
+
+    pub async fn replace_catalog(&self, catalog: &Catalog) -> anyhow::Result<()> {
+        catalog.validate()?;
+
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM catalog_parameter_preset_values")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM catalog_parameter_presets")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM catalog_parameter_overrides")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM catalog_models")
+            .execute(&mut *tx)
+            .await?;
+
+        for (display_order, model) in catalog.models().iter().enumerate() {
+            let tags_json = serde_json::to_string(&model.tags)?;
+            let downloads_json = serde_json::to_string(&model.exports.downloads)?;
+            let preview_options_json = serde_json::to_string(&model.exports.preview_options)?;
+            let download_options_json = serde_json::to_string(&model.exports.download_options)?;
+            let result = sqlx::query(
+                r#"
+                INSERT INTO catalog_models (
+                    display_order, catalog_schema_version, entry_version, slug, name,
+                    description, published, tags_json, thumbnail, document_id, version_id,
+                    element_id, element_kind, link_document_id, downloads_json,
+                    preview_format, preview_options_json, download_options_json,
+                    parameter_source, parameter_allow_unknown, parameter_auto_refresh
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(i64::try_from(display_order).context("catalog display order overflow")?)
+            .bind(i64::from(model.catalog_schema_version))
+            .bind(i64::from(model.entry_version))
+            .bind(&model.slug)
+            .bind(&model.name)
+            .bind(&model.description)
+            .bind(bool_to_i64(model.published))
+            .bind(tags_json)
+            .bind(&model.thumbnail)
+            .bind(&model.onshape.document_id)
+            .bind(&model.onshape.version_id)
+            .bind(&model.onshape.element_id)
+            .bind(model.onshape.element_kind.key())
+            .bind(&model.onshape.link_document_id)
+            .bind(downloads_json)
+            .bind(preview_format_key(&model.exports.preview))
+            .bind(preview_options_json)
+            .bind(download_options_json)
+            .bind(parameter_source_key(&model.parameter_policy.source))
+            .bind(bool_to_i64(model.parameter_policy.allow_unknown))
+            .bind(bool_to_i64(model.parameter_policy.auto_refresh))
+            .execute(&mut *tx)
+            .await?;
+            let model_id = result.last_insert_rowid();
+
+            for (parameter_id, override_) in &model.parameter_overrides {
+                sqlx::query(
+                    r#"
+                    INSERT INTO catalog_parameter_overrides (
+                        model_id, parameter_id, label, description, hidden, precision, widget
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    "#,
+                )
+                .bind(model_id)
+                .bind(parameter_id)
+                .bind(&override_.label)
+                .bind(&override_.description)
+                .bind(bool_to_i64(override_.hidden))
+                .bind(override_.precision.map(i64::from))
+                .bind(&override_.widget)
+                .execute(&mut *tx)
+                .await?;
+            }
+
+            for (preset_order, preset) in model.parameter_presets.iter().enumerate() {
+                let result = sqlx::query(
+                    r#"
+                    INSERT INTO catalog_parameter_presets (model_id, display_order, slug, name)
+                    VALUES (?, ?, ?, ?)
+                    "#,
+                )
+                .bind(model_id)
+                .bind(i64::try_from(preset_order).context("catalog preset order overflow")?)
+                .bind(&preset.slug)
+                .bind(&preset.name)
+                .execute(&mut *tx)
+                .await?;
+                let preset_id = result.last_insert_rowid();
+
+                for (parameter_id, value) in &preset.values {
+                    sqlx::query(
+                        r#"
+                        INSERT INTO catalog_parameter_preset_values (preset_id, parameter_id, value)
+                        VALUES (?, ?, ?)
+                        "#,
+                    )
+                    .bind(preset_id)
+                    .bind(parameter_id)
+                    .bind(value)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+            }
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn catalog_parameter_overrides(
+        tx: &mut sqlx::Transaction<'_, Sqlite>,
+        model_id: i64,
+        model_slug: &str,
+    ) -> anyhow::Result<HashMap<String, ParameterOverride>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT parameter_id, label, description, hidden, precision, widget
+            FROM catalog_parameter_overrides
+            WHERE model_id = ?
+            ORDER BY parameter_id
+            "#,
+        )
+        .bind(model_id)
+        .fetch_all(&mut **tx)
+        .await?;
+
+        let mut overrides = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let parameter_id: String = row.get("parameter_id");
+            let precision = row
+                .get::<Option<i64>, _>("precision")
+                .map(|value| {
+                    u32::try_from(value).with_context(|| {
+                        format!("invalid override precision for {model_slug}:{parameter_id}")
+                    })
+                })
+                .transpose()?;
+            overrides.insert(
+                parameter_id,
+                ParameterOverride {
+                    label: row.get("label"),
+                    description: row.get("description"),
+                    hidden: bool_column(&row, "hidden"),
+                    precision,
+                    widget: row.get("widget"),
+                },
+            );
+        }
+
+        Ok(overrides)
+    }
+
+    async fn catalog_model_from_row(
+        tx: &mut sqlx::Transaction<'_, Sqlite>,
+        row: sqlx::sqlite::SqliteRow,
+    ) -> anyhow::Result<Model> {
+        let model_id: i64 = row.get("id");
+        let slug: String = row.get("slug");
+        let parameter_overrides = Self::catalog_parameter_overrides(tx, model_id, &slug)
+            .await
+            .with_context(|| format!("loading catalog parameter overrides for {slug}"))?;
+        let parameter_presets = Self::catalog_parameter_presets(tx, model_id, &slug)
+            .await
+            .with_context(|| format!("loading catalog parameter presets for {slug}"))?;
+
+        Ok(Model {
+            catalog_schema_version: u32_column(&row, "catalog_schema_version")?,
+            entry_version: u32_column(&row, "entry_version")?,
+            slug,
+            name: row.get("name"),
+            description: row.get("description"),
+            published: bool_column(&row, "published"),
+            tags: json_column(&row, "tags_json")?,
+            thumbnail: row.get("thumbnail"),
+            onshape: OnshapeSource {
+                document_id: row.get("document_id"),
+                version_id: row.get("version_id"),
+                element_id: row.get("element_id"),
+                element_kind: enum_text_column(&row, "element_kind")?,
+                link_document_id: row.get("link_document_id"),
+            },
+            exports: ExportConfig {
+                downloads: json_column(&row, "downloads_json")?,
+                preview: enum_text_column(&row, "preview_format")?,
+                preview_options: json_column(&row, "preview_options_json")?,
+                download_options: json_column(&row, "download_options_json")?,
+            },
+            parameter_policy: ParameterPolicy {
+                source: enum_text_column(&row, "parameter_source")?,
+                allow_unknown: bool_column(&row, "parameter_allow_unknown"),
+                auto_refresh: bool_column(&row, "parameter_auto_refresh"),
+            },
+            parameter_presets,
+            parameter_overrides,
+        })
+    }
+
+    async fn catalog_parameter_presets(
+        tx: &mut sqlx::Transaction<'_, Sqlite>,
+        model_id: i64,
+        model_slug: &str,
+    ) -> anyhow::Result<Vec<ParameterPreset>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, slug, name
+            FROM catalog_parameter_presets
+            WHERE model_id = ?
+            ORDER BY display_order, slug
+            "#,
+        )
+        .bind(model_id)
+        .fetch_all(&mut **tx)
+        .await?;
+
+        let mut presets = Vec::with_capacity(rows.len());
+        for row in rows {
+            let preset_id: i64 = row.get("id");
+            let slug: String = row.get("slug");
+            let value_rows = sqlx::query(
+                r#"
+                SELECT parameter_id, value
+                FROM catalog_parameter_preset_values
+                WHERE preset_id = ?
+                ORDER BY parameter_id
+                "#,
+            )
+            .bind(preset_id)
+            .fetch_all(&mut **tx)
+            .await
+            .with_context(|| format!("loading catalog preset values for {model_slug}:{slug}"))?;
+
+            let mut values = HashMap::with_capacity(value_rows.len());
+            for value_row in value_rows {
+                values.insert(value_row.get("parameter_id"), value_row.get("value"));
+            }
+
+            presets.push(ParameterPreset {
+                slug,
+                name: row.get("name"),
+                values,
+            });
+        }
+
+        Ok(presets)
     }
 
     #[cfg(test)]
@@ -1878,6 +2191,48 @@ impl Database {
     }
 }
 
+fn bool_to_i64(value: bool) -> i64 {
+    if value { 1 } else { 0 }
+}
+
+fn bool_column(row: &sqlx::sqlite::SqliteRow, column: &str) -> bool {
+    row.get::<i64, _>(column) != 0
+}
+
+fn u32_column(row: &sqlx::sqlite::SqliteRow, column: &str) -> anyhow::Result<u32> {
+    let value: i64 = row.get(column);
+    u32::try_from(value).with_context(|| format!("invalid unsigned integer in {column}"))
+}
+
+fn json_column<T>(row: &sqlx::sqlite::SqliteRow, column: &str) -> anyhow::Result<T>
+where
+    T: DeserializeOwned,
+{
+    let value: String = row.get(column);
+    serde_json::from_str(&value).with_context(|| format!("parsing catalog JSON column {column}"))
+}
+
+fn enum_text_column<T>(row: &sqlx::sqlite::SqliteRow, column: &str) -> anyhow::Result<T>
+where
+    T: DeserializeOwned,
+{
+    let value: String = row.get(column);
+    serde_json::from_value(serde_json::Value::String(value.clone()))
+        .with_context(|| format!("parsing catalog enum column {column}: {value}"))
+}
+
+fn preview_format_key(format: &PreviewFormat) -> &'static str {
+    match format {
+        PreviewFormat::Glb => "glb",
+    }
+}
+
+fn parameter_source_key(source: &ParameterSource) -> &'static str {
+    match source {
+        ParameterSource::Onshape => "onshape",
+    }
+}
+
 fn artifact_record_from_v2_row(row: sqlx::sqlite::SqliteRow) -> ArtifactRecord {
     let metadata = row
         .try_get::<String, _>("metadata_json")
@@ -2075,7 +2430,183 @@ fn artifact_metric_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactMetric {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::{DownloadFormat, DownloadOptions, ElementKind, PreviewOptions};
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn catalog_sql_round_trip_preserves_live_fields() {
+        let db = test_database().await;
+        let mut model = test_catalog_model("demo", "did");
+        model.published = false;
+        model.tags = vec!["example".to_owned(), "fixture".to_owned()];
+        model.thumbnail = Some("thumbs/demo.png".to_owned());
+        model.exports.preview_options.resolution = Some("MEDIUM".to_owned());
+        model.exports.download_options.step_version_string = Some("AP242".to_owned());
+        model.parameter_policy.allow_unknown = true;
+        model.parameter_policy.auto_refresh = false;
+        model.parameter_presets = vec![ParameterPreset {
+            slug: "small".to_owned(),
+            name: "Small".to_owned(),
+            values: HashMap::from([("width".to_owned(), "10".to_owned())]),
+        }];
+        model.parameter_overrides.insert(
+            "width".to_owned(),
+            ParameterOverride {
+                label: Some("Width".to_owned()),
+                description: Some("Visible width".to_owned()),
+                hidden: true,
+                precision: Some(3),
+                widget: Some("number".to_owned()),
+            },
+        );
+        let catalog = Catalog::from_models(vec![model]).unwrap();
+
+        db.replace_catalog(&catalog).await.unwrap();
+        let loaded = db.catalog().await.unwrap();
+        let loaded_model = loaded.find("demo").unwrap();
+
+        assert!(!loaded_model.published);
+        assert_eq!(loaded_model.tags, ["example", "fixture"]);
+        assert_eq!(loaded_model.thumbnail.as_deref(), Some("thumbs/demo.png"));
+        assert_eq!(loaded_model.parameter_presets[0].slug, "small");
+        assert_eq!(loaded_model.parameter_presets[0].values["width"], "10");
+        let override_ = &loaded_model.parameter_overrides["width"];
+        assert_eq!(override_.label.as_deref(), Some("Width"));
+        assert!(override_.hidden);
+        assert_eq!(override_.precision, Some(3));
+        assert_eq!(override_.widget.as_deref(), Some("number"));
+    }
+
+    #[tokio::test]
+    async fn published_catalog_model_loads_only_published_slug() {
+        let db = test_database().await;
+        let mut published = test_catalog_model("demo", "did");
+        published.tags = vec!["example".to_owned()];
+        published.parameter_presets = vec![ParameterPreset {
+            slug: "small".to_owned(),
+            name: "Small".to_owned(),
+            values: HashMap::from([("width".to_owned(), "10".to_owned())]),
+        }];
+        let mut unpublished = test_catalog_model("draft", "draft-did");
+        unpublished.published = false;
+        let catalog = Catalog::from_models(vec![published, unpublished]).unwrap();
+
+        db.replace_catalog(&catalog).await.unwrap();
+
+        let loaded = db.published_catalog_model("demo").await.unwrap().unwrap();
+        assert_eq!(loaded.slug, "demo");
+        assert!(loaded.published);
+        assert_eq!(loaded.tags, ["example"]);
+        assert_eq!(loaded.parameter_presets[0].slug, "small");
+        assert_eq!(loaded.parameter_presets[0].values["width"], "10");
+        assert!(db.published_catalog_model("draft").await.unwrap().is_none());
+        assert!(
+            db.published_catalog_model("missing")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_sql_imports_current_json_seed() {
+        let db = test_database().await;
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("catalog/v1/models.json");
+        let catalog = Catalog::load(path).unwrap();
+
+        db.replace_catalog(&catalog).await.unwrap();
+        let loaded = db.catalog().await.unwrap();
+
+        assert_eq!(loaded.models().len(), catalog.models().len());
+        assert!(loaded.find("onshape-model").is_some());
+        assert!(loaded.find("box-slide-print").is_some());
+    }
+
+    #[tokio::test]
+    async fn catalog_sql_load_rejects_invalid_rows() {
+        let db = test_database().await;
+        sqlx::query(
+            r#"
+            INSERT INTO catalog_models (
+                display_order, catalog_schema_version, entry_version, slug, name,
+                description, published, tags_json, document_id, version_id,
+                element_id, element_kind, downloads_json, preview_format,
+                preview_options_json, download_options_json, parameter_source,
+                parameter_allow_unknown, parameter_auto_refresh
+            )
+            VALUES (0, 1, 1, 'Bad/Slug', 'Name', 'Description', 1, '[]',
+                    'did', 'vid', 'eid', 'part_studio', '["step"]', 'glb',
+                    '{}', '{}', 'onshape', 0, 1)
+            "#,
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        let error = db.catalog().await.unwrap_err();
+
+        assert!(error.to_string().contains("slug"));
+    }
+
+    #[tokio::test]
+    async fn catalog_sql_rejects_invalid_preview_format() {
+        let db = test_database().await;
+        let error = sqlx::query(
+            r#"
+            INSERT INTO catalog_models (
+                display_order, catalog_schema_version, entry_version, slug, name,
+                description, published, tags_json, document_id, version_id,
+                element_id, element_kind, downloads_json, preview_format,
+                preview_options_json, download_options_json, parameter_source,
+                parameter_allow_unknown, parameter_auto_refresh
+            )
+            VALUES (0, 1, 1, 'demo', 'Name', 'Description', 1, '[]',
+                    'did', 'vid', 'eid', 'part_studio', '["step"]', 'stl',
+                    '{}', '{}', 'onshape', 0, 1)
+            "#,
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("preview_format"));
+    }
+
+    #[tokio::test]
+    async fn catalog_sql_import_rejects_duplicate_slugs_and_sources() {
+        let db = test_database().await;
+        let duplicate_slugs: Catalog = serde_json::from_value(serde_json::json!({
+            "catalogSchemaVersion": 1,
+            "models": [
+                serde_json::to_value(test_catalog_model("same", "first-did")).unwrap(),
+                serde_json::to_value(test_catalog_model("same", "second-did")).unwrap()
+            ]
+        }))
+        .unwrap();
+        let duplicate_slug_error = db.replace_catalog(&duplicate_slugs).await.unwrap_err();
+
+        assert!(
+            duplicate_slug_error
+                .to_string()
+                .contains("duplicate catalog model slug")
+        );
+
+        let duplicate_sources: Catalog = serde_json::from_value(serde_json::json!({
+            "catalogSchemaVersion": 1,
+            "models": [
+                serde_json::to_value(test_catalog_model("first", "same-did")).unwrap(),
+                serde_json::to_value(test_catalog_model("second", "same-did")).unwrap()
+            ]
+        }))
+        .unwrap();
+        let duplicate_source_error = db.replace_catalog(&duplicate_sources).await.unwrap_err();
+
+        assert!(
+            duplicate_source_error
+                .to_string()
+                .contains("duplicate catalog source identity")
+        );
+    }
 
     #[tokio::test]
     async fn ready_jobs_are_not_requeued_unless_forced() {
@@ -3246,6 +3777,43 @@ mod tests {
         let db = Database::connect(&url).await.unwrap();
         std::mem::forget(directory);
         db
+    }
+
+    fn test_catalog_model(slug: &str, document_id: &str) -> Model {
+        Model {
+            catalog_schema_version: crate::catalog::CATALOG_SCHEMA_VERSION,
+            entry_version: crate::catalog::CATALOG_ENTRY_VERSION,
+            slug: slug.to_owned(),
+            name: "Name".to_owned(),
+            description: "Description".to_owned(),
+            published: true,
+            tags: Vec::new(),
+            thumbnail: None,
+            onshape: OnshapeSource {
+                document_id: document_id.to_owned(),
+                version_id: "vid".to_owned(),
+                element_id: "eid".to_owned(),
+                element_kind: ElementKind::PartStudio,
+                link_document_id: None,
+            },
+            exports: ExportConfig {
+                downloads: vec![
+                    DownloadFormat::Step,
+                    DownloadFormat::Stl,
+                    DownloadFormat::ThreeMf,
+                ],
+                preview: PreviewFormat::Glb,
+                preview_options: PreviewOptions::default(),
+                download_options: DownloadOptions::default(),
+            },
+            parameter_policy: ParameterPolicy {
+                source: ParameterSource::Onshape,
+                allow_unknown: false,
+                auto_refresh: true,
+            },
+            parameter_presets: Vec::new(),
+            parameter_overrides: HashMap::new(),
+        }
     }
 
     fn test_artifact_upsert<'a>(

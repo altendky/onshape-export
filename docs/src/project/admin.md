@@ -7,6 +7,7 @@ Admin tools should make cache state visible and manageable without exposing a pu
 Initial admin operations:
 
 - Validate catalog entries against Onshape.
+- Import, list, show, and validate live SQL catalog entries.
 - Fetch and refresh parameter metadata.
 - Generate missing GLB previews.
 - Generate missing STEP, STL, and 3MF exports.
@@ -21,6 +22,9 @@ Implemented CLI commands:
 
 ```text
 onshape-export catalog validate
+onshape-export catalog import <models.json>
+onshape-export catalog list [--json]
+onshape-export catalog show <slug>
 onshape-export ops check
 onshape-export ops backup <destination.db>
 onshape-export parameters refresh <slug|--all>
@@ -35,6 +39,8 @@ onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]
 ```
 
 `default` uses Onshape parameter defaults. A preset slug targets a model's catalog-defined `parameterPresets` entry. `--all-parameter-sets` generates the default set plus every configured preset.
+
+`catalog import` replaces the live SQLite catalog from a JSON catalog index such as `catalog/v1/models.json`. Runtime `serve`, `worker`, and `catalog validate` read from SQLite, not from `CATALOG_PATH` or Tigris.
 
 `ops backup` writes a consistent SQLite snapshot to a new local database file using SQLite's native online backup path. On Fly, run it through `fly ssh console` to a path on the mounted volume or a temporary path that can be copied out separately. The command refuses to overwrite an existing destination.
 

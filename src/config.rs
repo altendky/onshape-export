@@ -1,9 +1,8 @@
-use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{env, net::SocketAddr, time::Duration};
 
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bind_addr: SocketAddr,
-    pub catalog_path: PathBuf,
     pub database_url: String,
     pub worker_enabled: bool,
     pub worker_concurrency: usize,
@@ -33,7 +32,6 @@ pub struct OnshapeConfig {
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         let bind_addr = env_or("BIND_ADDR", "0.0.0.0:3000").parse()?;
-        let catalog_path = PathBuf::from(env_or("CATALOG_PATH", "catalog/v1/models.json"));
         let database_url = env_or("DATABASE_URL", "sqlite://onshape-export.db?mode=rwc");
         let worker_enabled = env_bool("WORKER_ENABLED", true)?;
         let worker_concurrency = env_usize("WORKER_CONCURRENCY", 1)?;
@@ -41,7 +39,6 @@ impl Config {
 
         Ok(Self {
             bind_addr,
-            catalog_path,
             database_url,
             worker_enabled,
             worker_concurrency,

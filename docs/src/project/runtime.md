@@ -7,9 +7,11 @@ Use a single-provider Fly-oriented MVP:
 - Rust `axum` service on Fly.io for public pages, cache checks, queue submission, status routes, and Onshape orchestration.
 - A bounded embedded worker loop in the same Rust process for the safest MVP deployment.
 - Tigris Object Storage via Fly for completed artifacts and cached Onshape metadata.
-- SQLite on a Fly volume for queue coordination, job uniqueness, artifact index state, and failure summaries.
+- SQLite on a Fly volume for live catalog data, queue coordination, job uniqueness, artifact index state, and failure summaries.
 
 This keeps the MVP on Fly/Tigris, avoids the fixed cost of Fly Managed Postgres, and still provides transactional coordination so duplicate Onshape parameter fetches and exports are prevented.
+
+SQLite is also the runtime catalog source of truth. `catalog/v1` JSON files are retained as a seed/test fixture and can be imported with `onshape-export catalog import catalog/v1/models.json`; normal `serve` and `worker` startup do not read `CATALOG_PATH`.
 
 The preferred MVP deployment is one Fly machine running one Rust service process. The public web server and worker loop share the same local SQLite database on the attached Fly volume.
 
@@ -185,6 +187,12 @@ fly ssh console -C "/app/onshape-export ops check"
 ```
 
 The check validates catalog loading, SQLite connectivity, storage client construction, Tigris public URL configuration, and required Onshape/Tigris credential presence without issuing Onshape or object-store API calls.
+
+For a new database, seed the catalog before expecting public model pages to appear:
+
+```sh
+fly ssh console -C "/app/onshape-export catalog import catalog/v1/models.json"
+```
 
 ## SQLite Backups
 

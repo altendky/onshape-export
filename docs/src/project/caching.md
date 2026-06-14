@@ -18,11 +18,11 @@ Where this page describes v1 layouts or behaviors, treat them as historical cont
 
 Implemented now:
 
-- SQLite `jobs`, `artifacts`, and `parameter_metadata` tables.
+- SQLite catalog, `jobs`, `artifacts`, and `parameter_metadata` tables.
 - Unique `jobs.work_key` for deduplicated parameter refresh, preview, and download work.
 - RFC 8785 JSON canonicalization for source, configuration, options, and work-key hash preimages.
 - Split `sourceHash`, `configHash`, and `optionsHash` helpers for artifact keys, object keys, jobs, and status responses.
-- `catalog/v1/models.json` plus `catalog/v1/models/{slug}.json`.
+- SQL-backed live catalog rows, with `catalog/v1` JSON retained only as a seed/test fixture.
 - Versioned object prefixes for parameter metadata, previews, and downloads.
 - Tigris/S3 reads and writes for raw parameter metadata, normalized parameter metadata, preview artifacts, and download artifacts.
 - Server-side value validation before enqueueing preview or download work.
@@ -42,7 +42,7 @@ Remaining deviations from the updated plan:
 
 | Cache | Keyed By | Purpose |
 | --- | --- | --- |
-| Catalog metadata | Model slug | Curated model information in `catalog/v1/`. |
+| Catalog metadata | Catalog row and slug for lookup; source IDs for cache identity | Live model information in SQLite. |
 | Raw Onshape configuration | Source identity | Preserve original Onshape parameter response. |
 | Normalized parameter schema | Source identity and schema version | UI-ready form model. |
 | Configuration encoding | Source identity and config hash | Cached output of Onshape configuration encoding, if used. |
@@ -60,7 +60,7 @@ Current v1 identifiers:
 
 | Identifier | Meaning | Inputs | Storage |
 | --- | --- | --- | --- |
-| `sourceIdentity` | Immutable Onshape source element. | `documentId`, `versionId`, `elementId`, `elementKind`, optional `linkDocumentId`. | Catalog, manifests, jobs, artifacts. |
+| `sourceIdentity` | Immutable Onshape source element. | `documentId`, `versionId`, `elementId`, `elementKind`, optional `linkDocumentId`. | SQLite catalog, manifests, jobs, artifacts. |
 | `sourceHash` | Compact hash of `sourceIdentity`. | Canonical `sourceIdentity`. | Object keys, manifests, jobs. |
 | `configHash` | Validated selected configuration. | `sourceIdentity`, normalized parameter schema version, canonical parameter values, canonicalization version. | Routes, manifests, jobs, artifacts. |
 | `optionsHash` | Preview or export options. | Format and format-specific logical options. | Object keys, manifests, jobs, artifacts. |
@@ -87,9 +87,6 @@ Current branch status: v2 export deduplication uses `requestHash`, source identi
 Current branch layout:
 
 ```text
-catalog/v1/models.json
-catalog/v1/models/{slug}.json
-
 onshape/v1/{source_hash}/configuration.raw.json
 onshape/v1/{source_hash}/parameters.normalized/schema-v{schema_version}.json
 
@@ -108,9 +105,6 @@ manifests/v1/{group_id}.json
 For the current v1 implementation track, the logical target layout remains the same. The forward-looking v2 cache model replaces fixed raw-payload names such as `source.zip` with preserved Onshape filenames and metadata roles.
 
 ```text
-catalog/v1/models.json
-catalog/v1/models/{slug}.json
-
 onshape/v1/{source_hash}/configuration.raw.json
 onshape/v1/{source_hash}/parameters.normalized/{parameter_schema_hash}.json
 
