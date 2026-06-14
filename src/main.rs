@@ -876,12 +876,14 @@ async fn backup_database_to_private_storage(
     drop(db);
 
     let backup_storage = StorageClient::new(backup_storage_config).await?;
-    backup_storage
+    let upload_result = backup_storage
         .put_file(&backup_key, &backup_path, "application/vnd.sqlite3")
         .await
-        .with_context(|| format!("uploading sqlite backup to {backup_key}"))?;
-    fs::remove_file(&backup_path)
-        .with_context(|| format!("removing temporary backup {}", backup_path.display()))?;
+        .with_context(|| format!("uploading sqlite backup to {backup_key}"));
+    let cleanup_result = fs::remove_file(&backup_path)
+        .with_context(|| format!("removing temporary backup {}", backup_path.display()));
+    upload_result?;
+    cleanup_result?;
     println!("uploaded sqlite backup to {backup_key}");
     Ok(Some(backup_key))
 }
