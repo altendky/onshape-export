@@ -201,17 +201,27 @@ impl StorageClient {
             }
 
             if !objects.is_empty() {
-                deleted += objects.len();
+                let deleted_count = objects.len();
                 let delete = Delete::builder()
                     .set_objects(Some(objects))
                     .quiet(true)
                     .build()?;
-                self.client
+                let delete_output = self
+                    .client
                     .delete_objects()
                     .bucket(&self.bucket)
                     .delete(delete)
                     .send()
                     .await?;
+                let errors = delete_output.errors();
+                if !errors.is_empty() {
+                    anyhow::bail!(
+                        "delete_objects returned {} error(s) for prefix {}",
+                        errors.len(),
+                        prefix
+                    );
+                }
+                deleted += deleted_count;
             }
 
             if !output.is_truncated().unwrap_or(false) {
