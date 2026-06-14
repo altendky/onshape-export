@@ -49,3 +49,13 @@ Potential shared crate boundaries:
 - Configuration parameter normalization.
 - Translation polling state machine.
 - Cache key canonicalization.
+
+## Quantity Canonicalization
+
+Quantity inputs intentionally use a small in-house parser instead of a general unit-expression library.
+
+Maintained Rust unit crates such as `uom` and `measurements` provide useful typed unit conversion, but they do not remove the need for an Onshape-specific input boundary. The application accepts only a plain decimal value plus a selected unit, not arbitrary Onshape/FeatureScript expressions. That narrow contract keeps cache identity deterministic and avoids spending extra Onshape API calls on decode or evaluation.
+
+Canonical numeric values use exact rational arithmetic through `num-rational` and `num-bigint`. Length values are converted exactly to canonical meters for `configHash` identity. The Onshape encoding request projects generated values as parenthesized fractions, such as `(127/5000) m`, so future support for fractional input can preserve the same request projection style.
+
+Angles currently accept `deg` and `rad` but do not canonicalize across units because exact degree/radian conversion would require a symbolic or approximate pi policy. A future angle-normalization policy should bump the configuration canonicalization version.

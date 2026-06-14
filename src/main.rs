@@ -30,8 +30,8 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 use crate::parameters::{
     ParameterKind, ParameterSchema, ParameterVisibilityCondition, SCHEMA_VERSION,
-    ValidatedConfiguration, apply_overrides, encoding_request_values, normalize_configuration,
-    validate_values,
+    ValidatedConfiguration, apply_overrides, default_quantity_unit, encoding_request_values,
+    normalize_configuration, quantity_unit_options, validate_values,
 };
 use crate::{
     cache_model::{EncodedConfigurationIdentity, ResolvedOnshapeSourceIdentity},
@@ -47,7 +47,7 @@ use crate::{
 
 const PREVIEW_OPTIONS_VERSION: &str = "mesh-grouped-v2";
 const DOWNLOAD_OPTIONS_VERSION: &str = "default-v1";
-const CONFIG_HASH_JOB_VERSION: u32 = 1;
+const CONFIG_HASH_JOB_VERSION: u32 = 2;
 const RETRY_BACKOFF_BASE_SECONDS: i64 = 30;
 const RETRY_BACKOFF_CAP_SECONDS: i64 = 5 * 60;
 const ALLOW_PARTIAL_MULTI_GLTF_PREVIEW_FALLBACK: bool = false;
@@ -1144,6 +1144,11 @@ fn render_model_html(
     .parameter-value textarea {{
       width: 100%;
     }}
+    .quantity-control {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(5rem, auto);
+      gap: 0.5rem;
+    }}
     .parameter-value small {{
       display: block;
       margin-top: 0.25rem;
@@ -1165,6 +1170,9 @@ fn render_model_html(
       }}
       .parameter-label {{
         text-align: left;
+      }}
+      .quantity-control {{
+        grid-template-columns: 1fr;
       }}
     }}
   </style>
@@ -1411,6 +1419,7 @@ async fn validate_model_config(
             "Parameter metadata is still refreshing. Try again shortly.\n".to_owned(),
         ));
     };
+    let values = normalize_form_values(&parameters, values);
 
     match validate_values(&parameters, &values, model.parameter_policy.allow_unknown) {
         Ok(validated) => Ok(Html(format!(
@@ -1440,6 +1449,7 @@ async fn generate_preview(
             "Parameter metadata is still refreshing. Try again shortly.\n".to_owned(),
         ));
     };
+    let values = normalize_form_values(&parameters, values);
     let parameter_controls = render_parameter_controls_with_values(&parameters, &values);
     let validated =
         match validate_values(&parameters, &values, model.parameter_policy.allow_unknown) {
@@ -1517,6 +1527,7 @@ async fn generate_download(
             "Parameter metadata is still refreshing. Try again shortly.\n".to_owned(),
         ));
     };
+    let values = normalize_form_values(&parameters, values);
     let parameter_controls = render_parameter_controls_with_values(&parameters, &values);
     let validated =
         match validate_values(&parameters, &values, model.parameter_policy.allow_unknown) {
@@ -4532,6 +4543,58 @@ fn render_parameter_controls(schema: &ParameterSchema) -> String {
     render_parameter_controls_with_values(schema, &HashMap::new())
 }
 
+fn normalize_form_values(
+    schema: &ParameterSchema,
+    raw: HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut normalized = raw
+        .iter()
+        .filter(|(name, _)| !name.ends_with("__value") && !name.ends_with("__unit"))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect::<HashMap<_, _>>();
+
+    for parameter in &schema.parameters {
+        if parameter.kind != ParameterKind::Number || quantity_unit_options(parameter).is_none() {
+            continue;
+        }
+        let value_name = format!("{}__value", parameter.id);
+        let Some(value) = raw.get(&value_name).map(|value| value.trim()) else {
+            continue;
+        };
+        if value.is_empty() {
+            normalized.remove(&parameter.id);
+            continue;
+        }
+
+        let unit_name = format!("{}__unit", parameter.id);
+        let unit = raw
+            .get(&unit_name)
+            .map(|unit| unit.trim())
+            .filter(|unit| !unit.is_empty())
+            .or_else(|| default_quantity_unit(parameter))
+            .unwrap_or("");
+        normalized.insert(parameter.id.clone(), format!("{value} {unit}"));
+    }
+
+    normalized
+}
+
+fn split_quantity_display_value(value: &str, default_unit: &str) -> (String, String) {
+    let trimmed = value.trim();
+    let start = trimmed
+        .char_indices()
+        .rev()
+        .find(|(_, character)| !character.is_ascii_alphabetic())
+        .map(|(index, character)| index + character.len_utf8())
+        .unwrap_or(0);
+    let unit = trimmed[start..].trim();
+    if unit.is_empty() {
+        (trimmed.to_owned(), default_unit.to_owned())
+    } else {
+        (trimmed[..start].trim().to_owned(), unit.to_owned())
+    }
+}
+
 fn render_parameter_controls_with_values(
     schema: &ParameterSchema,
     values: &HashMap<String, String>,
@@ -4574,10 +4637,31 @@ fn render_parameter_controls_with_values(
                         value = escape_html(&display_value),
                     )
                 }
-                ParameterKind::Number if parameter.units.is_some() => format!(
-                    r#"<input id="{id}" name="{id}" value="{value}" inputmode="decimal"{required}>"#,
-                    value = escape_html(&display_value),
-                ),
+                ParameterKind::Number if quantity_unit_options(parameter).is_some() => {
+                    let default_unit = default_quantity_unit(parameter).unwrap_or_default();
+                    let (number_value, selected_unit) =
+                        split_quantity_display_value(&display_value, default_unit);
+                    let options = quantity_unit_options(parameter)
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|option| {
+                            let selected = if option.value == selected_unit {
+                                " selected"
+                            } else {
+                                ""
+                            };
+                            format!(
+                                r#"<option value="{value}"{selected}>{label}</option>"#,
+                                value = escape_html(option.value),
+                                label = escape_html(option.label),
+                            )
+                        })
+                        .collect::<String>();
+                    format!(
+                        r#"<span class="quantity-control"><input id="{id}" name="{id}__value" value="{value}" inputmode="decimal"{required}><select id="{id}-unit" name="{id}__unit" aria-label="{label} unit">{options}</select></span>"#,
+                        value = escape_html(&number_value),
+                    )
+                }
                 ParameterKind::Number => {
                     format!(
                         r#"<input id="{id}" name="{id}" type="{input_type}" step="{step}" value="{value}"{required}>"#,
@@ -4786,8 +4870,44 @@ mod tests {
 
         let controls = render_parameter_controls_with_values(&schema, &values);
 
-        assert!(controls.contains(r#"value="2 in""#));
+        assert!(controls.contains(r#"name="width__value" value="2""#));
+        assert!(controls.contains(r#"name="width__unit""#));
+        assert!(controls.contains(r#"<option value="in" selected>in</option>"#));
         assert!(!controls.contains(r#"value="42 mm""#));
+    }
+
+    #[test]
+    fn normalizes_split_quantity_form_values() {
+        let schema = ParameterSchema {
+            schema_version: parameters::SCHEMA_VERSION,
+            source: test_model().onshape,
+            parameters: vec![parameters::Parameter {
+                id: "width".to_owned(),
+                label: "Width".to_owned(),
+                description: None,
+                kind: ParameterKind::Number,
+                required: false,
+                default_value: Some("42".to_owned()),
+                options: Vec::new(),
+                hidden: false,
+                visibility_condition: None,
+                precision: None,
+                widget: None,
+                units: Some("millimeter".to_owned()),
+                raw: Value::Null,
+            }],
+        };
+        let raw = HashMap::from([
+            ("width__value".to_owned(), "2".to_owned()),
+            ("width__unit".to_owned(), "in".to_owned()),
+        ]);
+
+        let values = normalize_form_values(&schema, raw);
+
+        assert_eq!(
+            values,
+            HashMap::from([("width".to_owned(), "2 in".to_owned())])
+        );
     }
 
     #[test]
@@ -4906,8 +5026,8 @@ mod tests {
         let validation: Value =
             serde_json::from_str(&configuration_validation_json(&validated).unwrap()).unwrap();
 
-        assert_eq!(validation["submittedValues"]["a"], "01.0");
-        assert_eq!(validation["requestValues"]["a"], "1");
+        assert_eq!(validation["submittedValues"]["a"], "1");
+        assert_eq!(validation["requestValues"]["a"], "(1/1)");
     }
 
     #[test]
