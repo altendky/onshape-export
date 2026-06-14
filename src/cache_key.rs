@@ -1,7 +1,7 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-pub const CANONICALIZATION_VERSION: u32 = 1;
+pub const CANONICALIZATION_VERSION: u32 = 2;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

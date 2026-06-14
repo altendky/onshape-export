@@ -182,14 +182,20 @@ Current v1 direction:
   "sourceIdentity": {},
   "parameterSchemaVersion": 1,
   "values": {
-    "parameter-id": { "kind": "quantity", "value": "25 mm" }
+    "parameter-id": {
+      "kind": "quantity",
+      "dimension": "length",
+      "unit": "m",
+      "numerator": "1",
+      "denominator": "40"
+    }
   }
 }
 ```
 
 The browser may submit parameter values, but the server must validate, apply defaults, canonicalize, and compute `configHash` before trusting any status or enqueue request.
 
-Current branch status: server-side validation, typed canonical values, RFC 8785 canonicalization, canonical Onshape encoding-request projections, and split source/config/options hashes are all implemented. Supported numeric/unit spellings normalize to one canonical configuration meaning before `configHash` and encoding reuse.
+Current branch status: server-side validation, typed canonical values, RFC 8785 canonicalization, canonical Onshape encoding-request projections, and split source/config/options hashes are all implemented. Supported length values normalize to exact rational meters before `configHash` and encoding reuse. Unitless numbers also use exact rational canonical values. Angle values accept `deg` and `rad` but do not canonicalize across those units yet.
 
 ### Manifest
 

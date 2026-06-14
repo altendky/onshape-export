@@ -103,7 +103,7 @@ Include:
 - catalog overrides that affect accepted values or default values
 - unit normalization version when quantity values are normalized
 
-Current code still stores parameter values as strings. The target model should move to typed values such as quantity, enum, boolean, and text before relying on `configHash` for long-lived compatibility.
+Current code stores supported parameter selections as typed canonical values. Length quantities are parsed from plain decimal value-plus-unit inputs, converted exactly to rational meters, and versioned through the configuration canonicalization version. Angle quantities preserve `deg` or `rad` without cross-unit canonicalization until a future symbolic or approximate pi policy is chosen.
 
 ### Configuration Encoding Identity
 
