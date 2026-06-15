@@ -9,7 +9,7 @@ mod storage;
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    env, fs,
+    fs,
     io::{Cursor, Read},
     path::{Path as FsPath, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -23,6 +23,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
+use clap::{Args, Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tower_http::trace::TraceLayer;
@@ -68,6 +69,183 @@ const GENERATED_OBJECT_PREFIXES: &[&str] = &[
     "previews/v2/",
     "artifacts/v2/",
 ];
+
+#[derive(Debug, Parser)]
+#[command(name = "onshape-export")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+#[command(rename_all = "kebab-case")]
+enum CliCommand {
+    Serve,
+    Worker,
+    Catalog {
+        #[command(subcommand)]
+        command: CatalogCommand,
+    },
+    Ops {
+        #[command(subcommand)]
+        command: OpsCommand,
+    },
+    Parameters {
+        #[command(subcommand)]
+        command: ParametersCommand,
+    },
+    Previews {
+        #[command(subcommand)]
+        command: PreviewsCommand,
+    },
+    Exports {
+        #[command(subcommand)]
+        command: ExportsCommand,
+    },
+    Jobs {
+        #[command(subcommand)]
+        command: JobsCommand,
+    },
+    Failures {
+        #[command(subcommand)]
+        command: FailuresCommand,
+    },
+    Artifacts {
+        #[command(subcommand)]
+        command: ArtifactsCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+#[command(rename_all = "kebab-case")]
+enum CatalogCommand {
+    Validate,
+    Import { path: String },
+    List(JsonOutputArgs),
+    Show { slug: String },
+}
+
+#[derive(Debug, Subcommand)]
+#[command(rename_all = "kebab-case")]
+enum OpsCommand {
+    Check,
+    Backup { destination: PathBuf },
+    DeployMaintenance(DeployMaintenanceArgs),
+}
+
+#[derive(Debug, Subcommand)]
+#[command(rename_all = "kebab-case")]
+enum ParametersCommand {
+    Refresh(ModelSelectorArgs),
+}
+
+#[derive(Debug, Subcommand)]
+#[command(rename_all = "kebab-case")]
+enum PreviewsCommand {
+    Generate(GeneratePreviewArgs),
+}
+
+#[derive(Debug, Subcommand)]
+#[command(rename_all = "kebab-case")]
+enum ExportsCommand {
+    Generate(GenerateExportArgs),
+}
+
+#[derive(Debug, Subcommand)]
+#[command(rename_all = "kebab-case")]
+enum JobsCommand {
+    List(JsonOutputArgs),
+}
+
+#[derive(Debug, Subcommand)]
+#[command(rename_all = "kebab-case")]
+enum FailuresCommand {
+    List(JsonOutputArgs),
+    Retry(FailureRetryArgs),
+}
+
+#[derive(Debug, Subcommand)]
+#[command(rename_all = "kebab-case")]
+enum ArtifactsCommand {
+    List(ArtifactListArgs),
+    Invalidate { artifact_key: String },
+    Prune(PruneArgs),
+}
+
+#[derive(Debug, Args)]
+struct JsonOutputArgs {
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct DeployMaintenanceArgs {
+    #[arg(long)]
+    reset_generated_state: bool,
+    #[arg(long)]
+    reset_catalog_from_seed: bool,
+    #[arg(long)]
+    fresh_database: bool,
+    #[arg(long, default_value = DEFAULT_CATALOG_SEED_PATH)]
+    catalog_seed: String,
+    #[arg(long)]
+    backup_label: Option<String>,
+    #[arg(long, default_value = "sqlite")]
+    backup_prefix: String,
+    #[arg(long)]
+    confirm: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct ModelSelectorArgs {
+    #[arg(allow_hyphen_values = true)]
+    selector: String,
+}
+
+#[derive(Debug, Args)]
+struct GeneratePreviewArgs {
+    #[arg(allow_hyphen_values = true)]
+    selector: String,
+    #[arg(allow_hyphen_values = true)]
+    parameter_selector: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct GenerateExportArgs {
+    #[arg(allow_hyphen_values = true)]
+    selector: String,
+    #[arg(allow_hyphen_values = true)]
+    format: String,
+    #[arg(allow_hyphen_values = true)]
+    parameter_selector: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct FailureRetryArgs {
+    #[arg(long, conflicts_with_all = ["kind", "work_key"])]
+    all: bool,
+    #[arg(long, conflicts_with = "work_key")]
+    kind: Option<String>,
+    work_key: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct ArtifactListArgs {
+    #[arg(allow_hyphen_values = true)]
+    selector: String,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Debug, Args)]
+struct PruneArgs {
+    #[arg(allow_hyphen_values = true)]
+    selector: String,
+    #[arg(long, allow_hyphen_values = true)]
+    older_than_days: i64,
+    #[arg(long)]
+    dry_run: bool,
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -134,7 +312,7 @@ struct SelectedParameterSet {
     validated: ValidatedConfiguration,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PruneOptions {
     older_than_days: i64,
     dry_run: bool,
@@ -258,12 +436,12 @@ async fn main() -> anyhow::Result<()> {
     init_tracing();
 
     let config = Config::from_env()?;
-    let args = env::args().skip(1).collect::<Vec<_>>();
+    let cli = Cli::parse();
 
-    match args.first().map(String::as_str) {
-        None | Some("serve") => serve(config).await,
-        Some("worker") => run_worker(config).await,
-        Some(command) => run_cli(config, command, &args[1..]).await,
+    match cli.command {
+        None | Some(CliCommand::Serve) => serve(config).await,
+        Some(CliCommand::Worker) => run_worker(config).await,
+        Some(command) => run_cli(config, command).await,
     }
 }
 
@@ -311,9 +489,11 @@ async fn run_worker(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Result<()> {
-    match (command, args) {
-        ("catalog", [subcommand]) if subcommand == "validate" => {
+async fn run_cli(config: Config, command: CliCommand) -> anyhow::Result<()> {
+    match command {
+        CliCommand::Catalog {
+            command: CatalogCommand::Validate,
+        } => {
             let db = Database::connect(&config.database_url)
                 .await
                 .context("connecting to database")?;
@@ -324,8 +504,10 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             println!("catalog ok: {} models", catalog.models().len());
             Ok(())
         }
-        ("catalog", [subcommand, path]) if subcommand == "import" => {
-            let catalog = Catalog::load(path)
+        CliCommand::Catalog {
+            command: CatalogCommand::Import { path },
+        } => {
+            let catalog = Catalog::load(&path)
                 .with_context(|| format!("loading catalog import from {path}"))?;
             let db = Database::connect(&config.database_url)
                 .await
@@ -336,8 +518,10 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             println!("imported catalog: {} models", catalog.models().len());
             Ok(())
         }
-        ("catalog", [subcommand, output_args @ ..]) if subcommand == "list" => {
-            let output_format = optional_output_format(output_args)?;
+        CliCommand::Catalog {
+            command: CatalogCommand::List(output_args),
+        } => {
+            let output_format = output_args.output_format();
             let db = Database::connect(&config.database_url)
                 .await
                 .context("connecting to database")?;
@@ -368,7 +552,9 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             }
             Ok(())
         }
-        ("catalog", [subcommand, slug]) if subcommand == "show" => {
+        CliCommand::Catalog {
+            command: CatalogCommand::Show { slug },
+        } => {
             let db = Database::connect(&config.database_url)
                 .await
                 .context("connecting to database")?;
@@ -377,51 +563,58 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
                 .await
                 .context("loading catalog from database")?;
             let model = catalog
-                .find(slug)
+                .find(&slug)
                 .ok_or_else(|| anyhow::anyhow!("unknown model slug: {slug}"))?;
             println!("{}", serde_json::to_string_pretty(model)?);
             Ok(())
         }
-        ("ops", [subcommand]) if subcommand == "check" => run_ops_check(config).await,
-        ("ops", [subcommand, maintenance_args @ ..]) if subcommand == "deploy-maintenance" => {
-            let options = parse_deploy_maintenance_options(maintenance_args)?;
-            run_deploy_maintenance(config, options).await
-        }
-        ("ops", [subcommand, destination]) if subcommand == "backup" => {
+        CliCommand::Ops {
+            command: OpsCommand::Check,
+        } => run_ops_check(config).await,
+        CliCommand::Ops {
+            command: OpsCommand::DeployMaintenance(maintenance_args),
+        } => run_deploy_maintenance(config, maintenance_args.into()).await,
+        CliCommand::Ops {
+            command: OpsCommand::Backup { destination },
+        } => {
             let db = Database::connect(&config.database_url)
                 .await
                 .context("connecting to database")?;
-            let destination = FsPath::new(destination);
-            db.backup_to_path(destination).await?;
+            db.backup_to_path(&destination).await?;
             println!("database backup written to {}", destination.display());
             Ok(())
         }
-        ("parameters", [subcommand, selector]) if subcommand == "refresh" => {
+        CliCommand::Parameters {
+            command: ParametersCommand::Refresh(ModelSelectorArgs { selector }),
+        } => {
             let state = cli_state(config).await?;
             let catalog = state
                 .db
                 .catalog()
                 .await
                 .context("loading catalog from database")?;
-            for model in selected_models(&catalog, selector)? {
+            for model in selected_models(&catalog, &selector)? {
                 refresh_parameters(&state, model).await?;
                 println!("refreshed parameters for {}", model.slug);
             }
             Ok(())
         }
-        ("previews", [subcommand, selector, parameter_selector @ ..])
-            if subcommand == "generate" =>
-        {
-            let parameter_selector = optional_parameter_selector(parameter_selector)?;
+        CliCommand::Previews {
+            command:
+                PreviewsCommand::Generate(GeneratePreviewArgs {
+                    selector,
+                    parameter_selector,
+                }),
+        } => {
             let state = cli_state(config).await?;
             let catalog = state
                 .db
                 .catalog()
                 .await
                 .context("loading catalog from database")?;
-            for model in selected_models(&catalog, selector)? {
+            for model in selected_models(&catalog, &selector)? {
                 for parameter_set in
-                    selected_parameter_sets(&state, model, parameter_selector).await?
+                    selected_parameter_sets(&state, model, parameter_selector.as_deref()).await?
                 {
                     let object_key =
                         generate_preview_for_values(&state, model, &parameter_set.validated)
@@ -434,20 +627,24 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             }
             Ok(())
         }
-        ("exports", [subcommand, selector, format, parameter_selector @ ..])
-            if subcommand == "generate" =>
-        {
-            let parameter_selector = optional_parameter_selector(parameter_selector)?;
+        CliCommand::Exports {
+            command:
+                ExportsCommand::Generate(GenerateExportArgs {
+                    selector,
+                    format,
+                    parameter_selector,
+                }),
+        } => {
             let state = cli_state(config).await?;
             let catalog = state
                 .db
                 .catalog()
                 .await
                 .context("loading catalog from database")?;
-            for model in selected_models(&catalog, selector)? {
-                let formats = selected_formats(model, format)?;
+            for model in selected_models(&catalog, &selector)? {
+                let formats = selected_formats(model, &format)?;
                 for parameter_set in
-                    selected_parameter_sets(&state, model, parameter_selector).await?
+                    selected_parameter_sets(&state, model, parameter_selector.as_deref()).await?
                 {
                     for format in &formats {
                         match generate_download_for_values(
@@ -472,24 +669,29 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             }
             Ok(())
         }
-        ("failures", [subcommand, output_args @ ..]) if subcommand == "list" => {
-            let output_format = optional_output_format(output_args)?;
+        CliCommand::Failures {
+            command: FailuresCommand::List(output_args),
+        } => {
+            let output_format = output_args.output_format();
             let state = cli_state(config).await?;
             let jobs = state.db.failed_jobs(100).await?;
             print_jobs(jobs, output_format, "no failed jobs")?;
             Ok(())
         }
-        ("jobs", [subcommand, output_args @ ..]) if subcommand == "list" => {
-            let output_format = optional_output_format(output_args)?;
+        CliCommand::Jobs {
+            command: JobsCommand::List(output_args),
+        } => {
+            let output_format = output_args.output_format();
             let state = cli_state(config).await?;
             let jobs = state.db.jobs(100).await?;
             print_jobs(jobs, output_format, "no jobs")?;
             Ok(())
         }
-        ("failures", [subcommand, retry_args @ ..]) if subcommand == "retry" => {
-            let selector = optional_failure_retry_selector(retry_args)?;
+        CliCommand::Failures {
+            command: FailuresCommand::Retry(retry_args),
+        } => {
             let state = cli_state(config).await?;
-            match selector {
+            match retry_args.selector() {
                 FailureRetrySelector::All => {
                     let count = state.db.retry_failed_jobs().await?;
                     println!("marked {count} failed jobs for retry");
@@ -508,8 +710,10 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             }
             Ok(())
         }
-        ("artifacts", [subcommand, selector, output_args @ ..]) if subcommand == "list" => {
-            let output_format = optional_output_format(output_args)?;
+        CliCommand::Artifacts {
+            command: ArtifactsCommand::List(ArtifactListArgs { selector, json }),
+        } => {
+            let output_format = output_format(json);
             let state = cli_state(config).await?;
             let mut all_artifacts = Vec::new();
             let catalog = state
@@ -517,7 +721,7 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
                 .catalog()
                 .await
                 .context("loading catalog from database")?;
-            for model in selected_models(&catalog, selector)? {
+            for model in selected_models(&catalog, &selector)? {
                 let artifacts = state.db.artifacts_for_model(&model.slug).await?;
                 match output_format {
                     OutputFormat::Json => all_artifacts.extend(artifacts),
@@ -548,9 +752,11 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             }
             Ok(())
         }
-        ("artifacts", [subcommand, artifact_key]) if subcommand == "invalidate" => {
+        CliCommand::Artifacts {
+            command: ArtifactsCommand::Invalidate { artifact_key },
+        } => {
             let state = cli_state(config).await?;
-            let Some(artifact) = state.db.artifact(artifact_key).await? else {
+            let Some(artifact) = state.db.artifact(&artifact_key).await? else {
                 println!("artifact not found: {artifact_key}");
                 return Ok(());
             };
@@ -562,8 +768,15 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             );
             Ok(())
         }
-        ("artifacts", [subcommand, selector, prune_args @ ..]) if subcommand == "prune" => {
-            let options = parse_prune_options(prune_args)?;
+        CliCommand::Artifacts {
+            command:
+                ArtifactsCommand::Prune(PruneArgs {
+                    selector,
+                    older_than_days,
+                    dry_run,
+                }),
+        } => {
+            let options = PruneOptions::new(older_than_days, dry_run)?;
             let state = cli_state(config).await?;
             let mut pruned = 0usize;
 
@@ -572,7 +785,7 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
                 .catalog()
                 .await
                 .context("loading catalog from database")?;
-            for model in selected_models(&catalog, selector)? {
+            for model in selected_models(&catalog, &selector)? {
                 let artifacts = state
                     .db
                     .artifacts_older_than_days(&model.slug, options.older_than_days)
@@ -616,10 +829,7 @@ async fn run_cli(config: Config, command: &str, args: &[String]) -> anyhow::Resu
             );
             Ok(())
         }
-        _ => {
-            print_usage();
-            anyhow::bail!("unknown command")
-        }
+        CliCommand::Serve | CliCommand::Worker => unreachable!("handled before run_cli"),
     }
 }
 
@@ -651,69 +861,57 @@ fn print_jobs(
     Ok(())
 }
 
-fn optional_output_format(args: &[String]) -> anyhow::Result<OutputFormat> {
-    match args {
-        [] => Ok(OutputFormat::Text),
-        [flag] if flag == "--json" => Ok(OutputFormat::Json),
-        [flag] => anyhow::bail!("unknown output option: {flag}"),
-        _ => anyhow::bail!("expected at most one output option"),
+impl JsonOutputArgs {
+    fn output_format(&self) -> OutputFormat {
+        output_format(self.json)
     }
 }
 
-fn parse_deploy_maintenance_options(args: &[String]) -> anyhow::Result<DeployMaintenanceOptions> {
-    let mut reset_generated_state = false;
-    let mut reset_catalog_from_seed = false;
-    let mut fresh_database = false;
-    let mut catalog_seed = DEFAULT_CATALOG_SEED_PATH.to_owned();
-    let mut backup_label = None;
-    let mut backup_prefix = "sqlite".to_owned();
-    let mut confirm = None;
-    let mut args = args.iter();
+fn output_format(json: bool) -> OutputFormat {
+    if json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    }
+}
 
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--reset-generated-state" => reset_generated_state = true,
-            "--reset-catalog-from-seed" => reset_catalog_from_seed = true,
-            "--fresh-database" => fresh_database = true,
-            "--catalog-seed" => {
-                catalog_seed = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--catalog-seed requires a value"))?
-                    .to_owned();
-            }
-            "--backup-label" => {
-                backup_label = Some(
-                    args.next()
-                        .ok_or_else(|| anyhow::anyhow!("--backup-label requires a value"))?
-                        .to_owned(),
-                );
-            }
-            "--backup-prefix" => {
-                backup_prefix = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--backup-prefix requires a value"))?
-                    .to_owned();
-            }
-            "--confirm" => {
-                confirm = Some(
-                    args.next()
-                        .ok_or_else(|| anyhow::anyhow!("--confirm requires a value"))?
-                        .to_owned(),
-                );
-            }
-            _ => anyhow::bail!("unknown deploy maintenance option: {arg}"),
+impl From<DeployMaintenanceArgs> for DeployMaintenanceOptions {
+    fn from(args: DeployMaintenanceArgs) -> Self {
+        Self {
+            reset_generated_state: args.reset_generated_state,
+            reset_catalog_from_seed: args.reset_catalog_from_seed,
+            fresh_database: args.fresh_database,
+            catalog_seed: args.catalog_seed,
+            backup_label: args.backup_label,
+            backup_prefix: args.backup_prefix,
+            confirm: args.confirm,
         }
     }
+}
 
-    Ok(DeployMaintenanceOptions {
-        reset_generated_state,
-        reset_catalog_from_seed,
-        fresh_database,
-        catalog_seed,
-        backup_label,
-        backup_prefix,
-        confirm,
-    })
+impl FailureRetryArgs {
+    fn selector(&self) -> FailureRetrySelector<'_> {
+        if let Some(job_kind) = self.kind.as_deref() {
+            FailureRetrySelector::Kind(job_kind)
+        } else if let Some(work_key) = self.work_key.as_deref() {
+            FailureRetrySelector::WorkKey(work_key)
+        } else {
+            FailureRetrySelector::All
+        }
+    }
+}
+
+impl PruneOptions {
+    fn new(older_than_days: i64, dry_run: bool) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            older_than_days > 0,
+            "--older-than-days must be greater than zero"
+        );
+        Ok(Self {
+            older_than_days,
+            dry_run,
+        })
+    }
 }
 
 async fn run_ops_check(config: Config) -> anyhow::Result<()> {
@@ -972,56 +1170,6 @@ async fn ensure_database_ready_for_serve(db: &Database) -> anyhow::Result<()> {
     );
     println!("maintenance catalog ok: {} models", catalog.models().len());
     Ok(())
-}
-
-fn optional_failure_retry_selector(args: &[String]) -> anyhow::Result<FailureRetrySelector<'_>> {
-    match args {
-        [] => Ok(FailureRetrySelector::All),
-        [flag] if flag == "--all" => Ok(FailureRetrySelector::All),
-        [flag, job_kind] if flag == "--kind" => Ok(FailureRetrySelector::Kind(job_kind)),
-        [work_key] if work_key.starts_with("--") => {
-            anyhow::bail!("unknown failures retry option: {work_key}")
-        }
-        [work_key] => Ok(FailureRetrySelector::WorkKey(work_key)),
-        _ => anyhow::bail!("expected at most one failure retry selector, or --kind <job-kind>"),
-    }
-}
-
-fn optional_parameter_selector(args: &[String]) -> anyhow::Result<Option<&str>> {
-    match args {
-        [] => Ok(None),
-        [selector] => Ok(Some(selector.as_str())),
-        _ => anyhow::bail!("expected at most one parameter set selector"),
-    }
-}
-
-fn parse_prune_options(args: &[String]) -> anyhow::Result<PruneOptions> {
-    let mut older_than_days = None;
-    let mut dry_run = false;
-    let mut args = args.iter();
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--older-than-days" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("--older-than-days requires a value"))?;
-                let days = value
-                    .parse::<i64>()
-                    .with_context(|| format!("invalid --older-than-days value: {value}"))?;
-                anyhow::ensure!(days > 0, "--older-than-days must be greater than zero");
-                older_than_days = Some(days);
-            }
-            "--dry-run" => dry_run = true,
-            _ => anyhow::bail!("unknown prune option: {arg}"),
-        }
-    }
-
-    Ok(PruneOptions {
-        older_than_days: older_than_days
-            .ok_or_else(|| anyhow::anyhow!("--older-than-days is required"))?,
-        dry_run,
-    })
 }
 
 async fn cli_state(config: Config) -> anyhow::Result<AppState> {
@@ -1313,12 +1461,6 @@ fn validated_parameter_set(
         label,
         validated,
     })
-}
-
-fn print_usage() {
-    eprintln!(
-        "usage:\n  onshape-export [serve]\n  onshape-export worker\n  onshape-export catalog validate\n  onshape-export catalog import <models.json>\n  onshape-export catalog list [--json]\n  onshape-export catalog show <slug>\n  onshape-export ops check\n  onshape-export ops backup <destination.db>\n  onshape-export ops deploy-maintenance [--catalog-seed <models.json>] [--backup-label <label>] [--backup-prefix <prefix>] [--reset-generated-state] [--reset-catalog-from-seed] [--fresh-database] [--confirm WIPE]\n  onshape-export parameters refresh <slug|--all>\n  onshape-export previews generate <slug|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export exports generate <slug|--all> <step|stl|3mf|--all> [default|preset-slug|--all-parameter-sets]\n  onshape-export jobs list [--json]\n  onshape-export failures list [--json]\n  onshape-export failures retry [--all|<work-key>|--kind <job-kind>]\n  onshape-export artifacts list <slug|--all> [--json]\n  onshape-export artifacts invalidate <artifact-key>\n  onshape-export artifacts prune <slug|--all> --older-than-days <days> [--dry-run]"
-    );
 }
 
 fn app(state: AppState) -> Router {
@@ -6365,54 +6507,55 @@ mod tests {
     }
 
     #[test]
-    fn parses_optional_output_format() {
-        assert_eq!(optional_output_format(&[]).unwrap(), OutputFormat::Text);
-        assert_eq!(
-            optional_output_format(&["--json".to_owned()]).unwrap(),
-            OutputFormat::Json
-        );
-        assert!(optional_output_format(&["--yaml".to_owned()]).is_err());
+    fn parses_default_and_explicit_serve_commands() {
+        let cli = Cli::try_parse_from(["onshape-export"]).unwrap();
+        assert!(cli.command.is_none());
+
+        let cli = Cli::try_parse_from(["onshape-export", "serve"]).unwrap();
+        assert!(matches!(cli.command, Some(CliCommand::Serve)));
     }
 
     #[test]
-    fn parses_optional_failure_retry_selector() {
-        assert_eq!(
-            optional_failure_retry_selector(&[]).unwrap(),
-            FailureRetrySelector::All
-        );
-        assert_eq!(
-            optional_failure_retry_selector(&["--all".to_owned()]).unwrap(),
-            FailureRetrySelector::All
-        );
-        assert_eq!(
-            optional_failure_retry_selector(&["work-v2:preview:demo:abc".to_owned()]).unwrap(),
-            FailureRetrySelector::WorkKey("work-v2:preview:demo:abc")
-        );
-        assert_eq!(
-            optional_failure_retry_selector(&["--kind".to_owned(), "preview_export".to_owned()])
-                .unwrap(),
-            FailureRetrySelector::Kind("preview_export")
-        );
-        assert!(optional_failure_retry_selector(&["--missing".to_owned()]).is_err());
-        assert!(optional_failure_retry_selector(&["one".to_owned(), "two".to_owned()]).is_err());
+    fn parses_catalog_list_json_command() {
+        let cli = Cli::try_parse_from(["onshape-export", "catalog", "list", "--json"]).unwrap();
+
+        let Some(CliCommand::Catalog {
+            command: CatalogCommand::List(args),
+        }) = cli.command
+        else {
+            panic!("expected catalog list command");
+        };
+
+        assert_eq!(args.output_format(), OutputFormat::Json);
     }
 
     #[test]
     fn parses_deploy_maintenance_options() {
-        let options = parse_deploy_maintenance_options(&[
-            "--reset-generated-state".to_owned(),
-            "--reset-catalog-from-seed".to_owned(),
-            "--fresh-database".to_owned(),
-            "--catalog-seed".to_owned(),
-            "catalog/custom.json".to_owned(),
-            "--backup-label".to_owned(),
-            "123-abc".to_owned(),
-            "--backup-prefix".to_owned(),
-            "sqlite/manual".to_owned(),
-            "--confirm".to_owned(),
-            "WIPE".to_owned(),
+        let cli = Cli::try_parse_from([
+            "onshape-export",
+            "ops",
+            "deploy-maintenance",
+            "--reset-generated-state",
+            "--reset-catalog-from-seed",
+            "--fresh-database",
+            "--catalog-seed",
+            "catalog/custom.json",
+            "--backup-label",
+            "123-abc",
+            "--backup-prefix",
+            "sqlite/manual",
+            "--confirm",
+            "WIPE",
         ])
         .unwrap();
+
+        let Some(CliCommand::Ops {
+            command: OpsCommand::DeployMaintenance(args),
+        }) = cli.command
+        else {
+            panic!("expected deploy maintenance command");
+        };
+        let options = DeployMaintenanceOptions::from(args);
 
         assert!(options.reset_generated_state);
         assert!(options.reset_catalog_from_seed);
@@ -6425,7 +6568,20 @@ mod tests {
 
     #[test]
     fn deploy_maintenance_destructive_options_require_confirmation() {
-        let options = parse_deploy_maintenance_options(&["--fresh-database".to_owned()]).unwrap();
+        let cli = Cli::try_parse_from([
+            "onshape-export",
+            "ops",
+            "deploy-maintenance",
+            "--fresh-database",
+        ])
+        .unwrap();
+        let Some(CliCommand::Ops {
+            command: OpsCommand::DeployMaintenance(args),
+        }) = cli.command
+        else {
+            panic!("expected deploy maintenance command");
+        };
+        let options = DeployMaintenanceOptions::from(args);
 
         let error = ensure_destructive_options_confirmed(&options).unwrap_err();
 
@@ -6446,13 +6602,122 @@ mod tests {
     }
 
     #[test]
-    fn parses_optional_parameter_selector() {
-        assert_eq!(optional_parameter_selector(&[]).unwrap(), None);
+    fn parses_generation_selectors() {
+        let cli = Cli::try_parse_from([
+            "onshape-export",
+            "exports",
+            "generate",
+            "--all",
+            "--all",
+            "--all-parameter-sets",
+        ])
+        .unwrap();
+
+        let Some(CliCommand::Exports {
+            command:
+                ExportsCommand::Generate(GenerateExportArgs {
+                    selector,
+                    format,
+                    parameter_selector,
+                }),
+        }) = cli.command
+        else {
+            panic!("expected exports generate command");
+        };
+
+        assert_eq!(selector, "--all");
+        assert_eq!(format, "--all");
+        assert_eq!(parameter_selector.as_deref(), Some("--all-parameter-sets"));
+    }
+
+    #[test]
+    fn parses_failure_retry_selectors() {
+        let cli = Cli::try_parse_from(["onshape-export", "failures", "retry"]).unwrap();
+        let Some(CliCommand::Failures {
+            command: FailuresCommand::Retry(args),
+        }) = cli.command
+        else {
+            panic!("expected failures retry command");
+        };
+        assert_eq!(args.selector(), FailureRetrySelector::All);
+
+        let cli = Cli::try_parse_from([
+            "onshape-export",
+            "failures",
+            "retry",
+            "work-v2:preview:demo:abc",
+        ])
+        .unwrap();
+        let Some(CliCommand::Failures {
+            command: FailuresCommand::Retry(args),
+        }) = cli.command
+        else {
+            panic!("expected failures retry command");
+        };
         assert_eq!(
-            optional_parameter_selector(&["small".to_owned()]).unwrap(),
-            Some("small")
+            args.selector(),
+            FailureRetrySelector::WorkKey("work-v2:preview:demo:abc")
         );
-        assert!(optional_parameter_selector(&["a".to_owned(), "b".to_owned()]).is_err());
+
+        let cli = Cli::try_parse_from([
+            "onshape-export",
+            "failures",
+            "retry",
+            "--kind",
+            "preview_export",
+        ])
+        .unwrap();
+        let Some(CliCommand::Failures {
+            command: FailuresCommand::Retry(args),
+        }) = cli.command
+        else {
+            panic!("expected failures retry command");
+        };
+        assert_eq!(
+            args.selector(),
+            FailureRetrySelector::Kind("preview_export")
+        );
+
+        assert!(Cli::try_parse_from(["onshape-export", "failures", "retry", "--missing"]).is_err());
+        assert!(
+            Cli::try_parse_from(["onshape-export", "failures", "retry", "one", "two"]).is_err()
+        );
+    }
+
+    #[test]
+    fn parses_prune_options() {
+        let cli = Cli::try_parse_from([
+            "onshape-export",
+            "artifacts",
+            "prune",
+            "--all",
+            "--older-than-days",
+            "30",
+            "--dry-run",
+        ])
+        .unwrap();
+
+        let Some(CliCommand::Artifacts {
+            command:
+                ArtifactsCommand::Prune(PruneArgs {
+                    selector,
+                    older_than_days,
+                    dry_run,
+                }),
+        }) = cli.command
+        else {
+            panic!("expected artifacts prune command");
+        };
+
+        assert_eq!(selector, "--all");
+        assert_eq!(
+            PruneOptions::new(older_than_days, dry_run).unwrap(),
+            PruneOptions {
+                older_than_days: 30,
+                dry_run: true,
+            }
+        );
+        assert!(PruneOptions::new(0, false).is_err());
     }
 
     async fn test_state() -> AppState {

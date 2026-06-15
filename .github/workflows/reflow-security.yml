@@ -185,7 +185,6 @@ jobs:
       - name: Check CI security rules
         run: |
           mkdir -p "${REPORT_DIR}"
-          # Follow-up: https://github.com/altendky/onshape-export/issues/58
           report="${REPORT_DIR}/semgrep-ci.sarif"
           set +e
           MISE_LOCKED=0 mise x pipx:semgrep@1.166.0 -- \
@@ -193,7 +192,6 @@ jobs:
               --config .semgrep.yml \
               --config p/security-audit \
               --config p/rust \
-              --exclude-rule rust.lang.security.args.args \
               --error \
               --sarif \
               --output "${report}" \
