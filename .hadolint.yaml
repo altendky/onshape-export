@@ -1,0 +1,3 @@
+# Debian package versions are intentionally resolved from the pinned base image.
+ignored:
+  - DL3008
