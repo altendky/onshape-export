@@ -1,3 +1,3 @@
-# Debian package versions are intentionally resolved from the pinned base image.
+# Docker base image and apt package pinning policy is tracked in #53.
 ignored:
   - DL3008
