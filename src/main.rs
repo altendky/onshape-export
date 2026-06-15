@@ -1586,6 +1586,7 @@ fn render_model_html(
   }};
 
   window.onshapeExportConfigurePreviewViewer = (viewer) => {{
+    viewer.setAttribute("interaction-prompt", "none");
     viewer.setAttribute("environment-image", "neutral");
     viewer.setAttribute("exposure", "0.7");
     viewer.setAttribute("shadow-intensity", "0.85");
@@ -4806,7 +4807,7 @@ if (window.location.pathname !== {path}) {{
 fn render_preview_viewer(state: &AppState, object_key: &str) -> String {
     match state.storage.public_url(object_key) {
         Some(url) => format!(
-            r#"<model-viewer src="{}" camera-controls auto-rotate environment-image="neutral" exposure="0.7" shadow-intensity="0.85" shadow-softness="0.6" style="width: min(100%, 720px); height: 480px; background: linear-gradient(#3b3f45, #25282d);"></model-viewer>"#,
+            r#"<model-viewer src="{}" camera-controls interaction-prompt="none" environment-image="neutral" exposure="0.7" shadow-intensity="0.85" shadow-softness="0.6" style="width: min(100%, 720px); height: 480px; background: linear-gradient(#3b3f45, #25282d);"></model-viewer>"#,
             escape_html(&url),
         ),
         None => {
@@ -4896,7 +4897,6 @@ fn render_status_polling(
       const viewer = document.createElement("model-viewer");
       viewer.src = status.publicUrl;
       viewer.setAttribute("camera-controls", "");
-      viewer.setAttribute("auto-rotate", "");
       viewer.style.width = "min(100%, 720px)";
       viewer.style.height = "480px";
       window.onshapeExportConfigurePreviewViewer?.(viewer);
@@ -5321,6 +5321,7 @@ mod tests {
         assert!(html.contains("new URLSearchParams(new FormData(form))"));
         assert!(html.contains("application/x-www-form-urlencoded"));
         assert!(html.contains("window.onshapeExportConfigurePreviewViewer"));
+        assert!(html.contains(r#"viewer.setAttribute("interaction-prompt", "none")"#));
         assert!(html.contains("pbr.setBaseColorFactor([0.48, 0.50, 0.52"));
         assert!(html.contains("replaceWith(nextMain)"));
         assert!(html.contains("initializeParameterVisibility(nextMain)"));
@@ -5389,8 +5390,20 @@ mod tests {
 
         assert!(html.contains(r#"document.createElement("model-viewer")"#));
         assert!(html.contains("window.onshapeExportConfigurePreviewViewer?.(viewer)"));
+        assert!(!html.contains("auto-rotate"));
         assert!(html.contains("showReadyArtifact(status)"));
         assert!(!html.contains("location.reload"));
+    }
+
+    #[tokio::test]
+    async fn preview_viewer_avoids_continuous_idle_motion() {
+        let state = test_state().await;
+
+        let html = render_preview_viewer(&state, "previews/demo/preview.glb");
+
+        assert!(html.contains(r#"camera-controls"#));
+        assert!(html.contains(r#"interaction-prompt="none""#));
+        assert!(!html.contains("auto-rotate"));
     }
 
     #[test]
