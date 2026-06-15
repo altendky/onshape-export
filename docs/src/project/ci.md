@@ -91,6 +91,7 @@ scanners can run in parallel and upload independent structured reports.
 Blocking security jobs are:
 
 - `cargo-deny`: Rust dependency policy, advisories, licenses, duplicate-version policy, and source restrictions from `deny.toml`.
+  Duplicate crate versions are CI-blocking except for documented `skip-tree` allowances around dependency families whose current semver-incompatible transitive dependency lines are not actionable in this repository.
 - `cargo-audit`: RustSec advisories for `Cargo.lock`, with explicit ignores only for lockfile-only false positives that are not reachable in the active dependency graph.
 - `osv-scanner`: OSV advisory matches for repository lockfiles and manifests. Its `osv-scanner.toml` ignores must include a reason.
 - `trivy-fs`: filesystem vulnerability, misconfiguration, and secret scan, blocking on `MEDIUM`, `HIGH`, or `CRITICAL` findings. Trivy secret scanning is a CI-only second opinion alongside the faster `gitleaks` pre-commit check.

@@ -29,11 +29,15 @@ allow = [
 confidence-threshold = 0.8
 
 [bans]
-multiple-versions = "warn"
+multiple-versions = "deny"
 wildcards = "deny"
 highlight = "all"
 skip = []
-skip-tree = []
+skip-tree = [
+    { crate = "aws-sdk-s3", reason = "AWS SDK currently carries semver-incompatible transitive dependency lines that are not actionable here." },
+    { crate = "sqlx", reason = "SQLx currently carries older transitive crypto/hash dependency lines that are not actionable here." },
+    { crate = "reqwest", reason = "Reqwest/Rustls/ring currently carries older platform/random dependency lines that are not actionable here." },
+]
 
 [sources]
 unknown-registry = "deny"
