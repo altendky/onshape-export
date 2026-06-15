@@ -173,7 +173,17 @@ jobs:
       - name: Run ops check
         run: |
           set -euo pipefail
-          mise exec -- fly ssh console --app "${FLY_APP}" -C "/app/onshape-export ops check"
+          for attempt in 1 2 3 4 5; do
+            if mise exec -- fly ssh console --app "${FLY_APP}" -C "/app/onshape-export ops check"; then
+              exit 0
+            fi
+            if [ "${attempt}" -eq 5 ]; then
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 5))
+            printf 'ops check failed; retrying in %s seconds\n' "${sleep_seconds}" >&2
+            sleep "${sleep_seconds}"
+          done
 
       - name: Check health endpoint
         run: |
