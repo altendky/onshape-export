@@ -862,12 +862,11 @@ async fn backup_database_to_private_storage(
     } else {
         format!("{prefix}/{label}.db")
     };
-    let backup_file = tempfile::Builder::new()
+    let backup_dir = tempfile::Builder::new()
         .prefix("onshape-export-")
-        .suffix(".db")
-        .tempfile()
-        .context("creating temporary sqlite backup file")?;
-    let backup_path = backup_file.path().to_path_buf();
+        .tempdir()
+        .context("creating temporary sqlite backup directory")?;
+    let backup_path = backup_dir.path().join("backup.db");
 
     let db = Database::connect_without_migrations(&config.database_url)
         .await
@@ -881,9 +880,6 @@ async fn backup_database_to_private_storage(
         .await
         .with_context(|| format!("uploading sqlite backup to {backup_key}"));
     upload_result?;
-    backup_file
-        .close()
-        .with_context(|| format!("removing temporary backup {}", backup_path.display()))?;
     println!("uploaded sqlite backup to {backup_key}");
     Ok(Some(backup_key))
 }
