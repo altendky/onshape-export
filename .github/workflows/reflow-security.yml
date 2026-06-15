@@ -60,6 +60,7 @@ jobs:
           mkdir -p "${REPORT_DIR}"
           # cargo audit scans the whole lockfile and currently reports rsa even
           # though it is not reachable in the active Cargo dependency graph.
+          # Follow-up: https://github.com/altendky/onshape-export/issues/57
           MISE_LOCKED=0 mise x cargo:cargo-audit@0.22.2 -- \
             cargo audit \
               --ignore RUSTSEC-2023-0071 \
