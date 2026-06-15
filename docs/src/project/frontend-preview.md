@@ -37,6 +37,11 @@ Initial policy:
 - If the preview is missing, show a `Generate Preview` action.
 - Later, selected models can opt into debounce-based auto-generation.
 
+Preview viewers should avoid continuous idle motion by default. Keep manual
+`<model-viewer>` camera controls enabled, but do not enable automatic rotation or
+the animated interaction prompt unless the behavior is explicitly bounded by app
+logic.
+
 Cached preview and download URLs are stable public Tigris artifact URLs. The Fly app should not proxy artifact bytes in the intended production path.
 
 Because the browser viewer fetches preview assets directly from the Tigris public hostname, the Tigris bucket must allow cross-origin `GET` and `HEAD` requests from the public app origin. This applies to direct GLB, direct glTF JSON, and any glTF sidecar assets. Downloads through normal links are less sensitive to CORS, but the same bucket policy covers them harmlessly.
