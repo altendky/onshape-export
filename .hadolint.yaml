@@ -1,3 +1,4 @@
-# Docker base image and apt package pinning policy is tracked in #53.
+# Docker base image and apt package pinning policy is tracked in
+# https://github.com/altendky/onshape-export/issues/53.
 ignored:
   - DL3008
