@@ -23,7 +23,7 @@ rules:
     paths:
       include:
         - "*.sh"
-        - "scripts/**"
+        - "/scripts/**"
     message: Avoid piping downloads directly into a shell; verify contents first.
     pattern-either:
       - pattern: curl ... | sh

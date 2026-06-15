@@ -862,12 +862,12 @@ async fn backup_database_to_private_storage(
     } else {
         format!("{prefix}/{label}.db")
     };
-    let backup_path = env::temp_dir().join(format!("onshape-export-{label}.db"));
-    if backup_path.exists() {
-        fs::remove_file(&backup_path).with_context(|| {
-            format!("removing stale temporary backup {}", backup_path.display())
-        })?;
-    }
+    let backup_file = tempfile::Builder::new()
+        .prefix("onshape-export-")
+        .suffix(".db")
+        .tempfile()
+        .context("creating temporary sqlite backup file")?;
+    let backup_path = backup_file.path().to_path_buf();
 
     let db = Database::connect_without_migrations(&config.database_url)
         .await
@@ -880,10 +880,10 @@ async fn backup_database_to_private_storage(
         .put_file(&backup_key, &backup_path, "application/vnd.sqlite3")
         .await
         .with_context(|| format!("uploading sqlite backup to {backup_key}"));
-    let cleanup_result = fs::remove_file(&backup_path)
-        .with_context(|| format!("removing temporary backup {}", backup_path.display()));
     upload_result?;
-    cleanup_result?;
+    backup_file
+        .close()
+        .with_context(|| format!("removing temporary backup {}", backup_path.display()))?;
     println!("uploaded sqlite backup to {backup_key}");
     Ok(Some(backup_key))
 }

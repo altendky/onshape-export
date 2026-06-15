@@ -1,0 +1,180 @@
+name: Security
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  REPORT_DIR: target/security-audit
+
+jobs:
+  cargo-deny:
+    name: Cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4
+        with:
+          install: false
+
+      - name: Check dependency policy
+        run: |
+          mkdir -p "${REPORT_DIR}"
+          MISE_LOCKED=0 mise x aqua:EmbarkStudios/cargo-deny@0.19.8 -- \
+            cargo deny --format json check \
+              2> >(tee "${REPORT_DIR}/cargo-deny.json" >&2)
+
+      - name: Upload report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: security-cargo-deny
+          path: ${{ env.REPORT_DIR }}/cargo-deny.json
+          if-no-files-found: warn
+
+  cargo-audit:
+    name: Cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4
+        with:
+          install: false
+
+      - name: Check Rust advisories
+        run: |
+          mkdir -p "${REPORT_DIR}"
+          # cargo audit scans the whole lockfile and currently reports rsa even
+          # though it is not reachable in the active Cargo dependency graph.
+          MISE_LOCKED=0 mise x cargo:cargo-audit@0.22.2 -- \
+            cargo audit \
+              --ignore RUSTSEC-2023-0071 \
+              --format json > "${REPORT_DIR}/cargo-audit.json"
+
+      - name: Upload report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: security-cargo-audit
+          path: ${{ env.REPORT_DIR }}/cargo-audit.json
+          if-no-files-found: warn
+
+  osv-scanner:
+    name: OSV scanner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4
+        with:
+          install: false
+
+      - name: Check OSV advisories
+        run: |
+          mkdir -p "${REPORT_DIR}"
+          MISE_LOCKED=0 mise x aqua:google/osv-scanner@2.3.8 -- \
+            osv-scanner scan source \
+              --recursive \
+              --format json \
+              --output-file "${REPORT_DIR}/osv-scanner.json" \
+              --experimental-exclude target \
+              --experimental-exclude docs/book \
+              .
+
+      - name: Upload report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: security-osv-scanner
+          path: ${{ env.REPORT_DIR }}/osv-scanner.json
+          if-no-files-found: warn
+
+  trivy-fs:
+    name: Trivy filesystem
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4
+        with:
+          install: false
+
+      - name: Check filesystem vulnerabilities and misconfigurations
+        run: |
+          mkdir -p "${REPORT_DIR}"
+          MISE_LOCKED=0 mise x aqua:aquasecurity/trivy@0.71.0 -- \
+            trivy fs \
+              --quiet \
+              --scanners vuln,misconfig \
+              --severity MEDIUM,HIGH,CRITICAL \
+              --exit-code 1 \
+              --format json \
+              --output "${REPORT_DIR}/trivy-fs.json" \
+              --skip-dirs .git \
+              --skip-dirs target \
+              --skip-dirs docs/book \
+              .
+
+      - name: Upload report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: security-trivy-fs
+          path: ${{ env.REPORT_DIR }}/trivy-fs.json
+          if-no-files-found: warn
+
+  semgrep-ci:
+    name: Semgrep CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4
+        with:
+          install: false
+
+      - name: Check CI security rules
+        run: |
+          mkdir -p "${REPORT_DIR}"
+          MISE_LOCKED=0 mise x pipx:semgrep@1.166.0 -- \
+            semgrep scan \
+              --config .semgrep.yml \
+              --config p/security-audit \
+              --config p/rust \
+              --exclude-rule rust.lang.security.args.args \
+              --error \
+              --sarif \
+              --output "${REPORT_DIR}/semgrep-ci.sarif" \
+              --metrics off \
+              --disable-version-check \
+              --exclude target \
+              --exclude docs/book \
+              .
+
+      - name: Upload report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: security-semgrep-ci
+          path: ${{ env.REPORT_DIR }}/semgrep-ci.sarif
+          if-no-files-found: warn
