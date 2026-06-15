@@ -9,7 +9,7 @@ RUN cargo build --release --locked
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates util-linux \
     && groupadd --system onshape-export \
     && useradd --system --gid onshape-export --home-dir /nonexistent --shell /usr/sbin/nologin onshape-export \
     && mkdir -p /data \
@@ -20,12 +20,14 @@ WORKDIR /app
 
 COPY --from=builder /app/target/release/onshape-export /app/onshape-export
 COPY --from=builder /app/catalog /app/catalog
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+RUN chmod 0755 /usr/local/bin/docker-entrypoint.sh
 
 ENV BIND_ADDR=0.0.0.0:8080
 ENV DATABASE_URL=sqlite:///data/onshape-export.db?mode=rwc
 
 EXPOSE 8080
 
-USER onshape-export
-
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["/app/onshape-export", "serve"]
