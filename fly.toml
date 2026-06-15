@@ -6,7 +6,7 @@ primary_region = "ord"
 
 [env]
   AWS_REGION = "auto"
-  BACKUP_TIGRIS_BUCKET = "onshape-export-backup"
+  BACKUP_TIGRIS_BUCKET = "onshape-export-backups"
   BIND_ADDR = "0.0.0.0:8080"
   DATABASE_URL = "sqlite:///data/onshape-export.db?mode=rwc"
   RUST_LOG = "info,onshape_export=debug,tower_http=info"

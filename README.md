@@ -100,7 +100,7 @@ Fly deployment foundation:
 ```sh
 fly volumes create onshape_export_data --size 1 --region ord
 fly storage create --name onshape-export --public
-fly storage create --name onshape-export-backup
+fly storage create --name onshape-export-backups
 fly secrets set ONSHAPE_ACCESS_KEY=... ONSHAPE_SECRET_KEY=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...
 fly secrets set BACKUP_AWS_ACCESS_KEY_ID=... BACKUP_AWS_SECRET_ACCESS_KEY=...
 fly deploy

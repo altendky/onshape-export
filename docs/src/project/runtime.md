@@ -156,7 +156,7 @@ fly storage status onshape-export
 Create or confirm the private backup bucket. Do not make this bucket public and do not apply browser CORS to it:
 
 ```sh
-fly storage create --name onshape-export-backup
+fly storage create --name onshape-export-backups
 ```
 
 Set Onshape and Tigris credentials as Fly secrets. Use separate credentials for the public artifact bucket and the private backup bucket when possible. Do not set non-secret Tigris names, endpoint URLs, public base URLs, or regions as secrets unless they differ from `fly.toml` intentionally:
