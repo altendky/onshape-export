@@ -29,6 +29,7 @@ Configured tools include:
 - `node` for JavaScript-based hook tools when required.
 - `python` for `pre-commit`.
 - `pipx:pre-commit` for hook execution.
+- Docker for Docker-backed security hooks.
 - `cargo:mdbook` for documentation builds and tests.
 - `cargo:lychee` for Markdown link checking.
 - `github:nextest-rs/nextest` for Rust test execution.
@@ -46,6 +47,23 @@ Install tools and run the default hook set:
 mise install --locked
 mise exec -- pre-commit run --show-diff-on-failure --color=always --all-files
 ```
+
+Run fast local guardrails against staged changes before committing:
+
+```sh
+mise exec -- pre-commit run --show-diff-on-failure --color=always
+```
+
+Run the same hook set against branch changes before pushing:
+
+```sh
+mise exec -- pre-commit run --from-ref origin/main --to-ref HEAD --show-diff-on-failure --color=always
+```
+
+These commands avoid full repository history and dependency scans.
+Secret scanning redacts findings, `zizmor` runs offline and filters
+informational-only results, and file-specific hooks are skipped by `pre-commit`
+when there are no matching local changes.
 
 Run the manual Rust hooks that CI also requires:
 
@@ -74,13 +92,17 @@ The default hook set covers:
 - TOML syntax check.
 - YAML syntax check.
 - Merge-conflict marker check.
+- `gitleaks` for redacted staged secret scanning.
+- `semgrep` with the checked-in lightweight local rules.
 - `typos`.
 - `markdownlint-cli2`.
 - `lychee` for Markdown links.
 - Mergify config validation.
 - `actionlint`.
+- `zizmor` for offline GitHub Actions security analysis.
 - `action-validator`.
 - `shellcheck`.
+- `hadolint` for Dockerfile linting.
 - `cargo fmt --all --check`.
 - `cargo clippy --locked --all-targets --all-features -- -D warnings`.
 - `mise install --locked --dry-run` when mise files change.

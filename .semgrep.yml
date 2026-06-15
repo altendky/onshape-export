@@ -1,0 +1,32 @@
+rules:
+  - id: rust-disabled-tls-validation
+    languages: [rust]
+    severity: ERROR
+    message: Do not disable TLS certificate or hostname validation.
+    pattern-either:
+      - pattern: $CLIENT.danger_accept_invalid_certs(true)
+      - pattern: $CLIENT.danger_accept_invalid_hostnames(true)
+
+  - id: rust-shell-command
+    languages: [rust]
+    severity: WARNING
+    message: Avoid spawning a shell with -c; pass arguments directly to the command.
+    pattern-either:
+      - pattern: std::process::Command::new("sh").arg("-c")
+      - pattern: std::process::Command::new("bash").arg("-c")
+      - pattern: Command::new("sh").arg("-c")
+      - pattern: Command::new("bash").arg("-c")
+
+  - id: shell-pipe-to-shell
+    languages: [generic]
+    severity: WARNING
+    paths:
+      include:
+        - "*.sh"
+        - "scripts/**"
+    message: Avoid piping downloads directly into a shell; verify contents first.
+    pattern-either:
+      - pattern: curl ... | sh
+      - pattern: curl ... | bash
+      - pattern: wget ... | sh
+      - pattern: wget ... | bash

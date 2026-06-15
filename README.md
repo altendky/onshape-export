@@ -45,6 +45,8 @@ Local verification:
 
 ```sh
 mise install --locked
+mise exec -- pre-commit run --show-diff-on-failure --color=always
+mise exec -- pre-commit run --from-ref origin/main --to-ref HEAD --show-diff-on-failure --color=always
 mise exec -- pre-commit run --show-diff-on-failure --color=always --all-files
 mise exec -- pre-commit run --hook-stage manual --all-files
 ```
