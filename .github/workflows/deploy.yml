@@ -162,6 +162,7 @@ jobs:
           fi
           mise exec -- fly ssh console --machine "${{ steps.machine.outputs.id }}" \
             --app "${FLY_APP}" \
+            --user onshape-export \
             -C "${maintenance_command}"
 
       - name: Deploy app
@@ -174,7 +175,7 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3 4 5; do
-            if mise exec -- fly ssh console --app "${FLY_APP}" -C "/app/onshape-export ops check"; then
+            if mise exec -- fly ssh console --app "${FLY_APP}" --user onshape-export -C "/app/onshape-export ops check"; then
               exit 0
             fi
             if [ "${attempt}" -eq 5 ]; then

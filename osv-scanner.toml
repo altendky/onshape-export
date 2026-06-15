@@ -1,0 +1,4 @@
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0071"
+# Follow-up: https://github.com/altendky/onshape-export/issues/57
+reason = "rsa 0.9.10 is present in Cargo.lock but is not reachable in the active Cargo dependency graph; cargo deny remains the graph-aware Rust advisory gate."

@@ -31,8 +31,5 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
-      - name: Check dependencies
-        run: cargo deny check
-
       - name: Test
         run: cargo nextest run --locked --all-features

@@ -10,7 +10,8 @@ The aggregate `all` job currently requires these workflow groups:
 - `mise`: verifies the checked-in `mise.lock` with `mise install --locked --dry-run`.
 - `pre-commit`: runs `pre-commit run --show-diff-on-failure --color=always --all-files`.
 - `docs`: runs `mise exec -- mdbook build docs` and `mise exec -- mdbook test docs`.
-- `rust`: runs Rust formatting, clippy, `cargo deny check`, and `cargo nextest run`.
+- `rust`: runs Rust formatting, clippy, and `cargo nextest run`.
+- `security`: runs slower CI-native security scanners in parallel.
 
 GitHub Actions are pinned to full commit SHAs.
 Renovate is configured to maintain dependencies, pre-commit hooks, mise tools, and pinned action digests.
@@ -79,9 +80,23 @@ mise exec -- mdbook build docs
 mise exec -- mdbook test docs
 mise exec -- bash scripts/cargo-pinned.sh fmt --all --check
 mise exec -- bash scripts/cargo-pinned.sh clippy --locked --all-targets --all-features -- -D warnings
-mise exec -- bash scripts/cargo-pinned.sh deny check
 mise exec -- bash scripts/cargo-pinned.sh nextest run --locked --all-features
 ```
+
+## Security CI
+
+The security workflow is CI-native instead of a single local command so slow
+scanners can run in parallel and upload independent structured reports.
+
+Blocking security jobs are:
+
+- `cargo-deny`: Rust dependency policy, advisories, licenses, duplicate-version policy, and source restrictions from `deny.toml`.
+- `cargo-audit`: RustSec advisories for `Cargo.lock`, with explicit ignores only for lockfile-only false positives that are not reachable in the active dependency graph.
+- `osv-scanner`: OSV advisory matches for repository lockfiles and manifests. Its `osv-scanner.toml` ignores must include a reason.
+- `trivy-fs`: filesystem vulnerability, misconfiguration, and secret scan, blocking on `MEDIUM`, `HIGH`, or `CRITICAL` findings. Trivy secret scanning is a CI-only second opinion alongside the faster `gitleaks` pre-commit check.
+- `semgrep-ci`: checked-in local rules plus Semgrep's `p/security-audit` and `p/rust` rulesets. These broader rulesets run only in CI, not in pre-commit.
+
+Each job writes a JSON or SARIF report under `target/security-audit/` and uploads it as a workflow artifact, even when the scanner exits nonzero.
 
 ## Pre-commit Hooks
 
@@ -109,7 +124,7 @@ The default hook set covers:
 - `mdbook build` and `mdbook test` when docs change.
 
 `cargo nextest` and `cargo deny` are configured as manual hooks because they are heavier checks.
-The Rust CI workflow still runs both on every required CI run.
+The Rust CI workflow runs `cargo nextest` on every required CI run, and the security workflow runs `cargo deny`.
 
 ## Renovate
 
