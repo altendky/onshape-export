@@ -118,13 +118,13 @@ jobs:
         with:
           install: false
 
-      - name: Check filesystem vulnerabilities and misconfigurations
+      - name: Check filesystem vulnerabilities, misconfigurations, and secrets
         run: |
           mkdir -p "${REPORT_DIR}"
           MISE_LOCKED=0 mise x aqua:aquasecurity/trivy@0.71.0 -- \
             trivy fs \
               --quiet \
-              --scanners vuln,misconfig \
+              --scanners vuln,misconfig,secret \
               --severity MEDIUM,HIGH,CRITICAL \
               --exit-code 1 \
               --format json \

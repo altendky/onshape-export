@@ -93,7 +93,7 @@ Blocking security jobs are:
 - `cargo-deny`: Rust dependency policy, advisories, licenses, duplicate-version policy, and source restrictions from `deny.toml`.
 - `cargo-audit`: RustSec advisories for `Cargo.lock`, with explicit ignores only for lockfile-only false positives that are not reachable in the active dependency graph.
 - `osv-scanner`: OSV advisory matches for repository lockfiles and manifests. Its `osv-scanner.toml` ignores must include a reason.
-- `trivy-fs`: filesystem vulnerability and misconfiguration scan, blocking on `MEDIUM`, `HIGH`, or `CRITICAL` findings. Secret scanning is intentionally disabled here because `gitleaks` owns that fast check in pre-commit.
+- `trivy-fs`: filesystem vulnerability, misconfiguration, and secret scan, blocking on `MEDIUM`, `HIGH`, or `CRITICAL` findings. Trivy secret scanning is a CI-only second opinion alongside the faster `gitleaks` pre-commit check.
 - `semgrep-ci`: checked-in local rules plus Semgrep's `p/security-audit` and `p/rust` rulesets. These broader rulesets run only in CI, not in pre-commit.
 
 Each job writes a JSON or SARIF report under `target/security-audit/` and uploads it as a workflow artifact, even when the scanner exits nonzero.
