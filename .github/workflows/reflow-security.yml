@@ -29,9 +29,14 @@ jobs:
       - name: Check dependency policy
         run: |
           mkdir -p "${REPORT_DIR}"
+          report="${REPORT_DIR}/cargo-deny.json"
+          set +e
           MISE_LOCKED=0 mise x aqua:EmbarkStudios/cargo-deny@0.19.8 -- \
-            cargo deny --format json check \
-              2> >(tee "${REPORT_DIR}/cargo-deny.json" >&2)
+            bash -c "cargo deny --format json check 2>\"\${1}\"" bash "${report}"
+          status=$?
+          set -e
+          ./scripts/security-report-summary.sh cargo-deny "${report}"
+          exit "${status}"
 
       - name: Upload report
         if: ${{ always() }}
@@ -63,10 +68,16 @@ jobs:
           # cargo audit scans the whole lockfile and currently reports rsa even
           # though it is not reachable in the active Cargo dependency graph.
           # Follow-up: https://github.com/altendky/onshape-export/issues/57
+          report="${REPORT_DIR}/cargo-audit.json"
+          set +e
           MISE_LOCKED=0 mise x cargo:cargo-audit@0.22.2 -- \
-            cargo audit \
+            bash -c "cargo audit \
               --ignore RUSTSEC-2023-0071 \
-              --format json > "${REPORT_DIR}/cargo-audit.json"
+              --format json > \"\${1}\"" bash "${report}"
+          status=$?
+          set -e
+          ./scripts/security-report-summary.sh cargo-audit "${report}"
+          exit "${status}"
 
       - name: Upload report
         if: ${{ always() }}
@@ -92,14 +103,20 @@ jobs:
       - name: Check OSV advisories
         run: |
           mkdir -p "${REPORT_DIR}"
+          report="${REPORT_DIR}/osv-scanner.json"
+          set +e
           MISE_LOCKED=0 mise x aqua:google/osv-scanner@2.3.8 -- \
             osv-scanner scan source \
               --recursive \
               --format json \
-              --output-file "${REPORT_DIR}/osv-scanner.json" \
+              --output-file "${report}" \
               --experimental-exclude target \
               --experimental-exclude docs/book \
               .
+          status=$?
+          set -e
+          ./scripts/security-report-summary.sh osv-scanner "${report}"
+          exit "${status}"
 
       - name: Upload report
         if: ${{ always() }}
@@ -125,6 +142,8 @@ jobs:
       - name: Check filesystem vulnerabilities, misconfigurations, and secrets
         run: |
           mkdir -p "${REPORT_DIR}"
+          report="${REPORT_DIR}/trivy-fs.json"
+          set +e
           MISE_LOCKED=0 mise x aqua:aquasecurity/trivy@0.71.0 -- \
             trivy fs \
               --quiet \
@@ -132,11 +151,15 @@ jobs:
               --severity MEDIUM,HIGH,CRITICAL \
               --exit-code 1 \
               --format json \
-              --output "${REPORT_DIR}/trivy-fs.json" \
+              --output "${report}" \
               --skip-dirs .git \
               --skip-dirs target \
               --skip-dirs docs/book \
               .
+          status=$?
+          set -e
+          ./scripts/security-report-summary.sh trivy "${report}"
+          exit "${status}"
 
       - name: Upload report
         if: ${{ always() }}
@@ -163,6 +186,8 @@ jobs:
         run: |
           mkdir -p "${REPORT_DIR}"
           # Follow-up: https://github.com/altendky/onshape-export/issues/58
+          report="${REPORT_DIR}/semgrep-ci.sarif"
+          set +e
           MISE_LOCKED=0 mise x pipx:semgrep@1.166.0 -- \
             semgrep scan \
               --config .semgrep.yml \
@@ -171,12 +196,16 @@ jobs:
               --exclude-rule rust.lang.security.args.args \
               --error \
               --sarif \
-              --output "${REPORT_DIR}/semgrep-ci.sarif" \
+              --output "${report}" \
               --metrics off \
               --disable-version-check \
               --exclude target \
               --exclude docs/book \
               .
+          status=$?
+          set -e
+          ./scripts/security-report-summary.sh semgrep "${report}"
+          exit "${status}"
 
       - name: Upload report
         if: ${{ always() }}
