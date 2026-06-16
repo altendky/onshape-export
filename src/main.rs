@@ -673,8 +673,8 @@ async fn run_cli(config: Config, command: CliCommand) -> anyhow::Result<()> {
             command: FailuresCommand::List(output_args),
         } => {
             let output_format = output_args.output_format();
-            let state = cli_state(config).await?;
-            let jobs = state.db.failed_jobs(100).await?;
+            let db = cli_db(&config).await?;
+            let jobs = db.failed_jobs(100).await?;
             print_jobs(jobs, output_format, "no failed jobs")?;
             Ok(())
         }
@@ -682,26 +682,26 @@ async fn run_cli(config: Config, command: CliCommand) -> anyhow::Result<()> {
             command: JobsCommand::List(output_args),
         } => {
             let output_format = output_args.output_format();
-            let state = cli_state(config).await?;
-            let jobs = state.db.jobs(100).await?;
+            let db = cli_db(&config).await?;
+            let jobs = db.jobs(100).await?;
             print_jobs(jobs, output_format, "no jobs")?;
             Ok(())
         }
         CliCommand::Failures {
             command: FailuresCommand::Retry(retry_args),
         } => {
-            let state = cli_state(config).await?;
+            let db = cli_db(&config).await?;
             match retry_args.selector() {
                 FailureRetrySelector::All => {
-                    let count = state.db.retry_failed_jobs().await?;
+                    let count = db.retry_failed_jobs().await?;
                     println!("marked {count} failed jobs for retry");
                 }
                 FailureRetrySelector::Kind(job_kind) => {
-                    let count = state.db.retry_failed_jobs_by_kind(job_kind).await?;
+                    let count = db.retry_failed_jobs_by_kind(job_kind).await?;
                     println!("marked {count} {job_kind} failed job(s) for retry");
                 }
                 FailureRetrySelector::WorkKey(work_key) => {
-                    if state.db.retry_failed_job(work_key).await? {
+                    if db.retry_failed_job(work_key).await? {
                         println!("marked failed job {work_key} for retry");
                     } else {
                         println!("failed job not found or not retryable: {work_key}");
@@ -714,15 +714,14 @@ async fn run_cli(config: Config, command: CliCommand) -> anyhow::Result<()> {
             command: ArtifactsCommand::List(ArtifactListArgs { selector, json }),
         } => {
             let output_format = output_format(json);
-            let state = cli_state(config).await?;
+            let db = cli_db(&config).await?;
             let mut all_artifacts = Vec::new();
-            let catalog = state
-                .db
+            let catalog = db
                 .catalog()
                 .await
                 .context("loading catalog from database")?;
             for model in selected_models(&catalog, &selector)? {
-                let artifacts = state.db.artifacts_for_model(&model.slug).await?;
+                let artifacts = db.artifacts_for_model(&model.slug).await?;
                 match output_format {
                     OutputFormat::Json => all_artifacts.extend(artifacts),
                     OutputFormat::Text if artifacts.is_empty() => {
@@ -755,13 +754,13 @@ async fn run_cli(config: Config, command: CliCommand) -> anyhow::Result<()> {
         CliCommand::Artifacts {
             command: ArtifactsCommand::Invalidate { artifact_key },
         } => {
-            let state = cli_state(config).await?;
-            let Some(artifact) = state.db.artifact(&artifact_key).await? else {
+            let db = cli_db(&config).await?;
+            let Some(artifact) = db.artifact(&artifact_key).await? else {
                 println!("artifact not found: {artifact_key}");
                 return Ok(());
             };
 
-            supersede_published_artifact(&state, &artifact).await?;
+            supersede_published_artifact(&db, &artifact).await?;
             println!(
                 "invalidated artifact {artifact_key} and marked {} superseded",
                 artifact.object_key
@@ -777,17 +776,15 @@ async fn run_cli(config: Config, command: CliCommand) -> anyhow::Result<()> {
                 }),
         } => {
             let options = PruneOptions::new(older_than_days, dry_run)?;
-            let state = cli_state(config).await?;
+            let db = cli_db(&config).await?;
             let mut pruned = 0usize;
 
-            let catalog = state
-                .db
+            let catalog = db
                 .catalog()
                 .await
                 .context("loading catalog from database")?;
             for model in selected_models(&catalog, &selector)? {
-                let artifacts = state
-                    .db
+                let artifacts = db
                     .artifacts_older_than_days(&model.slug, options.older_than_days)
                     .await?;
                 if artifacts.is_empty() {
@@ -812,7 +809,7 @@ async fn run_cli(config: Config, command: CliCommand) -> anyhow::Result<()> {
                         artifact.object_key,
                     );
                     if !options.dry_run {
-                        supersede_published_artifact(&state, &artifact).await?;
+                        supersede_published_artifact(&db, &artifact).await?;
                     }
                     pruned += 1;
                 }
@@ -1174,6 +1171,12 @@ async fn ensure_database_ready_for_serve(db: &Database) -> anyhow::Result<()> {
 
 async fn cli_state(config: Config) -> anyhow::Result<AppState> {
     build_state(config).await
+}
+
+async fn cli_db(config: &Config) -> anyhow::Result<Database> {
+    Database::connect(&config.database_url)
+        .await
+        .context("connecting to database")
 }
 
 async fn build_state(config: Config) -> anyhow::Result<AppState> {
@@ -4456,12 +4459,12 @@ async fn persist_export_request(
 }
 
 async fn supersede_published_artifact(
-    state: &AppState,
+    db: &Database,
     artifact: &db::ArtifactRecord,
 ) -> anyhow::Result<()> {
-    state.db.supersede_artifact(&artifact.artifact_key).await?;
+    db.supersede_artifact(&artifact.artifact_key).await?;
     if let Some(work_key) = artifact.producing_job_key.as_deref() {
-        state.db.supersede_ready_job(work_key).await?;
+        db.supersede_ready_job(work_key).await?;
     }
     Ok(())
 }
@@ -6218,7 +6221,7 @@ mod tests {
             .unwrap();
 
         let artifact = state.db.artifact("artifact-set").await.unwrap().unwrap();
-        supersede_published_artifact(&state, &artifact)
+        supersede_published_artifact(&state.db, &artifact)
             .await
             .unwrap();
 
