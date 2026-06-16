@@ -455,7 +455,9 @@ impl Database {
         let mut tx = self.pool.begin().await?;
         let mut deleted = Vec::with_capacity(GENERATED_TABLES.len());
         for &table in GENERATED_TABLES {
-            let result = sqlx::query(&format!("DELETE FROM {table}"))
+            let sql = format!("DELETE FROM {table}");
+            // Table names come only from GENERATED_TABLES above; SQLite cannot bind identifiers.
+            let result = sqlx::query(sqlx::AssertSqlSafe(sql))
                 .execute(&mut *tx)
                 .await?;
             deleted.push(DeletedTableRows {
