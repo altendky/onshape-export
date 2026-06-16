@@ -23,7 +23,7 @@ reqwest = { version = "0.12.20", default-features = false, features = ["json", "
 serde = { version = "1.0.219", features = ["derive"] }
 serde_jcs = "0.2.0"
 serde_json = "1.0.140"
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 sqlx = { version = "0.8.6", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite"] }
 tempfile = "3.20.0"
 thiserror = "2.0.12"
