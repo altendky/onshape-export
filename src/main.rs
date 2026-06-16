@@ -435,8 +435,8 @@ struct RawZipEntry {
 async fn main() -> anyhow::Result<()> {
     init_tracing();
 
-    let config = Config::from_env()?;
     let cli = Cli::parse();
+    let config = Config::from_env()?;
 
     match cli.command {
         None | Some(CliCommand::Serve) => serve(config).await,
