@@ -65,8 +65,9 @@ jobs:
       - name: Check Rust advisories
         run: |
           mkdir -p "${REPORT_DIR}"
-          # cargo audit scans the whole lockfile and currently reports rsa even
-          # though it is not reachable in the active Cargo dependency graph.
+          # cargo audit scans the whole lockfile and currently reports rsa via
+          # sqlx -> sqlx-mysql -> rsa, even though sqlx-mysql is not reachable
+          # in the active Cargo dependency graph.
           # Follow-up: https://github.com/altendky/onshape-export/issues/57
           report="${REPORT_DIR}/cargo-audit.json"
           set +e
