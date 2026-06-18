@@ -2476,7 +2476,9 @@ fn artifact_metric_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactMetric {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{DownloadFormat, DownloadOptions, ElementKind, PreviewOptions};
+    use crate::catalog::{
+        DownloadFormat, DownloadOptions, ElementKind, MeshDownloadOptions, PreviewOptions,
+    };
     use std::time::Duration;
 
     #[tokio::test]
@@ -2486,8 +2488,16 @@ mod tests {
         model.published = false;
         model.tags = vec!["example".to_owned(), "fixture".to_owned()];
         model.thumbnail = Some("thumbs/demo.png".to_owned());
-        model.exports.preview_options.resolution = Some("MEDIUM".to_owned());
+        model.exports.preview_options.resolution = Some("FINE".to_owned());
         model.exports.download_options.step_version_string = Some("AP242".to_owned());
+        model.exports.download_options.stl = MeshDownloadOptions {
+            resolution: Some("fine".to_owned()),
+            stl_mode: Some("BINARY".to_owned()),
+        };
+        model.exports.download_options.three_mf = MeshDownloadOptions {
+            resolution: Some("medium".to_owned()),
+            stl_mode: None,
+        };
         model.parameter_policy.allow_unknown = true;
         model.parameter_policy.auto_refresh = false;
         model.parameter_presets = vec![ParameterPreset {
@@ -2514,6 +2524,45 @@ mod tests {
         assert!(!loaded_model.published);
         assert_eq!(loaded_model.tags, ["example", "fixture"]);
         assert_eq!(loaded_model.thumbnail.as_deref(), Some("thumbs/demo.png"));
+        assert_eq!(
+            loaded_model.exports.preview_options.resolution.as_deref(),
+            Some("FINE")
+        );
+        assert_eq!(
+            loaded_model
+                .exports
+                .download_options
+                .step_version_string
+                .as_deref(),
+            Some("AP242")
+        );
+        assert_eq!(
+            loaded_model
+                .exports
+                .download_options
+                .stl
+                .resolution
+                .as_deref(),
+            Some("fine")
+        );
+        assert_eq!(
+            loaded_model
+                .exports
+                .download_options
+                .stl
+                .stl_mode
+                .as_deref(),
+            Some("BINARY")
+        );
+        assert_eq!(
+            loaded_model
+                .exports
+                .download_options
+                .three_mf
+                .resolution
+                .as_deref(),
+            Some("medium")
+        );
         assert_eq!(loaded_model.parameter_presets[0].slug, "small");
         assert_eq!(loaded_model.parameter_presets[0].values["width"], "10");
         let override_ = &loaded_model.parameter_overrides["width"];

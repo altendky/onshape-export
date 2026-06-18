@@ -107,7 +107,7 @@ Async GLB body shape should include the configuration under `advancedParams.conf
     "configuration": "..."
   },
   "meshParams": {
-    "resolution": "MEDIUM"
+    "resolution": "FINE"
   },
   "grouping": true,
   "storeInDocument": false,
@@ -154,15 +154,42 @@ POST /api/partstudios/d/{did}/v/{vid}/e/{eid}/translations
 POST /api/assemblies/d/{did}/v/{vid}/e/{eid}/translations
 ```
 
-Generic body shape:
+Generic 3MF body shape:
 
 ```json
 {
   "formatName": "3MF",
   "storeInDocument": false,
-  "configuration": "..."
+  "notifyUser": false,
+  "triggerAutoDownload": false,
+  "configuration": "...",
+  "resolution": "fine"
 }
 ```
+
+Generic STL body shape:
+
+```json
+{
+  "formatName": "STL",
+  "storeInDocument": false,
+  "notifyUser": false,
+  "triggerAutoDownload": false,
+  "configuration": "...",
+  "stlMode": "BINARY",
+  "resolution": "fine"
+}
+```
+
+The generic async translation endpoint documents lowercase `resolution` values for STL and 3MF: `coarse`, `medium`, and `fine`. This differs from the async GLB `meshParams.resolution` enum, which accepts uppercase values such as `FINE`, and from synchronous STL endpoints, which use query names such as `angleTolerance`, `chordTolerance`, `maxFacetWidth`, `minFacetWidth`, `units`, and `mode`.
+
+Current live-test evidence:
+
+- STEP remains explicitly requested as `AP242` because omitting the value produced different bytes than an explicit AP242 request.
+- GLB preview accepts uppercase `FINE`; lowercase `fine` failed.
+- 3MF generic translation accepts lowercase `fine`; uppercase `FINE` failed after the translation started.
+- STL generic translation accepts `resolution: "fine"` and `stlMode: "BINARY"`; `stlMode` changed the output encoding and size, but generic async STL `resolution` did not affect tested outputs. The app still sends lowercase `fine` as catalog-requested high-quality intent.
+- Numeric mesh tolerances are intentionally not implemented yet. They require more model-scale-specific testing before becoming catalog semantics or cache identity.
 
 Exact `formatName` values should be verified with:
 

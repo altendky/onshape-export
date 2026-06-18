@@ -19,12 +19,12 @@ use crate::{
 
 static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 const API_SPEC_VERSION: Option<&str> = None;
-const PREVIEW_GLTF_DEFAULTS_POLICY_VERSION: &str = "preview-gltf-defaults-v1";
+const PREVIEW_GLTF_DEFAULTS_POLICY_VERSION: &str = "preview-gltf-defaults-v2";
 const PREVIEW_GLTF_REQUEST_BUILDER_VERSION: &str = "preview-gltf-request-v1";
 const STEP_EXPORT_DEFAULTS_POLICY_VERSION: &str = "step-export-defaults-v1";
 const STEP_EXPORT_REQUEST_BUILDER_VERSION: &str = "step-export-request-v1";
-const TRANSLATION_EXPORT_DEFAULTS_POLICY_VERSION: &str = "translation-export-defaults-v1";
-const TRANSLATION_EXPORT_REQUEST_BUILDER_VERSION: &str = "translation-export-request-v1";
+const TRANSLATION_EXPORT_DEFAULTS_POLICY_VERSION: &str = "translation-export-defaults-v2";
+const TRANSLATION_EXPORT_REQUEST_BUILDER_VERSION: &str = "translation-export-request-v2";
 
 #[derive(Debug, Clone)]
 pub struct OnshapeClient {
@@ -298,7 +298,7 @@ impl OnshapeClient {
         match format {
             DownloadFormat::Step => self.build_step_export_request(source, configuration, options),
             DownloadFormat::Stl | DownloadFormat::ThreeMf => {
-                self.build_translation_export_request(source, configuration, format)
+                self.build_translation_export_request(source, configuration, format, options)
             }
         }
     }
@@ -318,7 +318,7 @@ impl OnshapeClient {
             "advancedParams": {
                 "configuration": configuration.encoded_id,
             },
-            "stepVersionString": options.step_version_string.as_deref().unwrap_or("AP242"),
+            "stepVersionString": options.effective_step().step_version_string,
             "storeInDocument": false,
             "notifyUser": false,
             "triggerAutoDownload": false,
@@ -349,6 +349,7 @@ impl OnshapeClient {
         source: &OnshapeSource,
         configuration: &EncodedConfigurationIdentity,
         format: DownloadFormat,
+        options: &DownloadOptions,
     ) -> CanonicalExportRequest {
         let collection = element_collection(source);
         let path = format!(
@@ -356,13 +357,8 @@ impl OnshapeClient {
             source.document_id, source.version_id, source.element_id
         );
         let format_label = format.label().to_owned();
-        let body = json!({
-            "formatName": format_label,
-            "storeInDocument": false,
-            "notifyUser": false,
-            "triggerAutoDownload": false,
-            "configuration": configuration.encoded_id,
-        });
+        let body =
+            translation_export_body(format, &format_label, &configuration.encoded_id, options);
 
         CanonicalExportRequest {
             operation: format!("create-{}-translation", format.slug()),
@@ -509,13 +505,46 @@ fn gltf_export_body(configuration: &str, options: &PreviewOptions) -> Value {
             "configuration": configuration,
         },
         "meshParams": {
-            "resolution": options.resolution.as_deref().unwrap_or("MEDIUM"),
+            "resolution": options.effective_glb().resolution,
         },
         "grouping": true,
         "storeInDocument": false,
         "notifyUser": false,
         "triggerAutoDownload": false,
     })
+}
+
+fn translation_export_body(
+    format: DownloadFormat,
+    format_label: &str,
+    configuration: &str,
+    options: &DownloadOptions,
+) -> Value {
+    let mut body = json!({
+        "formatName": format_label,
+        "storeInDocument": false,
+        "notifyUser": false,
+        "triggerAutoDownload": false,
+        "configuration": configuration,
+    });
+    let object = body.as_object_mut().expect("translation body is an object");
+
+    match format {
+        DownloadFormat::Step => {}
+        DownloadFormat::Stl => {
+            let effective = options.effective_stl();
+            object.insert("resolution".to_owned(), Value::String(effective.resolution));
+            if let Some(stl_mode) = effective.stl_mode {
+                object.insert("stlMode".to_owned(), Value::String(stl_mode));
+            }
+        }
+        DownloadFormat::ThreeMf => {
+            let effective = options.effective_three_mf();
+            object.insert("resolution".to_owned(), Value::String(effective.resolution));
+        }
+    }
+
+    body
 }
 
 fn export_path_params(
@@ -883,6 +912,13 @@ mod tests {
     }
 
     #[test]
+    fn gltf_export_body_uses_fine_default_resolution() {
+        let body = gltf_export_body("width=10 mm", &PreviewOptions::default());
+
+        assert_eq!(body["meshParams"]["resolution"], "FINE");
+    }
+
+    #[test]
     fn preview_export_request_uses_encoded_configuration_and_versions() {
         let client = OnshapeClient::new(OnshapeConfig {
             base_url: "https://cad.onshape.com".to_owned(),
@@ -1010,6 +1046,7 @@ mod tests {
         );
         assert_eq!(request.identity.body["formatName"], "3MF");
         assert_eq!(request.identity.body["configuration"], "enc-123");
+        assert_eq!(request.identity.body["resolution"], "fine");
         assert_eq!(
             request.identity.defaults_policy_version,
             TRANSLATION_EXPORT_DEFAULTS_POLICY_VERSION
@@ -1018,6 +1055,69 @@ mod tests {
             request.identity.request_builder_version,
             TRANSLATION_EXPORT_REQUEST_BUILDER_VERSION
         );
+    }
+
+    #[test]
+    fn stl_translation_export_request_uses_binary_default() {
+        let client = OnshapeClient::new(OnshapeConfig {
+            base_url: "https://cad.onshape.com".to_owned(),
+            access_key: None,
+            secret_key: None,
+        })
+        .unwrap();
+        let source = OnshapeSource {
+            document_id: "did".to_owned(),
+            version_id: "vid".to_owned(),
+            element_id: "eid".to_owned(),
+            element_kind: ElementKind::PartStudio,
+            link_document_id: None,
+        };
+        let request = client.build_download_export_request(
+            &source,
+            &EncodedConfigurationIdentity {
+                encoded_id: "enc-123".to_owned(),
+                query_param: "configuration=enc-123".to_owned(),
+            },
+            DownloadFormat::Stl,
+            &DownloadOptions::default(),
+        );
+
+        assert_eq!(request.identity.body["formatName"], "STL");
+        assert_eq!(request.identity.body["resolution"], "fine");
+        assert_eq!(request.identity.body["stlMode"], "BINARY");
+    }
+
+    #[test]
+    fn stl_translation_export_request_uses_catalog_overrides() {
+        let options = DownloadOptions {
+            stl: crate::catalog::MeshDownloadOptions {
+                resolution: Some("coarse".to_owned()),
+                stl_mode: Some("TEXT".to_owned()),
+            },
+            ..Default::default()
+        };
+        let body = translation_export_body(DownloadFormat::Stl, "STL", "enc-123", &options);
+
+        assert_eq!(body["formatName"], "STL");
+        assert_eq!(body["configuration"], "enc-123");
+        assert_eq!(body["resolution"], "coarse");
+        assert_eq!(body["stlMode"], "TEXT");
+    }
+
+    #[test]
+    fn three_mf_translation_export_request_uses_catalog_resolution() {
+        let options = DownloadOptions {
+            three_mf: crate::catalog::MeshDownloadOptions {
+                resolution: Some("medium".to_owned()),
+                stl_mode: None,
+            },
+            ..Default::default()
+        };
+        let body = translation_export_body(DownloadFormat::ThreeMf, "3MF", "enc-123", &options);
+
+        assert_eq!(body["formatName"], "3MF");
+        assert_eq!(body["resolution"], "medium");
+        assert!(body.get("stlMode").is_none());
     }
 
     #[test]

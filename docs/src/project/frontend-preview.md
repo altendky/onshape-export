@@ -64,15 +64,17 @@ Preview exports should use web-friendly settings, which may differ from final ex
 Preview defaults:
 
 - GLB format.
-- Medium or coarse tessellation until quality requirements are known.
+- `FINE` GLB mesh resolution by default.
 - Stable orientation and scale.
 - Cache identity should keep the layers from [Forward-Looking Cache Model](cache-model.md) separate: preview quality, orientation, scale, and grouping affect `optionsHash`; exact request shape, explicit defaults, defaults-policy version, and request-builder version affect `requestHash`; local extraction, validation, packing, and tool versions affect `postprocessHash`; the published preview artifact set combines those identities into `artifactSetHash`.
 
 Final export defaults:
 
 - STEP: AP242 unless a model overrides it.
-- STL: model-defined resolution defaults.
-- 3MF: model-defined resolution defaults.
+- STL: catalog-defined generic translation resolution defaults to `fine`, and `stlMode` defaults to `BINARY`.
+- 3MF: catalog-defined generic translation resolution defaults to `fine`.
+
+These quality settings are not public UI controls in the MVP. Public users choose parameters and a download format; catalog/admin configuration owns export quality.
 
 ## Viewer Fallbacks
 

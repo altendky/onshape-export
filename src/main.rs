@@ -46,8 +46,10 @@ use crate::{
     storage::StorageClient,
 };
 
-const PREVIEW_OPTIONS_VERSION: &str = "mesh-grouped-v2";
-const DOWNLOAD_OPTIONS_VERSION: &str = "default-v1";
+const PREVIEW_OPTIONS_VERSION: &str = "mesh-grouped-v3";
+const STEP_DOWNLOAD_OPTIONS_VERSION: &str = "step-default-v1";
+const STL_DOWNLOAD_OPTIONS_VERSION: &str = "stl-mesh-v1";
+const THREE_MF_DOWNLOAD_OPTIONS_VERSION: &str = "3mf-mesh-v1";
 const CONFIG_HASH_JOB_VERSION: u32 = 2;
 const RETRY_BACKOFF_BASE_SECONDS: i64 = 30;
 const RETRY_BACKOFF_CAP_SECONDS: i64 = 5 * 60;
@@ -4902,21 +4904,27 @@ fn preview_options_hash(model: &catalog::Model) -> String {
     options_hash(
         "glb",
         PREVIEW_OPTIONS_VERSION,
-        &model.exports.preview_options,
+        &model.exports.preview_options.effective_glb(),
     )
 }
 
 fn download_options_hash(model: &catalog::Model, format: catalog::DownloadFormat) -> String {
-    let no_format_options = BTreeMap::<String, String>::new();
     match format {
         catalog::DownloadFormat::Step => options_hash(
             format.slug(),
-            DOWNLOAD_OPTIONS_VERSION,
-            &model.exports.download_options,
+            STEP_DOWNLOAD_OPTIONS_VERSION,
+            &model.exports.download_options.effective_step(),
         ),
-        catalog::DownloadFormat::Stl | catalog::DownloadFormat::ThreeMf => {
-            options_hash(format.slug(), DOWNLOAD_OPTIONS_VERSION, &no_format_options)
-        }
+        catalog::DownloadFormat::Stl => options_hash(
+            format.slug(),
+            STL_DOWNLOAD_OPTIONS_VERSION,
+            &model.exports.download_options.effective_stl(),
+        ),
+        catalog::DownloadFormat::ThreeMf => options_hash(
+            format.slug(),
+            THREE_MF_DOWNLOAD_OPTIONS_VERSION,
+            &model.exports.download_options.effective_three_mf(),
+        ),
     }
 }
 
@@ -5607,6 +5615,9 @@ mod tests {
         let mut second = test_model();
         second.exports.preview_options.resolution = Some("FINE".to_owned());
 
+        assert_eq!(preview_options_hash(&first), preview_options_hash(&second));
+
+        second.exports.preview_options.resolution = Some("MEDIUM".to_owned());
         assert_ne!(preview_options_hash(&first), preview_options_hash(&second));
 
         second.exports.download_options.step_version_string = Some("AP214".to_owned());
@@ -5622,6 +5633,62 @@ mod tests {
             download_options_hash(&first, catalog::DownloadFormat::ThreeMf),
             download_options_hash(&second, catalog::DownloadFormat::ThreeMf)
         );
+
+        second.exports.download_options.step_version_string = None;
+        second.exports.download_options.stl.resolution = Some("coarse".to_owned());
+        assert_ne!(
+            download_options_hash(&first, catalog::DownloadFormat::Stl),
+            download_options_hash(&second, catalog::DownloadFormat::Stl)
+        );
+        assert_eq!(
+            download_options_hash(&first, catalog::DownloadFormat::Step),
+            download_options_hash(&second, catalog::DownloadFormat::Step)
+        );
+        assert_eq!(
+            download_options_hash(&first, catalog::DownloadFormat::ThreeMf),
+            download_options_hash(&second, catalog::DownloadFormat::ThreeMf)
+        );
+
+        second.exports.download_options.stl.resolution = None;
+        second.exports.download_options.three_mf.resolution = Some("coarse".to_owned());
+        assert_ne!(
+            download_options_hash(&first, catalog::DownloadFormat::ThreeMf),
+            download_options_hash(&second, catalog::DownloadFormat::ThreeMf)
+        );
+        assert_eq!(
+            download_options_hash(&first, catalog::DownloadFormat::Step),
+            download_options_hash(&second, catalog::DownloadFormat::Step)
+        );
+        assert_eq!(
+            download_options_hash(&first, catalog::DownloadFormat::Stl),
+            download_options_hash(&second, catalog::DownloadFormat::Stl)
+        );
+    }
+
+    #[test]
+    fn option_hashes_canonicalize_effective_defaults() {
+        let implicit = test_model();
+        let mut explicit = test_model();
+        explicit.exports.preview_options.resolution = Some("FINE".to_owned());
+        explicit.exports.download_options.step_version_string = Some("AP242".to_owned());
+        explicit.exports.download_options.stl.resolution = Some("fine".to_owned());
+        explicit.exports.download_options.stl.stl_mode = Some("BINARY".to_owned());
+        explicit.exports.download_options.three_mf.resolution = Some("fine".to_owned());
+
+        assert_eq!(
+            preview_options_hash(&implicit),
+            preview_options_hash(&explicit)
+        );
+        for format in [
+            catalog::DownloadFormat::Step,
+            catalog::DownloadFormat::Stl,
+            catalog::DownloadFormat::ThreeMf,
+        ] {
+            assert_eq!(
+                download_options_hash(&implicit, format),
+                download_options_hash(&explicit, format)
+            );
+        }
     }
 
     #[test]

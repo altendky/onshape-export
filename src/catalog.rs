@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 
 pub const CATALOG_SCHEMA_VERSION: u32 = 1;
 pub const CATALOG_ENTRY_VERSION: u32 = 1;
+pub const DEFAULT_PREVIEW_GLB_RESOLUTION: &str = "FINE";
+pub const DEFAULT_STEP_VERSION_STRING: &str = "AP242";
+pub const DEFAULT_GENERIC_MESH_RESOLUTION: &str = "fine";
+pub const DEFAULT_STL_MODE: &str = "BINARY";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -132,6 +136,94 @@ pub struct PreviewOptions {
 #[serde(rename_all = "camelCase")]
 pub struct DownloadOptions {
     pub step_version_string: Option<String>,
+    #[serde(default)]
+    pub stl: MeshDownloadOptions,
+    #[serde(rename = "3mf")]
+    #[serde(default)]
+    pub three_mf: MeshDownloadOptions,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeshDownloadOptions {
+    pub resolution: Option<String>,
+    pub stl_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectivePreviewOptions {
+    pub resolution: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectiveStepDownloadOptions {
+    pub step_version_string: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectiveMeshDownloadOptions {
+    pub resolution: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stl_mode: Option<String>,
+}
+
+impl PreviewOptions {
+    pub fn effective_glb(&self) -> EffectivePreviewOptions {
+        EffectivePreviewOptions {
+            resolution: self
+                .resolution
+                .clone()
+                .unwrap_or_else(|| DEFAULT_PREVIEW_GLB_RESOLUTION.to_owned()),
+        }
+    }
+}
+
+impl DownloadOptions {
+    pub fn effective_step(&self) -> EffectiveStepDownloadOptions {
+        EffectiveStepDownloadOptions {
+            step_version_string: self
+                .step_version_string
+                .clone()
+                .unwrap_or_else(|| DEFAULT_STEP_VERSION_STRING.to_owned()),
+        }
+    }
+
+    pub fn effective_stl(&self) -> EffectiveMeshDownloadOptions {
+        self.stl.effective_with_stl_mode()
+    }
+
+    pub fn effective_three_mf(&self) -> EffectiveMeshDownloadOptions {
+        self.three_mf.effective_without_stl_mode()
+    }
+}
+
+impl MeshDownloadOptions {
+    fn effective_with_stl_mode(&self) -> EffectiveMeshDownloadOptions {
+        EffectiveMeshDownloadOptions {
+            resolution: self
+                .resolution
+                .clone()
+                .unwrap_or_else(|| DEFAULT_GENERIC_MESH_RESOLUTION.to_owned()),
+            stl_mode: Some(
+                self.stl_mode
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_STL_MODE.to_owned()),
+            ),
+        }
+    }
+
+    fn effective_without_stl_mode(&self) -> EffectiveMeshDownloadOptions {
+        EffectiveMeshDownloadOptions {
+            resolution: self
+                .resolution
+                .clone()
+                .unwrap_or_else(|| DEFAULT_GENERIC_MESH_RESOLUTION.to_owned()),
+            stl_mode: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -380,6 +472,28 @@ impl Catalog {
                     model.slug
                 );
             }
+            validate_mesh_download_options(
+                &model.exports.download_options.stl,
+                &model.slug,
+                "STL",
+            )?;
+            validate_mesh_download_options(
+                &model.exports.download_options.three_mf,
+                &model.slug,
+                "3MF",
+            )?;
+            if let Some(stl_mode) = &model.exports.download_options.stl.stl_mode {
+                anyhow::ensure!(
+                    matches!(stl_mode.as_str(), "BINARY" | "TEXT"),
+                    "STL mode for {} must be BINARY or TEXT",
+                    model.slug
+                );
+            }
+            anyhow::ensure!(
+                model.exports.download_options.three_mf.stl_mode.is_none(),
+                "3MF download options for {} cannot set stlMode",
+                model.slug
+            );
             let mut preset_slugs = HashSet::new();
             for preset in &model.parameter_presets {
                 anyhow::ensure!(
@@ -451,6 +565,20 @@ impl Catalog {
         }
         Ok(())
     }
+}
+
+fn validate_mesh_download_options(
+    options: &MeshDownloadOptions,
+    model_slug: &str,
+    label: &str,
+) -> anyhow::Result<()> {
+    if let Some(resolution) = &options.resolution {
+        anyhow::ensure!(
+            matches!(resolution.as_str(), "coarse" | "medium" | "fine"),
+            "{label} resolution for {model_slug} must be coarse, medium, or fine"
+        );
+    }
+    Ok(())
 }
 
 impl CatalogModelReference {
@@ -588,6 +716,69 @@ mod tests {
         let catalog = catalog(vec![model]);
 
         assert!(catalog.validate().is_err());
+    }
+
+    #[test]
+    fn accepts_valid_export_mesh_options() {
+        let mut model = model("model");
+        model.exports.preview_options.resolution = Some("FINE".to_owned());
+        model.exports.download_options.stl.resolution = Some("fine".to_owned());
+        model.exports.download_options.stl.stl_mode = Some("BINARY".to_owned());
+        model.exports.download_options.three_mf.resolution = Some("medium".to_owned());
+        let catalog = catalog(vec![model]);
+
+        catalog.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_stl_resolution() {
+        let mut model = model("model");
+        model.exports.download_options.stl.resolution = Some("FINE".to_owned());
+        let catalog = catalog(vec![model]);
+
+        assert!(catalog.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_three_mf_resolution() {
+        let mut model = model("model");
+        model.exports.download_options.three_mf.resolution = Some("FINE".to_owned());
+        let catalog = catalog(vec![model]);
+
+        assert!(catalog.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_stl_mode() {
+        let mut model = model("model");
+        model.exports.download_options.stl.stl_mode = Some("ASCII".to_owned());
+        let catalog = catalog(vec![model]);
+
+        assert!(catalog.validate().is_err());
+    }
+
+    #[test]
+    fn deserializes_legacy_download_options_json() {
+        let options: DownloadOptions =
+            serde_json::from_str(r#"{"stepVersionString":"AP242"}"#).unwrap();
+
+        assert_eq!(
+            options.effective_step().step_version_string,
+            DEFAULT_STEP_VERSION_STRING
+        );
+        assert_eq!(
+            options.effective_stl().resolution,
+            DEFAULT_GENERIC_MESH_RESOLUTION
+        );
+        assert_eq!(
+            options.effective_stl().stl_mode.as_deref(),
+            Some(DEFAULT_STL_MODE)
+        );
+        assert_eq!(
+            options.effective_three_mf().resolution,
+            DEFAULT_GENERIC_MESH_RESOLUTION
+        );
+        assert!(options.effective_three_mf().stl_mode.is_none());
     }
 
     #[test]
