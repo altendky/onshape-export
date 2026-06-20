@@ -22,7 +22,7 @@ jobs:
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
 
-      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4
         with:
           install: false
 
@@ -58,7 +58,7 @@ jobs:
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
 
-      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4
         with:
           install: false
 
@@ -97,7 +97,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4
         with:
           install: false
 
@@ -136,7 +136,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4
         with:
           install: false
 
@@ -179,7 +179,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4
         with:
           install: false
 
