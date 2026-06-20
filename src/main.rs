@@ -5654,6 +5654,21 @@ mod tests {
             download_options_hash(&first, catalog::DownloadFormat::Stl),
             download_options_hash(&second, catalog::DownloadFormat::Stl)
         );
+
+        second.exports.download_options.three_mf.resolution = catalog::MeshResolution::Fine;
+        second.exports.download_options.stl.stl_mode = catalog::StlMode::Text;
+        assert_ne!(
+            download_options_hash(&first, catalog::DownloadFormat::Stl),
+            download_options_hash(&second, catalog::DownloadFormat::Stl)
+        );
+        assert_eq!(
+            download_options_hash(&first, catalog::DownloadFormat::Step),
+            download_options_hash(&second, catalog::DownloadFormat::Step)
+        );
+        assert_eq!(
+            download_options_hash(&first, catalog::DownloadFormat::ThreeMf),
+            download_options_hash(&second, catalog::DownloadFormat::ThreeMf)
+        );
     }
 
     #[test]
