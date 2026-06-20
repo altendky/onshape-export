@@ -4904,7 +4904,7 @@ fn preview_options_hash(model: &catalog::Model) -> String {
     options_hash(
         "glb",
         PREVIEW_OPTIONS_VERSION,
-        &model.exports.preview_options.effective_glb(),
+        &model.exports.preview_options,
     )
 }
 
@@ -4913,17 +4913,17 @@ fn download_options_hash(model: &catalog::Model, format: catalog::DownloadFormat
         catalog::DownloadFormat::Step => options_hash(
             format.slug(),
             STEP_DOWNLOAD_OPTIONS_VERSION,
-            &model.exports.download_options.effective_step(),
+            &model.exports.download_options.step_version_string,
         ),
         catalog::DownloadFormat::Stl => options_hash(
             format.slug(),
             STL_DOWNLOAD_OPTIONS_VERSION,
-            &model.exports.download_options.effective_stl(),
+            &model.exports.download_options.stl,
         ),
         catalog::DownloadFormat::ThreeMf => options_hash(
             format.slug(),
             THREE_MF_DOWNLOAD_OPTIONS_VERSION,
-            &model.exports.download_options.effective_three_mf(),
+            &model.exports.download_options.three_mf,
         ),
     }
 }
@@ -5600,7 +5600,7 @@ mod tests {
         let first = test_model();
         let mut second = test_model();
         let first_source_hash = resolved_source_hash_for_test_model(&first);
-        second.exports.preview_options.resolution = Some("FINE".to_owned());
+        second.exports.preview_options.resolution = catalog::PreviewResolution::Fine;
         let second_source_hash = resolved_source_hash_for_test_model(&second);
 
         assert_eq!(
@@ -5613,18 +5613,9 @@ mod tests {
     fn option_hashes_include_catalog_export_options() {
         let first = test_model();
         let mut second = test_model();
-        second.exports.preview_options.resolution = Some("FINE".to_owned());
-
-        assert_eq!(preview_options_hash(&first), preview_options_hash(&second));
-
-        second.exports.preview_options.resolution = Some("MEDIUM".to_owned());
+        second.exports.preview_options.resolution = catalog::PreviewResolution::Medium;
         assert_ne!(preview_options_hash(&first), preview_options_hash(&second));
 
-        second.exports.download_options.step_version_string = Some("AP214".to_owned());
-        assert_ne!(
-            download_options_hash(&first, catalog::DownloadFormat::Step),
-            download_options_hash(&second, catalog::DownloadFormat::Step)
-        );
         assert_eq!(
             download_options_hash(&first, catalog::DownloadFormat::Stl),
             download_options_hash(&second, catalog::DownloadFormat::Stl)
@@ -5634,8 +5625,8 @@ mod tests {
             download_options_hash(&second, catalog::DownloadFormat::ThreeMf)
         );
 
-        second.exports.download_options.step_version_string = None;
-        second.exports.download_options.stl.resolution = Some("coarse".to_owned());
+        second.exports.preview_options.resolution = catalog::PreviewResolution::Fine;
+        second.exports.download_options.stl.resolution = catalog::MeshResolution::Coarse;
         assert_ne!(
             download_options_hash(&first, catalog::DownloadFormat::Stl),
             download_options_hash(&second, catalog::DownloadFormat::Stl)
@@ -5649,8 +5640,8 @@ mod tests {
             download_options_hash(&second, catalog::DownloadFormat::ThreeMf)
         );
 
-        second.exports.download_options.stl.resolution = None;
-        second.exports.download_options.three_mf.resolution = Some("coarse".to_owned());
+        second.exports.download_options.stl.resolution = catalog::MeshResolution::Fine;
+        second.exports.download_options.three_mf.resolution = catalog::MeshResolution::Coarse;
         assert_ne!(
             download_options_hash(&first, catalog::DownloadFormat::ThreeMf),
             download_options_hash(&second, catalog::DownloadFormat::ThreeMf)
@@ -5663,32 +5654,6 @@ mod tests {
             download_options_hash(&first, catalog::DownloadFormat::Stl),
             download_options_hash(&second, catalog::DownloadFormat::Stl)
         );
-    }
-
-    #[test]
-    fn option_hashes_canonicalize_effective_defaults() {
-        let implicit = test_model();
-        let mut explicit = test_model();
-        explicit.exports.preview_options.resolution = Some("FINE".to_owned());
-        explicit.exports.download_options.step_version_string = Some("AP242".to_owned());
-        explicit.exports.download_options.stl.resolution = Some("fine".to_owned());
-        explicit.exports.download_options.stl.stl_mode = Some("BINARY".to_owned());
-        explicit.exports.download_options.three_mf.resolution = Some("fine".to_owned());
-
-        assert_eq!(
-            preview_options_hash(&implicit),
-            preview_options_hash(&explicit)
-        );
-        for format in [
-            catalog::DownloadFormat::Step,
-            catalog::DownloadFormat::Stl,
-            catalog::DownloadFormat::ThreeMf,
-        ] {
-            assert_eq!(
-                download_options_hash(&implicit, format),
-                download_options_hash(&explicit, format)
-            );
-        }
     }
 
     #[test]
@@ -6866,8 +6831,19 @@ mod tests {
             exports: catalog::ExportConfig {
                 downloads: vec![catalog::DownloadFormat::Step],
                 preview: catalog::PreviewFormat::Glb,
-                preview_options: catalog::PreviewOptions::default(),
-                download_options: catalog::DownloadOptions::default(),
+                preview_options: catalog::PreviewOptions {
+                    resolution: catalog::PreviewResolution::Fine,
+                },
+                download_options: catalog::DownloadOptions {
+                    step_version_string: catalog::StepVersionString::Ap242,
+                    stl: catalog::StlDownloadOptions {
+                        resolution: catalog::MeshResolution::Fine,
+                        stl_mode: catalog::StlMode::Binary,
+                    },
+                    three_mf: catalog::ThreeMfDownloadOptions {
+                        resolution: catalog::MeshResolution::Fine,
+                    },
+                },
             },
             parameter_policy: catalog::ParameterPolicy {
                 source: catalog::ParameterSource::Onshape,

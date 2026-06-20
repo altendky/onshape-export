@@ -61,18 +61,18 @@ Because the browser viewer fetches preview assets directly from the Tigris publi
 
 Preview exports should use web-friendly settings, which may differ from final export settings.
 
-Preview defaults:
+Preview settings:
 
 - GLB format.
-- `FINE` GLB mesh resolution by default.
+- Catalog requires an explicit GLB mesh resolution such as `FINE`.
 - Stable orientation and scale.
 - Cache identity should keep the layers from [Forward-Looking Cache Model](cache-model.md) separate: preview quality, orientation, scale, and grouping affect `optionsHash`; exact request shape, explicit defaults, defaults-policy version, and request-builder version affect `requestHash`; local extraction, validation, packing, and tool versions affect `postprocessHash`; the published preview artifact set combines those identities into `artifactSetHash`.
 
-Final export defaults:
+Final export settings:
 
-- STEP: AP242 unless a model overrides it.
-- STL: catalog-defined generic translation resolution defaults to `fine`, and `stlMode` defaults to `BINARY`.
-- 3MF: catalog-defined generic translation resolution defaults to `fine`.
+- STEP: currently explicit `AP242`.
+- STL: catalog-defined generic translation resolution and `stlMode` are explicit.
+- 3MF: catalog-defined generic translation resolution is explicit.
 
 These quality settings are not public UI controls in the MVP. Public users choose parameters and a download format; catalog/admin configuration owns export quality.
 

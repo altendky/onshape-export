@@ -318,7 +318,7 @@ impl OnshapeClient {
             "advancedParams": {
                 "configuration": configuration.encoded_id,
             },
-            "stepVersionString": options.effective_step().step_version_string,
+            "stepVersionString": options.step_version_string.as_onshape_str(),
             "storeInDocument": false,
             "notifyUser": false,
             "triggerAutoDownload": false,
@@ -505,7 +505,7 @@ fn gltf_export_body(configuration: &str, options: &PreviewOptions) -> Value {
             "configuration": configuration,
         },
         "meshParams": {
-            "resolution": options.effective_glb().resolution,
+            "resolution": options.resolution.as_onshape_str(),
         },
         "grouping": true,
         "storeInDocument": false,
@@ -532,15 +532,20 @@ fn translation_export_body(
     match format {
         DownloadFormat::Step => {}
         DownloadFormat::Stl => {
-            let effective = options.effective_stl();
-            object.insert("resolution".to_owned(), Value::String(effective.resolution));
-            if let Some(stl_mode) = effective.stl_mode {
-                object.insert("stlMode".to_owned(), Value::String(stl_mode));
-            }
+            object.insert(
+                "resolution".to_owned(),
+                Value::String(options.stl.resolution.as_onshape_str().to_owned()),
+            );
+            object.insert(
+                "stlMode".to_owned(),
+                Value::String(options.stl.stl_mode.as_onshape_str().to_owned()),
+            );
         }
         DownloadFormat::ThreeMf => {
-            let effective = options.effective_three_mf();
-            object.insert("resolution".to_owned(), Value::String(effective.resolution));
+            object.insert(
+                "resolution".to_owned(),
+                Value::String(options.three_mf.resolution.as_onshape_str().to_owned()),
+            );
         }
     }
 
@@ -899,7 +904,7 @@ mod tests {
         let body = gltf_export_body(
             "width=10 mm",
             &PreviewOptions {
-                resolution: Some("FINE".to_owned()),
+                resolution: crate::catalog::PreviewResolution::Fine,
             },
         );
 
@@ -909,13 +914,6 @@ mod tests {
         assert_eq!(body["storeInDocument"], false);
         assert_eq!(body["notifyUser"], false);
         assert_eq!(body["triggerAutoDownload"], false);
-    }
-
-    #[test]
-    fn gltf_export_body_uses_fine_default_resolution() {
-        let body = gltf_export_body("width=10 mm", &PreviewOptions::default());
-
-        assert_eq!(body["meshParams"]["resolution"], "FINE");
     }
 
     #[test]
@@ -940,7 +938,7 @@ mod tests {
                 query_param: "configuration=enc-123".to_owned(),
             },
             &PreviewOptions {
-                resolution: Some("FINE".to_owned()),
+                resolution: crate::catalog::PreviewResolution::Fine,
             },
         );
 
@@ -970,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn step_export_request_uses_explicit_default_step_version() {
+    fn step_export_request_uses_catalog_step_version() {
         let client = OnshapeClient::new(OnshapeConfig {
             base_url: "https://cad.onshape.com".to_owned(),
             access_key: None,
@@ -991,7 +989,16 @@ mod tests {
                 query_param: "configuration=enc-123".to_owned(),
             },
             DownloadFormat::Step,
-            &DownloadOptions::default(),
+            &DownloadOptions {
+                step_version_string: crate::catalog::StepVersionString::Ap242,
+                stl: crate::catalog::StlDownloadOptions {
+                    resolution: crate::catalog::MeshResolution::Fine,
+                    stl_mode: crate::catalog::StlMode::Binary,
+                },
+                three_mf: crate::catalog::ThreeMfDownloadOptions {
+                    resolution: crate::catalog::MeshResolution::Fine,
+                },
+            },
         );
 
         assert_eq!(request.operation, "create-step-export");
@@ -1036,7 +1043,16 @@ mod tests {
                 query_param: "configuration=enc-123".to_owned(),
             },
             DownloadFormat::ThreeMf,
-            &DownloadOptions::default(),
+            &DownloadOptions {
+                step_version_string: crate::catalog::StepVersionString::Ap242,
+                stl: crate::catalog::StlDownloadOptions {
+                    resolution: crate::catalog::MeshResolution::Fine,
+                    stl_mode: crate::catalog::StlMode::Binary,
+                },
+                three_mf: crate::catalog::ThreeMfDownloadOptions {
+                    resolution: crate::catalog::MeshResolution::Fine,
+                },
+            },
         );
 
         assert_eq!(request.operation, "create-3mf-translation");
@@ -1058,7 +1074,7 @@ mod tests {
     }
 
     #[test]
-    fn stl_translation_export_request_uses_binary_default() {
+    fn stl_translation_export_request_uses_catalog_stl_settings() {
         let client = OnshapeClient::new(OnshapeConfig {
             base_url: "https://cad.onshape.com".to_owned(),
             access_key: None,
@@ -1079,7 +1095,16 @@ mod tests {
                 query_param: "configuration=enc-123".to_owned(),
             },
             DownloadFormat::Stl,
-            &DownloadOptions::default(),
+            &DownloadOptions {
+                step_version_string: crate::catalog::StepVersionString::Ap242,
+                stl: crate::catalog::StlDownloadOptions {
+                    resolution: crate::catalog::MeshResolution::Fine,
+                    stl_mode: crate::catalog::StlMode::Binary,
+                },
+                three_mf: crate::catalog::ThreeMfDownloadOptions {
+                    resolution: crate::catalog::MeshResolution::Fine,
+                },
+            },
         );
 
         assert_eq!(request.identity.body["formatName"], "STL");
@@ -1090,11 +1115,14 @@ mod tests {
     #[test]
     fn stl_translation_export_request_uses_catalog_overrides() {
         let options = DownloadOptions {
-            stl: crate::catalog::MeshDownloadOptions {
-                resolution: Some("coarse".to_owned()),
-                stl_mode: Some("TEXT".to_owned()),
+            step_version_string: crate::catalog::StepVersionString::Ap242,
+            stl: crate::catalog::StlDownloadOptions {
+                resolution: crate::catalog::MeshResolution::Coarse,
+                stl_mode: crate::catalog::StlMode::Text,
             },
-            ..Default::default()
+            three_mf: crate::catalog::ThreeMfDownloadOptions {
+                resolution: crate::catalog::MeshResolution::Fine,
+            },
         };
         let body = translation_export_body(DownloadFormat::Stl, "STL", "enc-123", &options);
 
@@ -1107,11 +1135,14 @@ mod tests {
     #[test]
     fn three_mf_translation_export_request_uses_catalog_resolution() {
         let options = DownloadOptions {
-            three_mf: crate::catalog::MeshDownloadOptions {
-                resolution: Some("medium".to_owned()),
-                stl_mode: None,
+            step_version_string: crate::catalog::StepVersionString::Ap242,
+            stl: crate::catalog::StlDownloadOptions {
+                resolution: crate::catalog::MeshResolution::Fine,
+                stl_mode: crate::catalog::StlMode::Binary,
             },
-            ..Default::default()
+            three_mf: crate::catalog::ThreeMfDownloadOptions {
+                resolution: crate::catalog::MeshResolution::Medium,
+            },
         };
         let body = translation_export_body(DownloadFormat::ThreeMf, "3MF", "enc-123", &options);
 

@@ -2477,7 +2477,8 @@ fn artifact_metric_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactMetric {
 mod tests {
     use super::*;
     use crate::catalog::{
-        DownloadFormat, DownloadOptions, ElementKind, MeshDownloadOptions, PreviewOptions,
+        DownloadFormat, DownloadOptions, ElementKind, MeshResolution, PreviewOptions,
+        PreviewResolution, StepVersionString, StlDownloadOptions, StlMode, ThreeMfDownloadOptions,
     };
     use std::time::Duration;
 
@@ -2488,15 +2489,14 @@ mod tests {
         model.published = false;
         model.tags = vec!["example".to_owned(), "fixture".to_owned()];
         model.thumbnail = Some("thumbs/demo.png".to_owned());
-        model.exports.preview_options.resolution = Some("FINE".to_owned());
-        model.exports.download_options.step_version_string = Some("AP242".to_owned());
-        model.exports.download_options.stl = MeshDownloadOptions {
-            resolution: Some("fine".to_owned()),
-            stl_mode: Some("BINARY".to_owned()),
+        model.exports.preview_options.resolution = PreviewResolution::Fine;
+        model.exports.download_options.step_version_string = StepVersionString::Ap242;
+        model.exports.download_options.stl = StlDownloadOptions {
+            resolution: MeshResolution::Fine,
+            stl_mode: StlMode::Binary,
         };
-        model.exports.download_options.three_mf = MeshDownloadOptions {
-            resolution: Some("medium".to_owned()),
-            stl_mode: None,
+        model.exports.download_options.three_mf = ThreeMfDownloadOptions {
+            resolution: MeshResolution::Medium,
         };
         model.parameter_policy.allow_unknown = true;
         model.parameter_policy.auto_refresh = false;
@@ -2525,43 +2525,24 @@ mod tests {
         assert_eq!(loaded_model.tags, ["example", "fixture"]);
         assert_eq!(loaded_model.thumbnail.as_deref(), Some("thumbs/demo.png"));
         assert_eq!(
-            loaded_model.exports.preview_options.resolution.as_deref(),
-            Some("FINE")
+            loaded_model.exports.preview_options.resolution,
+            PreviewResolution::Fine
         );
         assert_eq!(
-            loaded_model
-                .exports
-                .download_options
-                .step_version_string
-                .as_deref(),
-            Some("AP242")
+            loaded_model.exports.download_options.step_version_string,
+            StepVersionString::Ap242
         );
         assert_eq!(
-            loaded_model
-                .exports
-                .download_options
-                .stl
-                .resolution
-                .as_deref(),
-            Some("fine")
+            loaded_model.exports.download_options.stl.resolution,
+            MeshResolution::Fine
         );
         assert_eq!(
-            loaded_model
-                .exports
-                .download_options
-                .stl
-                .stl_mode
-                .as_deref(),
-            Some("BINARY")
+            loaded_model.exports.download_options.stl.stl_mode,
+            StlMode::Binary
         );
         assert_eq!(
-            loaded_model
-                .exports
-                .download_options
-                .three_mf
-                .resolution
-                .as_deref(),
-            Some("medium")
+            loaded_model.exports.download_options.three_mf.resolution,
+            MeshResolution::Medium
         );
         assert_eq!(loaded_model.parameter_presets[0].slug, "small");
         assert_eq!(loaded_model.parameter_presets[0].values["width"], "10");
@@ -2631,7 +2612,9 @@ mod tests {
             )
             VALUES (0, 1, 1, 'Bad/Slug', 'Name', 'Description', 1, '[]',
                     'did', 'vid', 'eid', 'part_studio', '["step"]', 'glb',
-                    '{}', '{}', 'onshape', 0, 1)
+                    '{"resolution":"FINE"}',
+                    '{"stepVersionString":"AP242","stl":{"resolution":"fine","stlMode":"BINARY"},"3mf":{"resolution":"fine"}}',
+                    'onshape', 0, 1)
             "#,
         )
         .execute(&db.pool)
@@ -3958,8 +3941,19 @@ mod tests {
                     DownloadFormat::ThreeMf,
                 ],
                 preview: PreviewFormat::Glb,
-                preview_options: PreviewOptions::default(),
-                download_options: DownloadOptions::default(),
+                preview_options: PreviewOptions {
+                    resolution: PreviewResolution::Fine,
+                },
+                download_options: DownloadOptions {
+                    step_version_string: StepVersionString::Ap242,
+                    stl: StlDownloadOptions {
+                        resolution: MeshResolution::Fine,
+                        stl_mode: StlMode::Binary,
+                    },
+                    three_mf: ThreeMfDownloadOptions {
+                        resolution: MeshResolution::Fine,
+                    },
+                },
             },
             parameter_policy: ParameterPolicy {
                 source: ParameterSource::Onshape,
