@@ -79,10 +79,17 @@ The JSON import fixture uses the same Rust model shape that is reconstructed fro
     "downloads": ["step", "stl", "3mf"],
     "preview": "glb",
     "previewOptions": {
-      "resolution": "MEDIUM"
+      "resolution": "FINE"
     },
     "downloadOptions": {
-      "stepVersionString": "AP242"
+      "stepVersionString": "AP242",
+      "stl": {
+        "resolution": "fine",
+        "stlMode": "BINARY"
+      },
+      "3mf": {
+        "resolution": "fine"
+      }
     }
   },
   "parameterPolicy": {
@@ -119,7 +126,7 @@ For assemblies, use:
 
 ## Validation
 
-Current validation covers schema version, entry version, non-empty fields, safe slugs/tags, duplicate slugs, duplicate Onshape source identities, duplicate download formats, preview resolution values, non-empty STEP version strings, preset slug rules, override precision limits, supported override widgets, and unknown override parameter IDs once normalized Onshape metadata is available.
+Current validation covers schema version, entry version, non-empty fields, safe slugs/tags, duplicate slugs, duplicate Onshape source identities, duplicate download formats, required explicit export option objects and enum values, preset slug rules, override precision limits, supported override widgets, and unknown override parameter IDs once normalized Onshape metadata is available.
 
 Slug rules:
 
@@ -136,9 +143,14 @@ Parameter metadata is fetched from Onshape and cached in Tigris. SQLite coordina
 
 Current behavior:
 
-- `previewOptions` and `downloadOptions` are optional.
-- The default preview resolution is `MEDIUM`.
-- The default STEP version string is `AP242`.
+- `previewOptions` and `downloadOptions` are required.
+- Preview quality and download quality are separate catalog settings.
+- Preview GLB `resolution` accepts `COARSE`, `MEDIUM`, or `FINE`.
+- STEP `downloadOptions.stepVersionString` is currently required and limited to `AP242`.
+- STL `downloadOptions.stl.resolution` accepts `coarse`, `medium`, or `fine`. Generic async STL resolution did not change tested outputs, so this records requested intent rather than proven tessellation behavior.
+- STL `downloadOptions.stl.stlMode` accepts `BINARY` or `TEXT`.
+- 3MF `downloadOptions.3mf.resolution` accepts `coarse`, `medium`, or `fine`.
+- Export quality controls are catalog/admin-only. Public users choose parameters and download format, not mesh quality.
 - Preview and download options participate in cache identity.
 - `parameterPresets` supports default, one preset, or all preset pre-generation.
 - Preset values are validated against normalized Onshape parameter metadata before previews or downloads are generated.

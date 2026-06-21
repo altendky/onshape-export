@@ -15,7 +15,20 @@
   },
   "exports": {
     "downloads": ["step", "stl", "3mf"],
-    "preview": "glb"
+    "preview": "glb",
+    "previewOptions": {
+      "resolution": "FINE"
+    },
+    "downloadOptions": {
+      "stepVersionString": "AP242",
+      "stl": {
+        "resolution": "fine",
+        "stlMode": "BINARY"
+      },
+      "3mf": {
+        "resolution": "fine"
+      }
+    }
   },
   "parameterPolicy": {
     "source": "onshape",

@@ -113,25 +113,109 @@ impl OnshapeSource {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExportConfig {
     pub downloads: Vec<DownloadFormat>,
     pub preview: PreviewFormat,
-    #[serde(default)]
     pub preview_options: PreviewOptions,
-    #[serde(default)]
     pub download_options: DownloadOptions,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PreviewOptions {
-    pub resolution: Option<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub enum PreviewResolution {
+    #[serde(rename = "COARSE")]
+    Coarse,
+    #[serde(rename = "MEDIUM")]
+    Medium,
+    #[serde(rename = "FINE")]
+    Fine,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
+impl PreviewResolution {
+    pub const fn as_onshape_str(self) -> &'static str {
+        match self {
+            Self::Coarse => "COARSE",
+            Self::Medium => "MEDIUM",
+            Self::Fine => "FINE",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MeshResolution {
+    Coarse,
+    Medium,
+    Fine,
+}
+
+impl MeshResolution {
+    pub const fn as_onshape_str(self) -> &'static str {
+        match self {
+            Self::Coarse => "coarse",
+            Self::Medium => "medium",
+            Self::Fine => "fine",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub enum StlMode {
+    #[serde(rename = "BINARY")]
+    Binary,
+    #[serde(rename = "TEXT")]
+    Text,
+}
+
+impl StlMode {
+    pub const fn as_onshape_str(self) -> &'static str {
+        match self {
+            Self::Binary => "BINARY",
+            Self::Text => "TEXT",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+pub enum StepVersionString {
+    #[serde(rename = "AP242")]
+    Ap242,
+}
+
+impl StepVersionString {
+    pub const fn as_onshape_str(self) -> &'static str {
+        match self {
+            Self::Ap242 => "AP242",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PreviewOptions {
+    pub resolution: PreviewResolution,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DownloadOptions {
-    pub step_version_string: Option<String>,
+    pub step_version_string: StepVersionString,
+    pub stl: StlDownloadOptions,
+    #[serde(rename = "3mf")]
+    pub three_mf: ThreeMfDownloadOptions,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StlDownloadOptions {
+    pub resolution: MeshResolution,
+    pub stl_mode: StlMode,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ThreeMfDownloadOptions {
+    pub resolution: MeshResolution,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -366,20 +450,6 @@ impl Catalog {
             ensure_unique(&model.exports.downloads, || {
                 format!("duplicate download format for {}", model.slug)
             })?;
-            if let Some(resolution) = &model.exports.preview_options.resolution {
-                anyhow::ensure!(
-                    matches!(resolution.as_str(), "COARSE" | "MEDIUM" | "FINE"),
-                    "preview resolution for {} must be COARSE, MEDIUM, or FINE",
-                    model.slug
-                );
-            }
-            if let Some(step_version_string) = &model.exports.download_options.step_version_string {
-                anyhow::ensure!(
-                    !step_version_string.is_empty(),
-                    "STEP version string cannot be empty for {}",
-                    model.slug
-                );
-            }
             let mut preset_slugs = HashSet::new();
             for preset in &model.parameter_presets {
                 anyhow::ensure!(
@@ -583,11 +653,158 @@ mod tests {
 
     #[test]
     fn rejects_invalid_preview_options() {
-        let mut model = model("model");
-        model.exports.preview_options.resolution = Some("ULTRA".to_owned());
+        let error =
+            serde_json::from_str::<PreviewOptions>(r#"{"resolution":"ULTRA"}"#).unwrap_err();
+
+        assert!(error.is_data());
+    }
+
+    #[test]
+    fn accepts_valid_export_mesh_options() {
+        let model = model("model");
         let catalog = catalog(vec![model]);
 
-        assert!(catalog.validate().is_err());
+        catalog.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_stl_resolution() {
+        let error = serde_json::from_str::<StlDownloadOptions>(
+            r#"{"resolution":"FINE","stlMode":"BINARY"}"#,
+        )
+        .unwrap_err();
+
+        assert!(error.is_data());
+    }
+
+    #[test]
+    fn rejects_invalid_three_mf_resolution() {
+        let error =
+            serde_json::from_str::<ThreeMfDownloadOptions>(r#"{"resolution":"FINE"}"#).unwrap_err();
+
+        assert!(error.is_data());
+    }
+
+    #[test]
+    fn rejects_invalid_stl_mode() {
+        let error = serde_json::from_str::<StlDownloadOptions>(
+            r#"{"resolution":"fine","stlMode":"ASCII"}"#,
+        )
+        .unwrap_err();
+
+        assert!(error.is_data());
+    }
+
+    #[test]
+    fn rejects_legacy_download_options_json() {
+        let error = serde_json::from_str::<DownloadOptions>(r#"{"stepVersionString":"AP242"}"#)
+            .unwrap_err();
+
+        assert!(error.is_data());
+    }
+
+    #[test]
+    fn rejects_three_mf_stl_mode() {
+        let error = serde_json::from_str::<ThreeMfDownloadOptions>(
+            r#"{"resolution":"fine","stlMode":"BINARY"}"#,
+        )
+        .unwrap_err();
+
+        assert!(error.is_data());
+    }
+
+    #[test]
+    fn rejects_missing_preview_options() {
+        let error = serde_json::from_str::<Model>(
+            r#"{
+              "catalogSchemaVersion": 1,
+              "entryVersion": 1,
+              "slug": "demo",
+              "name": "Demo",
+              "description": "Demo model",
+              "published": true,
+              "tags": [],
+              "thumbnail": null,
+              "onshape": {
+                "documentId": "did",
+                "versionId": "vid",
+                "elementId": "eid",
+                "elementKind": "part_studio"
+              },
+              "exports": {
+                "downloads": ["step"],
+                "preview": "glb",
+                "downloadOptions": {
+                  "stepVersionString": "AP242",
+                  "stl": {"resolution": "fine", "stlMode": "BINARY"},
+                  "3mf": {"resolution": "fine"}
+                }
+              },
+              "parameterPolicy": {
+                "source": "onshape",
+                "allowUnknown": false,
+                "autoRefresh": true
+              }
+            }"#,
+        )
+        .unwrap_err();
+
+        assert!(error.is_data());
+    }
+
+    #[test]
+    fn loads_v1_split_catalog_layout() {
+        let directory = tempfile::tempdir().unwrap();
+        let models_directory = directory.path().join("models");
+        fs::create_dir(&models_directory).unwrap();
+        fs::write(
+            directory.path().join("models.json"),
+            r#"{
+              "catalogSchemaVersion": 1,
+              "models": [
+                {"slug": "demo", "name": "Demo", "description": "Demo model"}
+              ]
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            models_directory.join("demo.json"),
+            r#"{
+              "catalogSchemaVersion": 1,
+              "entryVersion": 1,
+              "slug": "demo",
+              "name": "Demo",
+              "description": "Demo model",
+              "onshape": {
+                "documentId": "did",
+                "versionId": "vid",
+                "elementId": "eid",
+                "elementKind": "part_studio"
+              },
+              "exports": {
+                "downloads": ["step"],
+                "preview": "glb",
+                "previewOptions": {
+                  "resolution": "FINE"
+                },
+                "downloadOptions": {
+                  "stepVersionString": "AP242",
+                  "stl": {"resolution": "fine", "stlMode": "BINARY"},
+                  "3mf": {"resolution": "fine"}
+                }
+              },
+              "parameterPolicy": {
+                "source": "onshape",
+                "allowUnknown": false
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let catalog = Catalog::load(directory.path().join("models.json")).unwrap();
+
+        assert_eq!(catalog.models()[0].slug, "demo");
+        assert_eq!(catalog.models()[0].entry_version, 1);
     }
 
     #[test]
@@ -623,53 +840,6 @@ mod tests {
         let catalog = catalog(vec![first, second]);
 
         assert!(catalog.validate().is_err());
-    }
-
-    #[test]
-    fn loads_v1_split_catalog_layout() {
-        let directory = tempfile::tempdir().unwrap();
-        let models_directory = directory.path().join("models");
-        fs::create_dir(&models_directory).unwrap();
-        fs::write(
-            directory.path().join("models.json"),
-            r#"{
-              "catalogSchemaVersion": 1,
-              "models": [
-                {"slug": "demo", "name": "Demo", "description": "Demo model"}
-              ]
-            }"#,
-        )
-        .unwrap();
-        fs::write(
-            models_directory.join("demo.json"),
-            r#"{
-              "catalogSchemaVersion": 1,
-              "entryVersion": 1,
-              "slug": "demo",
-              "name": "Demo",
-              "description": "Demo model",
-              "onshape": {
-                "documentId": "did",
-                "versionId": "vid",
-                "elementId": "eid",
-                "elementKind": "part_studio"
-              },
-              "exports": {
-                "downloads": ["step"],
-                "preview": "glb"
-              },
-              "parameterPolicy": {
-                "source": "onshape",
-                "allowUnknown": false
-              }
-            }"#,
-        )
-        .unwrap();
-
-        let catalog = Catalog::load(directory.path().join("models.json")).unwrap();
-
-        assert_eq!(catalog.models()[0].slug, "demo");
-        assert_eq!(catalog.models()[0].entry_version, 1);
     }
 
     fn catalog(models: Vec<Model>) -> Catalog {
@@ -711,8 +881,19 @@ mod tests {
                     DownloadFormat::ThreeMf,
                 ],
                 preview: PreviewFormat::Glb,
-                preview_options: PreviewOptions::default(),
-                download_options: DownloadOptions::default(),
+                preview_options: PreviewOptions {
+                    resolution: PreviewResolution::Fine,
+                },
+                download_options: DownloadOptions {
+                    step_version_string: StepVersionString::Ap242,
+                    stl: StlDownloadOptions {
+                        resolution: MeshResolution::Fine,
+                        stl_mode: StlMode::Binary,
+                    },
+                    three_mf: ThreeMfDownloadOptions {
+                        resolution: MeshResolution::Fine,
+                    },
+                },
             },
             parameter_policy: ParameterPolicy {
                 source: ParameterSource::Onshape,

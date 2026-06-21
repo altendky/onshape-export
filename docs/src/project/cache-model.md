@@ -601,10 +601,10 @@ Run these against a real multi-part Part Studio and a real Assembly before locki
 3. Export glTF with omitted defaults and explicit defaults. Compare translation responses, external data headers, raw byte hashes, and derived artifacts.
 4. Repeat identical glTF requests several times. Compare `translationId`, `externalDataId`, raw headers, ZIP entry order, ZIP timestamps, raw byte hash, and processed artifact hash.
 5. Test Part Studio and Assembly glTF with `grouping=true` and `grouping=false`. Record direct GLB, direct glTF, ZIP with GLB, ZIP with one glTF, and ZIP with multiple glTF behavior.
-6. Test `resolution=MEDIUM` versus explicit mesh tolerances and unit.
-7. Test hidden parts, `partIds`, `partsExportFilter`, and assembly `occurrencesToExport`.
-8. Test STEP with omitted versus explicit `stepVersionString=AP242`.
-9. Test generic STL and 3MF translations with explicit resolution, tolerances, and unit.
+6. Compare GLB `meshParams.resolution=FINE` versus explicit mesh tolerances and unit.
+7. Verify hidden parts, `partIds`, `partsExportFilter`, and assembly `occurrencesToExport`.
+8. Confirm STEP with omitted versus explicit `stepVersionString=AP242`.
+9. Validate generic STL and 3MF translations with lowercase explicit resolution, tolerances, and unit.
 10. Capture external data response headers and retry with `If-None-Match` if an `ETag` is returned.
 11. Test `storeInDocument=true` and inspect `resultElementIds`, document element metadata, `foreignDataId`, and `microversionId`.
 12. List `/translations/d/{did}` after exports to see whether completed translations can support crash recovery.
