@@ -141,11 +141,14 @@ STEP body shape should include the configuration under `advancedParams.configura
     "configuration": "..."
   },
   "stepVersionString": "AP242",
+  "grouping": true,
   "storeInDocument": false,
   "notifyUser": false,
   "triggerAutoDownload": false
 }
 ```
+
+The app explicitly requests grouped output for STEP exports. Live testing on `onshape-model` showed that omitting `grouping` returned a ZIP with one STEP file per surface, while `grouping: true` returned a single STEP file for the same configuration. STEP post-processing still checks the actual bytes: direct STEP is published as `.step`, a ZIP containing exactly one STEP file is extracted, and a multi-file STEP ZIP is preserved as `.zip` with `application/zip` instead of being mislabeled as plain STEP.
 
 For STL and 3MF, use the generic translation endpoint unless format-specific async endpoints prove better:
 
@@ -163,6 +166,7 @@ Generic 3MF body shape:
   "notifyUser": false,
   "triggerAutoDownload": false,
   "configuration": "...",
+  "grouping": true,
   "resolution": "fine"
 }
 ```
@@ -176,16 +180,19 @@ Generic STL body shape:
   "notifyUser": false,
   "triggerAutoDownload": false,
   "configuration": "...",
+  "grouping": true,
   "stlMode": "BINARY",
   "resolution": "fine"
 }
 ```
 
 The generic async translation endpoint documents lowercase `resolution` values for STL and 3MF: `coarse`, `medium`, and `fine`. This differs from the async GLB `meshParams.resolution` enum, which accepts uppercase values such as `FINE`, and from synchronous STL endpoints, which use query names such as `angleTolerance`, `chordTolerance`, `maxFacetWidth`, `minFacetWidth`, `units`, and `mode`.
+The app also sends `grouping: true` for generic STL and 3MF translations because the product currently presents one grouped download artifact per requested format. Separate-per-part packages are deferred until there is a deliberate catalog option.
 
 Current live-test evidence:
 
 - STEP remains explicitly requested as `AP242` because omitting the value produced different bytes than an explicit AP242 request.
+- STEP, STL, and 3MF exports request `grouping: true` explicitly. For STEP, omitting `grouping` produced a ZIP package for the tested multi-surface model; explicit `grouping: true` produced a plain STEP file.
 - GLB preview accepts uppercase `FINE`; lowercase `fine` failed.
 - 3MF generic translation accepts lowercase `fine`; uppercase `FINE` failed after the translation started.
 - STL generic translation accepts `resolution: "fine"` and `stlMode: "BINARY"`; `stlMode` changed the output encoding and size, but generic async STL `resolution` did not affect tested outputs. The app still sends lowercase `fine` as catalog-requested high-quality intent.

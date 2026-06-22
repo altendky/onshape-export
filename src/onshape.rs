@@ -21,10 +21,10 @@ static NONCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 const API_SPEC_VERSION: Option<&str> = None;
 const PREVIEW_GLTF_DEFAULTS_POLICY_VERSION: &str = "preview-gltf-defaults-v2";
 const PREVIEW_GLTF_REQUEST_BUILDER_VERSION: &str = "preview-gltf-request-v1";
-const STEP_EXPORT_DEFAULTS_POLICY_VERSION: &str = "step-export-defaults-v1";
-const STEP_EXPORT_REQUEST_BUILDER_VERSION: &str = "step-export-request-v1";
-const TRANSLATION_EXPORT_DEFAULTS_POLICY_VERSION: &str = "translation-export-defaults-v2";
-const TRANSLATION_EXPORT_REQUEST_BUILDER_VERSION: &str = "translation-export-request-v2";
+const STEP_EXPORT_DEFAULTS_POLICY_VERSION: &str = "step-export-defaults-v2";
+const STEP_EXPORT_REQUEST_BUILDER_VERSION: &str = "step-export-request-v2";
+const TRANSLATION_EXPORT_DEFAULTS_POLICY_VERSION: &str = "translation-export-defaults-v3";
+const TRANSLATION_EXPORT_REQUEST_BUILDER_VERSION: &str = "translation-export-request-v3";
 
 #[derive(Debug, Clone)]
 pub struct OnshapeClient {
@@ -319,6 +319,7 @@ impl OnshapeClient {
                 "configuration": configuration.encoded_id,
             },
             "stepVersionString": options.step_version_string.as_onshape_str(),
+            "grouping": true,
             "storeInDocument": false,
             "notifyUser": false,
             "triggerAutoDownload": false,
@@ -526,6 +527,7 @@ fn translation_export_body(
         "notifyUser": false,
         "triggerAutoDownload": false,
         "configuration": configuration,
+        "grouping": true,
     });
     let object = body.as_object_mut().expect("translation body is an object");
 
@@ -1011,6 +1013,7 @@ mod tests {
             "enc-123"
         );
         assert_eq!(request.identity.body["stepVersionString"], "AP242");
+        assert_eq!(request.identity.body["grouping"], true);
         assert_eq!(
             request.identity.defaults_policy_version,
             STEP_EXPORT_DEFAULTS_POLICY_VERSION
@@ -1062,6 +1065,7 @@ mod tests {
         );
         assert_eq!(request.identity.body["formatName"], "3MF");
         assert_eq!(request.identity.body["configuration"], "enc-123");
+        assert_eq!(request.identity.body["grouping"], true);
         assert_eq!(request.identity.body["resolution"], "fine");
         assert_eq!(
             request.identity.defaults_policy_version,
@@ -1108,6 +1112,7 @@ mod tests {
         );
 
         assert_eq!(request.identity.body["formatName"], "STL");
+        assert_eq!(request.identity.body["grouping"], true);
         assert_eq!(request.identity.body["resolution"], "fine");
         assert_eq!(request.identity.body["stlMode"], "BINARY");
     }
@@ -1128,6 +1133,7 @@ mod tests {
 
         assert_eq!(body["formatName"], "STL");
         assert_eq!(body["configuration"], "enc-123");
+        assert_eq!(body["grouping"], true);
         assert_eq!(body["resolution"], "coarse");
         assert_eq!(body["stlMode"], "TEXT");
     }
@@ -1147,6 +1153,7 @@ mod tests {
         let body = translation_export_body(DownloadFormat::ThreeMf, "3MF", "enc-123", &options);
 
         assert_eq!(body["formatName"], "3MF");
+        assert_eq!(body["grouping"], true);
         assert_eq!(body["resolution"], "medium");
         assert!(body.get("stlMode").is_none());
     }

@@ -47,9 +47,9 @@ use crate::{
 };
 
 const PREVIEW_OPTIONS_VERSION: &str = "mesh-grouped-v3";
-const STEP_DOWNLOAD_OPTIONS_VERSION: &str = "step-default-v1";
-const STL_DOWNLOAD_OPTIONS_VERSION: &str = "stl-mesh-v1";
-const THREE_MF_DOWNLOAD_OPTIONS_VERSION: &str = "3mf-mesh-v1";
+const STEP_DOWNLOAD_OPTIONS_VERSION: &str = "step-grouped-v2";
+const STL_DOWNLOAD_OPTIONS_VERSION: &str = "stl-mesh-grouped-v2";
+const THREE_MF_DOWNLOAD_OPTIONS_VERSION: &str = "3mf-mesh-grouped-v2";
 const CONFIG_HASH_JOB_VERSION: u32 = 2;
 const RETRY_BACKOFF_BASE_SECONDS: i64 = 30;
 const RETRY_BACKOFF_CAP_SECONDS: i64 = 5 * 60;
@@ -60,8 +60,8 @@ const POSTPROCESS_STATUS_READY: &str = "ready";
 const POSTPROCESS_STATUS_FAILED: &str = "failed";
 const PREVIEW_POSTPROCESSOR_NAME: &str = "preview_extract";
 const PREVIEW_POSTPROCESSOR_VERSION: &str = "2";
-const DOWNLOAD_POSTPROCESSOR_NAME: &str = "download_identity";
-const DOWNLOAD_POSTPROCESSOR_VERSION: &str = "1";
+const DOWNLOAD_POSTPROCESSOR_NAME: &str = "download_realize";
+const DOWNLOAD_POSTPROCESSOR_VERSION: &str = "2";
 const STRICT_UPLOAD_VERIFICATION: bool = false;
 const V2_EXPORT_WORK_KEY_PREFIX: &str = "work-v2:export:";
 const DEFAULT_CATALOG_SEED_PATH: &str = "catalog/v1/models.json";
@@ -404,6 +404,7 @@ struct DownloadPostprocessPolicy<'a> {
     strategy: &'static str,
     format: &'a str,
     content_type: &'a str,
+    accepted_input_shapes: Vec<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -4014,6 +4015,29 @@ fn zip_entry_indices_with_extension(
     Ok(indices)
 }
 
+fn zip_file_entry_indices(
+    archive: &mut zip::ZipArchive<Cursor<Vec<u8>>>,
+) -> anyhow::Result<Vec<usize>> {
+    let mut indices = Vec::new();
+    for index in 0..archive.len() {
+        let file = archive.by_index(index)?;
+        if file.is_dir() {
+            continue;
+        }
+        safe_zip_asset_name(file.name())?;
+        indices.push(index);
+    }
+    Ok(indices)
+}
+
+fn zip_entry_safe_name(
+    archive: &mut zip::ZipArchive<Cursor<Vec<u8>>>,
+    index: usize,
+) -> anyhow::Result<String> {
+    let file = archive.by_index(index)?;
+    safe_zip_asset_name(file.name())
+}
+
 fn read_zip_entry(
     archive: &mut zip::ZipArchive<Cursor<Vec<u8>>>,
     index: usize,
@@ -4086,9 +4110,9 @@ async fn refresh_download(
         artifact_set_hash: &artifact_key,
         role: "download",
         logical_path: &download_artifact.logical_path,
-        original_path: Some(&download_artifact.logical_path),
+        original_path: download_artifact.original_path.as_deref(),
         object_key: &object_key,
-        content_type: format.content_type(),
+        content_type: download_artifact.content_type,
         byte_len: download_artifact.bytes.len() as i64,
         sha256: &download_sha256,
         metadata_json: "{}",
@@ -4103,7 +4127,7 @@ async fn refresh_download(
                 output_kind: format.slug(),
                 format: format.slug(),
                 object_key: &object_key,
-                content_type: format.content_type(),
+                content_type: download_artifact.content_type,
                 byte_len: download_artifact.bytes.len() as i64,
                 sha256: &download_sha256,
                 producing_job_key,
@@ -4124,7 +4148,7 @@ async fn refresh_download(
             .put_bytes_with_headers(
                 &object_key,
                 download_artifact.bytes.clone(),
-                format.content_type(),
+                download_artifact.content_type,
                 Some(&content_disposition),
                 Some("public, max-age=31536000, immutable"),
             )
@@ -4132,7 +4156,7 @@ async fn refresh_download(
         verify_uploaded_artifact(
             state,
             &object_key,
-            format.content_type(),
+            download_artifact.content_type,
             download_artifact.bytes.len() as i64,
             &download_sha256,
         )
@@ -4176,6 +4200,8 @@ struct PostprocessedPreviewArtifact {
 struct PostprocessedDownloadArtifact {
     postprocess_hash: String,
     logical_path: String,
+    original_path: Option<String>,
+    content_type: &'static str,
     bytes: Vec<u8>,
 }
 
@@ -4266,9 +4292,21 @@ async fn postprocess_download_artifact(
     raw_payload_hash: &str,
 ) -> anyhow::Result<PostprocessedDownloadArtifact> {
     let policy = DownloadPostprocessPolicy {
-        strategy: "identity",
+        strategy: if format == catalog::DownloadFormat::Step {
+            "step_zip_detection"
+        } else {
+            "identity"
+        },
         format: format.slug(),
         content_type: format.content_type(),
+        accepted_input_shapes: match format {
+            catalog::DownloadFormat::Step => {
+                vec!["direct_step", "zip_single_step", "zip_step_package"]
+            }
+            catalog::DownloadFormat::Stl | catalog::DownloadFormat::ThreeMf => {
+                vec!["requested_format_bytes"]
+            }
+        },
     };
     let postprocess_hash = cache_model::postprocess_hash(&cache_model::PostprocessIdentity {
         raw_payload_hash: raw_payload_hash.to_owned(),
@@ -4292,33 +4330,118 @@ async fn postprocess_download_artifact(
         .await?;
 
     let (_, bytes) = load_persisted_raw_payload(state, raw_payload_hash).await?;
-    let logical_path = download_filename(model, format);
-    let derived_files_json = serde_json::to_string(&vec![DerivedArtifactFile {
-        role: "download",
-        logical_path: &logical_path,
-        original_path: Some(&logical_path),
-        object_key: None,
-        content_type: format.content_type(),
-        byte_len: bytes.len(),
-        sha256: cache_key::hex_sha256(&bytes),
-    }])?;
-    let log_json = serde_json::to_string(&vec![PostprocessLogEntry {
-        level: "info",
-        message: "download identity post-processing completed".to_owned(),
-    }])?;
-    state
-        .db
-        .transition_postprocess_run_status(
-            &postprocess_hash,
-            POSTPROCESS_STATUS_READY,
-            &log_json,
-            &derived_files_json,
-        )
-        .await?;
+    match download_artifact_from_onshape_bytes(model, format, bytes) {
+        Ok(artifact) => {
+            let derived_files_json = serde_json::to_string(&vec![DerivedArtifactFile {
+                role: "download",
+                logical_path: &artifact.logical_path,
+                original_path: artifact.original_path.as_deref(),
+                object_key: None,
+                content_type: artifact.content_type,
+                byte_len: artifact.bytes.len(),
+                sha256: cache_key::hex_sha256(&artifact.bytes),
+            }])?;
+            let log_json = serde_json::to_string(&vec![PostprocessLogEntry {
+                level: "info",
+                message: "download post-processing completed".to_owned(),
+            }])?;
+            state
+                .db
+                .transition_postprocess_run_status(
+                    &postprocess_hash,
+                    POSTPROCESS_STATUS_READY,
+                    &log_json,
+                    &derived_files_json,
+                )
+                .await?;
 
-    Ok(PostprocessedDownloadArtifact {
-        postprocess_hash,
-        logical_path,
+            Ok(PostprocessedDownloadArtifact {
+                postprocess_hash,
+                logical_path: artifact.logical_path,
+                original_path: artifact.original_path,
+                content_type: artifact.content_type,
+                bytes: artifact.bytes,
+            })
+        }
+        Err(error) => {
+            let log_json = serde_json::to_string(&vec![PostprocessLogEntry {
+                level: "error",
+                message: error.to_string(),
+            }])?;
+            state
+                .db
+                .transition_postprocess_run_status(
+                    &postprocess_hash,
+                    POSTPROCESS_STATUS_FAILED,
+                    &log_json,
+                    "[]",
+                )
+                .await?;
+            Err(error)
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DownloadArtifact {
+    logical_path: String,
+    original_path: Option<String>,
+    content_type: &'static str,
+    bytes: Vec<u8>,
+}
+
+fn download_artifact_from_onshape_bytes(
+    model: &catalog::Model,
+    format: catalog::DownloadFormat,
+    bytes: Vec<u8>,
+) -> anyhow::Result<DownloadArtifact> {
+    if format == catalog::DownloadFormat::Step {
+        return step_artifact_from_onshape_bytes(model, bytes);
+    }
+
+    let logical_path = download_filename(model, format);
+    Ok(DownloadArtifact {
+        logical_path: logical_path.clone(),
+        original_path: Some(logical_path),
+        content_type: format.content_type(),
+        bytes,
+    })
+}
+
+fn step_artifact_from_onshape_bytes(
+    model: &catalog::Model,
+    bytes: Vec<u8>,
+) -> anyhow::Result<DownloadArtifact> {
+    if !bytes.starts_with(b"PK\x03\x04") {
+        let logical_path = download_filename(model, catalog::DownloadFormat::Step);
+        return Ok(DownloadArtifact {
+            logical_path: logical_path.clone(),
+            original_path: Some(logical_path),
+            content_type: catalog::DownloadFormat::Step.content_type(),
+            bytes,
+        });
+    }
+
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes.clone()))
+        .context("reading zipped STEP download payload")?;
+    let file_entries = zip_file_entry_indices(&mut archive)?;
+    let step_entries = zip_entry_indices_with_extension(&mut archive, "step")?;
+    if file_entries.len() == 1 && step_entries.len() == 1 {
+        let original_path = zip_entry_safe_name(&mut archive, step_entries[0])?;
+        let bytes = read_zip_entry(&mut archive, step_entries[0])?;
+        return Ok(DownloadArtifact {
+            logical_path: download_filename(model, catalog::DownloadFormat::Step),
+            original_path: Some(original_path),
+            content_type: catalog::DownloadFormat::Step.content_type(),
+            bytes,
+        });
+    }
+
+    let logical_path = download_package_filename(model, catalog::DownloadFormat::Step);
+    Ok(DownloadArtifact {
+        logical_path: logical_path.clone(),
+        original_path: Some(logical_path),
+        content_type: "application/zip",
         bytes,
     })
 }
@@ -4733,6 +4856,10 @@ fn download_filename(model: &catalog::Model, format: catalog::DownloadFormat) ->
     )
 }
 
+fn download_package_filename(model: &catalog::Model, format: catalog::DownloadFormat) -> String {
+    format!("{}-{}.zip", safe_filename_stem(&model.slug), format.slug())
+}
+
 fn preview_status_path(model: &catalog::Model, config_hash: &str) -> String {
     format!("/models/{}/preview/{config_hash}/status", model.slug)
 }
@@ -4913,17 +5040,27 @@ fn download_options_hash(model: &catalog::Model, format: catalog::DownloadFormat
         catalog::DownloadFormat::Step => options_hash(
             format.slug(),
             STEP_DOWNLOAD_OPTIONS_VERSION,
-            &model.exports.download_options.step_version_string,
+            &serde_json::json!({
+                "stepVersionString": model.exports.download_options.step_version_string.as_onshape_str(),
+                "grouping": true,
+            }),
         ),
         catalog::DownloadFormat::Stl => options_hash(
             format.slug(),
             STL_DOWNLOAD_OPTIONS_VERSION,
-            &model.exports.download_options.stl,
+            &serde_json::json!({
+                "resolution": model.exports.download_options.stl.resolution.as_onshape_str(),
+                "stlMode": model.exports.download_options.stl.stl_mode.as_onshape_str(),
+                "grouping": true,
+            }),
         ),
         catalog::DownloadFormat::ThreeMf => options_hash(
             format.slug(),
             THREE_MF_DOWNLOAD_OPTIONS_VERSION,
-            &model.exports.download_options.three_mf,
+            &serde_json::json!({
+                "resolution": model.exports.download_options.three_mf.resolution.as_onshape_str(),
+                "grouping": true,
+            }),
         ),
     }
 }
@@ -6486,6 +6623,58 @@ mod tests {
         let error = preview_artifact_from_onshape_bytes(bytes).unwrap_err();
 
         assert!(error.to_string().contains("validating zipped GLB"));
+    }
+
+    #[test]
+    fn preserves_plain_step_download_exports() {
+        let bytes = b"ISO-10303-21;\nEND-ISO-10303-21;".to_vec();
+        let artifact = download_artifact_from_onshape_bytes(
+            &test_model(),
+            catalog::DownloadFormat::Step,
+            bytes.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(artifact.logical_path, "demo-step.step");
+        assert_eq!(artifact.original_path.as_deref(), Some("demo-step.step"));
+        assert_eq!(artifact.content_type, "model/step");
+        assert_eq!(artifact.bytes, bytes);
+    }
+
+    #[test]
+    fn extracts_single_step_from_zipped_step_download_exports() {
+        let step = b"ISO-10303-21;\nEND-ISO-10303-21;";
+        let bytes = test_zip(&[("new-bin.step", step.as_slice())]);
+        let artifact = download_artifact_from_onshape_bytes(
+            &test_model(),
+            catalog::DownloadFormat::Step,
+            bytes,
+        )
+        .unwrap();
+
+        assert_eq!(artifact.logical_path, "demo-step.step");
+        assert_eq!(artifact.original_path.as_deref(), Some("new-bin.step"));
+        assert_eq!(artifact.content_type, "model/step");
+        assert_eq!(artifact.bytes, step);
+    }
+
+    #[test]
+    fn preserves_multi_step_zip_download_exports_as_package() {
+        let bytes = test_zip(&[
+            ("new-bin - Surface 0.step", b"ISO-10303-21; surface 0"),
+            ("new-bin - Surface 1.step", b"ISO-10303-21; surface 1"),
+        ]);
+        let artifact = download_artifact_from_onshape_bytes(
+            &test_model(),
+            catalog::DownloadFormat::Step,
+            bytes.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(artifact.logical_path, "demo-step.zip");
+        assert_eq!(artifact.original_path.as_deref(), Some("demo-step.zip"));
+        assert_eq!(artifact.content_type, "application/zip");
+        assert_eq!(artifact.bytes, bytes);
     }
 
     #[test]

@@ -150,6 +150,7 @@ Current behavior:
 - STL `downloadOptions.stl.resolution` accepts `coarse`, `medium`, or `fine`. Generic async STL resolution did not change tested outputs, so this records requested intent rather than proven tessellation behavior.
 - STL `downloadOptions.stl.stlMode` accepts `BINARY` or `TEXT`.
 - 3MF `downloadOptions.3mf.resolution` accepts `coarse`, `medium`, or `fine`.
+- Export requests always send grouped output (`grouping: true`) for currently supported formats; individual per-part packages are deferred until a catalog option is explicitly needed.
 - Export quality controls are catalog/admin-only. Public users choose parameters and download format, not mesh quality.
 - Preview and download options participate in cache identity.
 - `parameterPresets` supports default, one preset, or all preset pre-generation.
