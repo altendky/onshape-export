@@ -112,46 +112,53 @@ version = "0.5.3"
 backend = "cargo:mdbook"
 
 [[tools."github:nextest-rs/nextest"]]
-version = "0.9.137"
+version = "0.9.138"
 backend = "github:nextest-rs/nextest"
 
 [tools."github:nextest-rs/nextest".options]
 version_prefix = "cargo-nextest-"
 
 [tools."github:nextest-rs/nextest"."platforms.linux-arm64"]
-checksum = "sha256:8f878903d63a69dd0a8fba65d0dc871043423bd0591076f688023b862d58d1a6"
-url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.137/cargo-nextest-0.9.137-aarch64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/430503184"
+checksum = "sha256:e1c85dbe02dcf5b963803b3f96f4f561757f5c37cab68c932411dea20d57284e"
+url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.138/cargo-nextest-0.9.138-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/453982267"
+provenance = "github-attestations"
 
 [tools."github:nextest-rs/nextest"."platforms.linux-arm64-musl"]
-checksum = "sha256:cc8a61beed918e1e76f047243f8bb9fc90bad0e6b74b91b2f58b7397f912495a"
-url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.137/cargo-nextest-0.9.137-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/430502502"
+checksum = "sha256:3eff5e9d9e8a4560c46db64608b0ffff88372199db82aa87ff202e767713c807"
+url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.138/cargo-nextest-0.9.138-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/453982574"
+provenance = "github-attestations"
 
 [tools."github:nextest-rs/nextest"."platforms.linux-x64"]
-checksum = "sha256:38fd6275e111b200bbbed1bd2ae91cbb0d7edd28504879875cff2b3d96f3f311"
-url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.137/cargo-nextest-0.9.137-x86_64-unknown-linux-gnu.tar.gz"
-url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/430502414"
+checksum = "sha256:3793bf0c27607b196f502c39b2108f571de89fcda7586ae6beefa11ee177b216"
+url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.138/cargo-nextest-0.9.138-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/453979253"
+provenance = "github-attestations"
 
 [tools."github:nextest-rs/nextest"."platforms.linux-x64-musl"]
-checksum = "sha256:d5a7d2e76a19b65006939e296eb19d776f820cfaa19514c01cf70a5185a885b8"
-url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.137/cargo-nextest-0.9.137-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/430504017"
+checksum = "sha256:8e4183e39b857350b928e053b40ffc7180c01e7cbf4d13146e5d8a12ec210f4f"
+url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.138/cargo-nextest-0.9.138-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/453982806"
+provenance = "github-attestations"
 
 [tools."github:nextest-rs/nextest"."platforms.macos-arm64"]
-checksum = "sha256:94e89c20b233c29c042683e885131d76abf95e795c355a4fe7d64d4b128b90be"
-url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.137/cargo-nextest-0.9.137-universal-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/430505110"
+checksum = "sha256:124baa34d160355fa8a8bed053856270cfcf132659e76a0bc8bbcdfc093266b7"
+url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.138/cargo-nextest-0.9.138-universal-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/453980253"
+provenance = "github-attestations"
 
 [tools."github:nextest-rs/nextest"."platforms.macos-x64"]
-checksum = "sha256:94e89c20b233c29c042683e885131d76abf95e795c355a4fe7d64d4b128b90be"
-url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.137/cargo-nextest-0.9.137-universal-apple-darwin.tar.gz"
-url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/430505110"
+checksum = "sha256:124baa34d160355fa8a8bed053856270cfcf132659e76a0bc8bbcdfc093266b7"
+url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.138/cargo-nextest-0.9.138-universal-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/453980253"
+provenance = "github-attestations"
 
 [tools."github:nextest-rs/nextest"."platforms.windows-x64"]
-checksum = "sha256:88c746b41b1e96165028ef90b9dac5d37eb923e4e00aee6b9080a038f1ac2705"
-url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.137/cargo-nextest-0.9.137-x86_64-pc-windows-msvc.zip"
-url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/430505809"
+checksum = "sha256:6597c6ddbd4157df9a8363c55817dd98ed4905a505225aefa726bc55bf984be7"
+url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.138/cargo-nextest-0.9.138-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/453988755"
+provenance = "github-attestations"
 
 [[tools.node]]
 version = "24.16.0"
