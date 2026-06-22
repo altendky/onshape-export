@@ -44,7 +44,7 @@ GLB is a preview format for the MVP and is not a supported user-download format;
 
 Public users choose model parameters and download format only. Catalog entries define preview and download export settings explicitly so cache identity stays curated and predictable, and so users cannot accidentally request unexpectedly large or slow mesh translations.
 
-Current catalog values are typically GLB preview `FINE`, STEP `AP242`, STL `stlMode: BINARY` with lowercase generic translation `resolution: fine`, and 3MF lowercase generic translation `resolution: fine`. Numeric mesh tolerances are deferred until live testing establishes safe model-scale-aware settings. Generic async STL resolution did not affect tested outputs, but the catalog still records and sends lowercase `fine` as requested export intent.
+Current catalog values are typically GLB preview `FINE`, STEP `AP242`, STL `stlMode: BINARY` with lowercase generic translation `resolution: fine`, and 3MF lowercase generic translation `resolution: fine`. All current export requests explicitly use grouped output (`grouping: true`); separate-per-part packages are deferred until there is an intentional catalog/admin option. Numeric mesh tolerances are deferred until live testing establishes safe model-scale-aware settings. Generic async STL resolution did not affect tested outputs, but the catalog still records and sends lowercase `fine` as requested export intent.
 
 ## Preview Format
 
