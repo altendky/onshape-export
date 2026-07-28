@@ -25,6 +25,8 @@ The main design goal is to keep every cache boundary explicit: selected source, 
 - Artifact sets must model primary files plus sidecars as one unit.
 - Preserve Onshape-provided filenames and ZIP entry names whenever available. Store roles in metadata instead of renaming raw files to fixed names like `source.zip`.
 - Public artifact objects are immutable in normal operation. Supersession updates indexes and manifests rather than overwriting existing public files. Repair may restore intended bytes to an existing artifact-set object key when verification finds a missing, corrupt, or wrong object.
+- A future slicer project 3MF is a local derived artifact, distinct from an
+  Onshape geometry 3MF raw payload and from every other slicer dialect.
 
 ## Initial v2 Slice
 
@@ -134,6 +136,8 @@ Include:
 - hidden-entity policy
 - selected part IDs or assembly occurrences when supported
 - option schema version
+- for proposed slicer project 3MF, requested slicer dialect, capability
+  revisions, and canonical project settings
 
 Do not include:
 
@@ -191,6 +195,21 @@ Include:
 - compression policy
 - image/buffer transformation policy
 - safe-path policy for extracted entries
+
+For proposed slicer project 3MF generation, also include the immutable adapter
+build or package identity, CLI protocol version, slicer dialect and dialect
+revision, provenance-set version, exercised capability revisions,
+declared and detected geometry-input media type/kind, neutral-IR or input-schema
+version, relevant parser implementation/build/version, parser-normalization
+policy and implementation version, and validation policy/tool versions.
+Requested dialect, capabilities, and canonical project settings belong in
+`optionsHash`; `postprocessHash` records the exercised capabilities. The current
+single retained input remains bound through the existing `rawPayloadHash` field
+of post-processing identity and must not be duplicated inside processing policy.
+If a future invocation accepts multiple input blobs, define a separate explicit
+input-set or invocation identity rather than adding their content hashes to
+processing policy. These are proposed design requirements for future identity,
+not implemented schema fields.
 
 When this hash changes, derived viewer artifacts should be regenerated from retained raw payloads. Onshape should not be called unless the raw payload is missing.
 
@@ -433,6 +452,8 @@ Supersede a ready artifact set when:
 - validation policy changes
 - a primary or required sidecar object is missing or corrupt
 - an operator invalidates or prunes the output
+- a slicer adapter build, protocol, dialect revision, provenance set,
+  capability revision, normalization policy, or validation policy changes
 
 Record:
 

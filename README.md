@@ -140,6 +140,8 @@ Project documentation is under `docs/src/project/`.
 - [Runtime Options](docs/src/project/runtime.md)
 - [Caching](docs/src/project/caching.md)
 - [Onshape API Flow](docs/src/project/onshape-api.md)
+- [Slicer Project 3MF Adapters](docs/src/project/slicer-3mf-adapters.md)
+- [Slicer Adapter Provenance Policy](docs/src/project/slicer-adapter-provenance.md)
 - [Frontend and Preview](docs/src/project/frontend-preview.md)
 - [Catalog](docs/src/project/catalog.md)
 - [Admin Operations](docs/src/project/admin.md)

@@ -31,6 +31,11 @@ From `onshape3mf`:
 - Python implementation code from `onshape3mf`.
 - Cloudflare OAuth relay routes and Worker-specific deployment patterns.
 
+For slicer adapters, reuse decisions are governed by the normative
+[Slicer Adapter Provenance And Licensing Policy](slicer-adapter-provenance.md).
+The external adapter architecture does not itself establish license
+compatibility; do not duplicate or weaken that policy here.
+
 ## Extraction Strategy
 
 Do not force shared libraries before the first vertical slice.

@@ -31,6 +31,14 @@ Onshape API
 
 The public site should be able to serve cached content even when no export job is running. The Rust service owns catalog validation, queue submission, status routes, Onshape calls, translation polling, and Tigris uploads. SQLite owns live catalog data and transactional coordination so duplicate Onshape work is not started for the same deterministic key.
 
+Future slicer project 3MF generation is proposed as a sandboxed external-process
+step after raw geometry retention. Separately versioned Bambu, Orca, and Prusa
+CLI adapters would accept source-neutral geometry and return untrusted candidate
+artifacts. The service would retain ownership of orchestration, validation,
+cache identity, and publication; adapters would receive no service credentials
+or direct publication access. See [Slicer Project 3MF Adapters](slicer-3mf-adapters.md)
+for the proposed boundary and unresolved details.
+
 ## Components
 
 | Component | Responsibility |
