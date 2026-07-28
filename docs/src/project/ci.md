@@ -148,10 +148,12 @@ This repository intentionally uses a smaller Rust workflow than `onshape-mcp`: a
 
 ## Deferred Workflows
 
-Future slicer adapter repositories may run explicitly isolated, non-distributable
-development workflows with provisional provenance records.
-Incomplete or provisional records must block capability advertisement,
-publication, release, and production deployment, but not the restricted builds
+Restricted slicer-adapter development workflows with provisional provenance
+records may run only in the isolated adapter development project established by
+the source-access record and must mark their outputs non-distributable.
+Incomplete or provisional records must block packaging for distribution,
+capability advertisement, publication of fixtures, packages, or project
+artifacts, release, and production deployment, but not the restricted builds
 and tests needed to produce implementation evidence.
 
 Integration workflows should test the versioned CLI protocol and error fixtures,
