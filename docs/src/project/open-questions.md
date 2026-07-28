@@ -59,8 +59,9 @@
   independently derived, or derivative, and who performs qualified review?
 - How are separately licensed adapters discovered, installed, verified,
   upgraded, retained for rollback, and distributed?
-- Which Bambu Studio and OrcaSlicer features form a genuinely shared subset, and
-  which require separate schema, implementation, provenance, and validation?
+- Which Bambu Studio, OrcaSlicer, and PrusaSlicer features form a genuinely
+  shared subset, and which require separate schema, implementation, provenance,
+  and validation?
 
 ## Plan Gaps
 
