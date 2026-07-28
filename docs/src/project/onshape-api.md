@@ -126,6 +126,14 @@ Supported user download formats:
 - STL
 - 3MF
 
+The service owns retrieval and immutable retention of raw Onshape exports before
+any local transformation. Onshape geometry 3MF is a geometry export, not a
+slicer project 3MF. It is only one candidate input to the proposed external
+slicer adapters; STEP, STL, or another source-neutral geometry package may prove
+more suitable. Adapter input selection must not move Onshape credentials,
+translation polling, or raw-payload ownership into an adapter. See
+[Slicer Project 3MF Adapters](slicer-3mf-adapters.md).
+
 For STEP, use format-specific async endpoints where available:
 
 ```text

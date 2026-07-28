@@ -148,6 +148,27 @@ This repository intentionally uses a smaller Rust workflow than `onshape-mcp`: a
 
 ## Deferred Workflows
 
+Restricted slicer-adapter development workflows with provisional provenance
+records may run only in the isolated adapter development project established by
+the source-access record and must mark their outputs non-distributable.
+Incomplete or provisional records must block packaging for distribution,
+capability advertisement, publication of fixtures, packages, or project
+artifacts, release, and production deployment, but not the restricted builds
+and tests needed to produce implementation evidence.
+
+Integration workflows should test the versioned CLI protocol and error fixtures,
+deterministic or normalized output at the selected guarantee level,
+sandbox/resource-limit behavior, and compatibility against pinned slicer
+versions.
+Before publication, the service must validate adapter package/build identity,
+protocol version, dialect and dialect revision, provenance-set version, and
+capability metadata against a service-owned approved-adapter manifest.
+It must independently hash the candidate output and compare that value with the
+adapter's validation report; the candidate output hash is not an
+approved-manifest value.
+See the normative
+[Slicer Adapter Provenance And Licensing Policy](slicer-adapter-provenance.md).
+
 Defer until the Rust checks are stable or the project needs broader platform guarantees:
 
 - Split Rust archive/test matrix.

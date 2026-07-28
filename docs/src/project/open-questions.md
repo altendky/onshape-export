@@ -45,6 +45,24 @@
 - Reconsider v2 repair and overwrite semantics before production use: raw payload repair, public artifact repair, DB/object drift, corrupt-but-public objects, missing sidecars, partial uploads, concurrent repair races, CDN behavior, and supersede-versus-repair boundaries.
 - What live experiments must pass before locking v2 request defaults, result cardinality, raw payload retention, and post-processing behavior?
 
+## Slicer Project 3MF Adapters
+
+- Which Onshape export or neutral geometry representation best preserves the
+  geometry, units, object identity, assemblies, and metadata adapters need?
+- What exact CLI invocation, file transport, JSON schema, error model, and
+  atomic-write contract should the prototype use?
+- Which adapter, protocol, dialect, and slicer-version compatibility windows are
+  supportable, and how should incompatibility be reported?
+- Must outputs be byte-deterministic, canonically equivalent after normalization,
+  or only semantically equivalent in pinned slicer versions?
+- What evidence is sufficient to classify each feature as clean-room,
+  independently derived, or derivative, and who performs qualified review?
+- How are separately licensed adapters discovered, installed, verified,
+  upgraded, retained for rollback, and distributed?
+- Which Bambu Studio, OrcaSlicer, and PrusaSlicer features form a genuinely
+  shared subset, and which require separate schema, implementation, provenance,
+  and validation?
+
 ## Plan Gaps
 
 - What public status route shape should expose `jobId`, `groupId`, ready outputs, retry hints, and safe failure messages?

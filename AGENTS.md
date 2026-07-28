@@ -12,3 +12,8 @@ with the source. Keep the source-informed implementation there.
 
 Any interface between this project and such a component must be compatible with
 the licenses of both projects.
+
+Before accessing upstream implementation source relevant to a slicer adapter
+capability or beginning any work on such a capability, including source-informed,
+independently derived, or clean-room work, follow the feature-level provenance
+and licensing policy in `docs/src/project/slicer-adapter-provenance.md`.

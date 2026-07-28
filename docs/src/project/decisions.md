@@ -110,6 +110,19 @@ Public artifact objects are immutable in normal operation. Exporter, schema, cat
 
 Current branch status: `artifacts invalidate` and `artifacts prune` mark ready SQLite artifact records superseded and leave public object-store artifacts untouched. Destructive deletion remains reserved for a future explicit cleanup command.
 
+## Slicer Project 3MF Adapters
+
+**Working decisions, proposed and not implemented:** Distinguish Onshape
+geometry 3MF from slicer project 3MF; provide adapters with source-neutral
+geometry input; use separately versioned Bambu, Orca, and Prusa CLI adapters;
+publish separate artifacts for each slicer dialect; require feature-level
+provenance and license classification; execute adapters in a sandbox; and
+validate candidate artifacts before publication.
+
+These decisions define an investigation boundary, not a settled CLI protocol or
+license conclusion. See [Slicer Project 3MF Adapters](slicer-3mf-adapters.md) and
+the normative [Slicer Adapter Provenance And Licensing Policy](slicer-adapter-provenance.md).
+
 ## Admin Surface
 
 **Decision:** Do not build a web admin UI in the MVP.
