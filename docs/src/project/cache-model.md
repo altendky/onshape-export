@@ -454,6 +454,17 @@ Supersede a ready artifact set when:
 - an operator invalidates or prunes the output
 - a slicer adapter build, protocol, dialect revision, provenance set,
   capability revision, normalization policy, or validation policy changes
+- the service-owned approved-adapter manifest no longer authorizes the exact
+  package/build, protocol, dialect revision, provenance set, or exercised
+  capabilities recorded for a slicer artifact, including after approval
+  revocation or when required provenance or licensing evidence becomes
+  non-releasable
+
+Approved-adapter manifest status is mutable publication policy, not processing
+or artifact identity. Re-evaluate affected artifact sets when approval changes
+and before cached reuse or publication. Supersede a set whose exact binding is
+no longer approved. Manifest changes that leave the binding approved do not
+change `postprocessHash` or `artifactSetHash`.
 
 Record:
 
