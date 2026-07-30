@@ -14,10 +14,12 @@ Any interface between this project and such a component must be compatible with
 the licenses of both projects.
 
 The canonical target-side project is
-`https://github.com/altendky/slicer-project-generators`. Before relevant source
-access or any source-informed, independently derived, or clean-room generator
-work, follow its pinned provenance, build, and release policy:
-`https://github.com/altendky/slicer-project-generators/blob/7650510c72ef5af05b0d62388020f525cface0d9/docs/src/project/slicer-project-generator-provenance.md`.
+`https://github.com/altendky/slicer-project-generators`. Generator-local
+source-informed derivative development, target-derived work, builds, and
+releases must follow its pinned provenance, build, and release policy:
+`https://github.com/altendky/slicer-project-generators/blob/ced6585d5a8e1a47690e7eabdf92beaa7fea7fc4/docs/src/project/slicer-project-generator-provenance.md`.
+That generator-local policy does not relax this repository's stricter source
+access and ingress prohibitions above.
 
 Keep service-owned neutral protocol, approval, sandboxing, validation, cache,
 publication, revocation, interface, distribution, and deployment rules in

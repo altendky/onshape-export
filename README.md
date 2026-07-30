@@ -155,7 +155,7 @@ Project documentation is under `docs/src/project/`.
 - `~/repos/onshape-mcp`: Onshape auth/client patterns and request modeling.
 - `~/repos/onshape3mf`: Python proof-of-concept for configuration discovery and async export calls.
 - [`slicer-project-generators`](https://github.com/altendky/slicer-project-generators): canonical target-side generator project.
-- [Pinned generator provenance policy](https://github.com/altendky/slicer-project-generators/blob/7650510c72ef5af05b0d62388020f525cface0d9/docs/src/project/slicer-project-generator-provenance.md): source-access, provenance, build, and generator-release authority.
+- [Pinned generator provenance policy](https://github.com/altendky/slicer-project-generators/blob/ced6585d5a8e1a47690e7eabdf92beaa7fea7fc4/docs/src/project/slicer-project-generator-provenance.md): source-access, provenance, build, and generator-release authority.
 
 ## Contributing
 
