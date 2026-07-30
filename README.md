@@ -122,7 +122,7 @@ Manual deploys use `.github/workflows/deploy.yml` and require GitHub Environment
 - Curated model catalog, not arbitrary Onshape URL export.
 - Onshape document versions only, not mutable workspaces.
 - Anonymous end users, using server-owned Onshape credentials.
-- Download formats: STEP, STL, and 3MF.
+- Download formats: STEP, STL, and raw Onshape geometry 3MF.
 - Preview format: cached GLB or single glTF viewer asset shown in a browser 3D viewer.
 - Runtime: Fly.io Rust app at `https://onshape-export.fly.dev` if the app name is available.
 - Cache backend: Tigris Object Storage via Fly, with public stable artifact URLs.
@@ -140,8 +140,8 @@ Project documentation is under `docs/src/project/`.
 - [Runtime Options](docs/src/project/runtime.md)
 - [Caching](docs/src/project/caching.md)
 - [Onshape API Flow](docs/src/project/onshape-api.md)
-- [Slicer Project 3MF Adapters](docs/src/project/slicer-3mf-adapters.md)
-- [Slicer Adapter Provenance Policy](docs/src/project/slicer-adapter-provenance.md)
+- [Slicer Project Generators](docs/src/project/slicer-project-generators.md)
+- [Slicer Project Generator Integration Policy](docs/src/project/slicer-project-generator-integration.md)
 - [Frontend and Preview](docs/src/project/frontend-preview.md)
 - [Catalog](docs/src/project/catalog.md)
 - [Admin Operations](docs/src/project/admin.md)
@@ -154,6 +154,8 @@ Project documentation is under `docs/src/project/`.
 
 - `~/repos/onshape-mcp`: Onshape auth/client patterns and request modeling.
 - `~/repos/onshape3mf`: Python proof-of-concept for configuration discovery and async export calls.
+- [`slicer-project-generators`](https://github.com/altendky/slicer-project-generators): canonical target-side generator project.
+- [Pinned generator provenance policy](https://github.com/altendky/slicer-project-generators/blob/7650510c72ef5af05b0d62388020f525cface0d9/docs/src/project/slicer-project-generator-provenance.md): source-access, provenance, build, and generator-release authority.
 
 ## Contributing
 

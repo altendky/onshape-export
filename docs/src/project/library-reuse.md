@@ -31,10 +31,14 @@ From `onshape3mf`:
 - Python implementation code from `onshape3mf`.
 - Cloudflare OAuth relay routes and Worker-specific deployment patterns.
 
-For slicer adapters, reuse decisions are governed by the normative
-[Slicer Adapter Provenance And Licensing Policy](slicer-adapter-provenance.md).
-The external adapter architecture does not itself establish license
-compatibility; do not duplicate or weaken that policy here.
+Target-derived generator reuse and implementation decisions belong in
+[`slicer-project-generators`](https://github.com/altendky/slicer-project-generators)
+under its pinned
+[Slicer Project Generator Provenance Policy](https://github.com/altendky/slicer-project-generators/blob/7650510c72ef5af05b0d62388020f525cface0d9/docs/src/project/slicer-project-generator-provenance.md).
+The external process boundary does not itself establish license compatibility.
+Service integration follows the local
+[Slicer Project Generator Integration Policy](slicer-project-generator-integration.md);
+do not duplicate or weaken either policy here.
 
 ## Extraction Strategy
 

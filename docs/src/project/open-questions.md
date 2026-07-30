@@ -14,7 +14,7 @@
 
 ## Onshape Export Details
 
-- Which exact `formatName` values should be used for STL, 3MF, and GLB on generic translation endpoints?
+- Which exact `formatName` values should be used for STL, Onshape geometry 3MF, and GLB on generic translation endpoints?
 - Are format-specific endpoints better than generic translation endpoints for STEP and GLB in practice?
 - Does synchronous Part Studio glTF/GLB export produce suitable single-file GLB previews faster than async export?
 - Do Assemblies and Part Studios need different default export options?
@@ -45,23 +45,38 @@
 - Reconsider v2 repair and overwrite semantics before production use: raw payload repair, public artifact repair, DB/object drift, corrupt-but-public objects, missing sidecars, partial uploads, concurrent repair races, CDN behavior, and supersede-versus-repair boundaries.
 - What live experiments must pass before locking v2 request defaults, result cardinality, raw payload retention, and post-processing behavior?
 
-## Slicer Project 3MF Adapters
+## Service-Owned Generator Integration
 
 - Which Onshape export or neutral geometry representation best preserves the
-  geometry, units, object identity, assemblies, and metadata adapters need?
+  geometry, units, object identity, assemblies, and metadata generators need?
 - What exact CLI invocation, file transport, JSON schema, error model, and
   atomic-write contract should the prototype use?
-- Which adapter, protocol, dialect, and slicer-version compatibility windows are
+- Which generator, protocol, dialect, and slicer-version compatibility windows are
   supportable, and how should incompatibility be reported?
-- Must outputs be byte-deterministic, canonically equivalent after normalization,
-  or only semantically equivalent in pinned slicer versions?
-- What evidence is sufficient to classify each feature as clean-room,
-  independently derived, or derivative, and who performs qualified review?
-- How are separately licensed adapters discovered, installed, verified,
-  upgraded, retained for rollback, and distributed?
+- Which independent service validation and normalization guarantees are required
+  before exact candidate artifact bytes may be published?
+- How should exact target-side validation inputs or tools be packaged, approved,
+  sandboxed, and invoked without moving target schemas or fixtures here?
+- How are released generator packages discovered, acquired, approved, installed,
+  verified, retained for rollback, revoked, distributed, and deployed?
+
+These questions are governed by the local
+[Slicer Project Generator Integration Policy](slicer-project-generator-integration.md).
+
+## Generator-Project-Owned Questions
+
+- Must each generator's output be byte-deterministic, canonically equivalent
+  after normalization, or semantically equivalent in supported slicer versions?
 - Which Bambu Studio, OrcaSlicer, and PrusaSlicer features form a genuinely
   shared subset, and which require separate schema, implementation, provenance,
   and validation?
+- Which target-derived schemas, fixtures, evidence, and release checks support
+  each capability and slicer-version claim?
+
+These questions belong in
+[`slicer-project-generators`](https://github.com/altendky/slicer-project-generators)
+and are governed by its pinned
+[Slicer Project Generator Provenance Policy](https://github.com/altendky/slicer-project-generators/blob/7650510c72ef5af05b0d62388020f525cface0d9/docs/src/project/slicer-project-generator-provenance.md).
 
 ## Plan Gaps
 

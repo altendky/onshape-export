@@ -32,19 +32,19 @@ Rationale:
 
 TODO: add tests that mocked slow Onshape calls do not hold SQLite write locks and that duplicate requests still deduplicate through short job-row transactions.
 
-## Proposed Slicer Adapter Runtime
+## Proposed Slicer Generator Runtime
 
-Slicer project 3MF adapters are proposed and not implemented. A future runtime
-would discover explicitly configured adapter executables or immutable packages,
-inspect their protocol and capability metadata, and select only an adapter whose
+Slicer project generators are proposed and not implemented. A future runtime
+would discover explicitly configured generator executables or immutable packages,
+inspect their protocol and capability metadata, and select only a generator whose
 dialect, versions, provenance set, and requested capabilities are compatible.
 The service must also match package/build identity, protocol version, dialect
 revision, provenance-set version, and capability metadata to a service-owned
-approved-adapter manifest; adapter self-reporting is not a trust decision.
-Discovery must not search arbitrary writable paths or download adapters during a
+approved-generator manifest; generator self-reporting is not a trust decision.
+Discovery must not search arbitrary writable paths or download generators during a
 job. Configuration and installation details remain open.
 
-If an adapter is absent, incompatible, unreviewed, or missing a requested
+If a generator is absent, incompatible, unreviewed, or missing a requested
 capability, the job should fail with a stable unsupported/unavailable result. It
 must not silently substitute another slicer dialect, omit settings, or fall back
 to an Onshape geometry 3MF while labeling it as a slicer project.
@@ -52,11 +52,13 @@ to an Onshape geometry 3MF while labeling it as a slicer project.
 Execution should use a fresh restricted work directory, declared read-only
 inputs, no service credentials, no network access, bounded diagnostics, and
 limits for elapsed time, CPU, memory, disk, file/member count, output size, and
-subprocesses. Candidate output remains private until service-side archive,
-schema, dialect, and compatibility validation passes and the service independently
-hashes it and matches that value to the adapter's validation report. The
+subprocesses. Candidate output remains private until source-neutral service
+validation and every required separately approved target-aware validation check
+passes and the service independently hashes it and matches that value to the
+generator's validation report. Target schemas and fixtures remain in the
+generator repository. The
 containment mechanism is intentionally unresolved pending a prototype; see
-[Slicer Project 3MF Adapters](slicer-3mf-adapters.md).
+[Slicer Project Generators](slicer-project-generators.md).
 
 Initial public hostname:
 

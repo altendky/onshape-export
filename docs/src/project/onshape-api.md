@@ -24,7 +24,7 @@ This assumption must be verified with real calls before the export vertical slic
 - Fetch versioned configuration metadata for a Part Studio.
 - Fetch versioned configuration metadata for an Assembly.
 - Create, poll, and download a GLB export.
-- Create, poll, and download STEP, STL, and 3MF exports.
+- Create, poll, and download STEP, STL, and raw Onshape geometry 3MF exports.
 - Confirm required access for linked-document assembly contexts.
 
 Current branch status: API-key signing is implemented, but the docs do not record successful real Onshape smoke-test results yet.
@@ -124,15 +124,15 @@ Supported user download formats:
 
 - STEP
 - STL
-- 3MF
+- Onshape geometry 3MF
 
 The service owns retrieval and immutable retention of raw Onshape exports before
-any local transformation. Onshape geometry 3MF is a geometry export, not a
-slicer project 3MF. It is only one candidate input to the proposed external
-slicer adapters; STEP, STL, or another source-neutral geometry package may prove
-more suitable. Adapter input selection must not move Onshape credentials,
-translation polling, or raw-payload ownership into an adapter. See
-[Slicer Project 3MF Adapters](slicer-3mf-adapters.md).
+any local transformation. The existing downloadable 3MF is Onshape geometry
+3MF, not a slicer project 3MF. It is only one candidate input to the proposed
+external slicer project generators; STEP, STL, or another source-neutral
+geometry package may prove more suitable. Generator input selection must not
+move Onshape credentials, translation polling, or raw-payload ownership into a
+generator. See [Slicer Project Generators](slicer-project-generators.md).
 
 For STEP, use format-specific async endpoints where available:
 
@@ -158,14 +158,14 @@ STEP body shape should include the configuration under `advancedParams.configura
 
 The app explicitly requests grouped output for STEP exports. Live testing on `onshape-model` showed that omitting `grouping` returned a ZIP with one STEP file per surface, while `grouping: true` returned a single STEP file for the same configuration. STEP post-processing still checks the actual bytes: direct STEP is published as `.step`, a ZIP containing exactly one STEP file is extracted, and a multi-file STEP ZIP is preserved as `.zip` with `application/zip` instead of being mislabeled as plain STEP.
 
-For STL and 3MF, use the generic translation endpoint unless format-specific async endpoints prove better:
+For STL and Onshape geometry 3MF, use the generic translation endpoint unless format-specific async endpoints prove better:
 
 ```text
 POST /api/partstudios/d/{did}/v/{vid}/e/{eid}/translations
 POST /api/assemblies/d/{did}/v/{vid}/e/{eid}/translations
 ```
 
-Generic 3MF body shape:
+Generic Onshape geometry 3MF body shape:
 
 ```json
 {
@@ -194,15 +194,15 @@ Generic STL body shape:
 }
 ```
 
-The generic async translation endpoint documents lowercase `resolution` values for STL and 3MF: `coarse`, `medium`, and `fine`. This differs from the async GLB `meshParams.resolution` enum, which accepts uppercase values such as `FINE`, and from synchronous STL endpoints, which use query names such as `angleTolerance`, `chordTolerance`, `maxFacetWidth`, `minFacetWidth`, `units`, and `mode`.
-The app also sends `grouping: true` for generic STL and 3MF translations because the product currently presents one grouped download artifact per requested format. Separate-per-part packages are deferred until there is a deliberate catalog option.
+The generic async translation endpoint documents lowercase `resolution` values for STL and Onshape geometry 3MF: `coarse`, `medium`, and `fine`. This differs from the async GLB `meshParams.resolution` enum, which accepts uppercase values such as `FINE`, and from synchronous STL endpoints, which use query names such as `angleTolerance`, `chordTolerance`, `maxFacetWidth`, `minFacetWidth`, `units`, and `mode`.
+The app also sends `grouping: true` for generic STL and Onshape geometry 3MF translations because the product currently presents one grouped download artifact per requested format. Separate-per-part packages are deferred until there is a deliberate catalog option.
 
 Current live-test evidence:
 
 - STEP remains explicitly requested as `AP242` because omitting the value produced different bytes than an explicit AP242 request.
-- STEP, STL, and 3MF exports request `grouping: true` explicitly. For STEP, omitting `grouping` produced a ZIP package for the tested multi-surface model; explicit `grouping: true` produced a plain STEP file.
+- STEP, STL, and raw Onshape geometry 3MF exports request `grouping: true` explicitly. For STEP, omitting `grouping` produced a ZIP package for the tested multi-surface model; explicit `grouping: true` produced a plain STEP file.
 - GLB preview accepts uppercase `FINE`; lowercase `fine` failed.
-- 3MF generic translation accepts lowercase `fine`; uppercase `FINE` failed after the translation started.
+- Onshape geometry 3MF generic translation accepts lowercase `fine`; uppercase `FINE` failed after the translation started.
 - STL generic translation accepts `resolution: "fine"` and `stlMode: "BINARY"`; `stlMode` changed the output encoding and size, but generic async STL `resolution` did not affect tested outputs. The app still sends lowercase `fine` as catalog-requested high-quality intent.
 - Numeric mesh tolerances are intentionally not implemented yet. They require more model-scale-specific testing before becoming catalog semantics or cache identity.
 
@@ -250,6 +250,6 @@ Expected outputs:
 | GLB | Preview | `.glb` |
 | STEP | Download | `.step` |
 | STL | Download | `.stl` |
-| 3MF | Download | `.3mf` |
+| Onshape geometry 3MF | Download | `.3mf` |
 
-Prefer GLB for browser preview even when the user downloads STL or 3MF.
+Prefer GLB for browser preview even when the user downloads STL or raw Onshape geometry 3MF.
