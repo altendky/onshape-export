@@ -32,11 +32,13 @@ Onshape API
 The public site should be able to serve cached content even when no export job is running. The Rust service owns catalog validation, queue submission, status routes, Onshape calls, translation polling, and Tigris uploads. SQLite owns live catalog data and transactional coordination so duplicate Onshape work is not started for the same deterministic key.
 
 Future slicer project 3MF generation is proposed as a sandboxed external-process
-step after raw geometry retention. Separately versioned Bambu, Orca, and Prusa
-CLI adapters would accept source-neutral geometry and return untrusted candidate
-artifacts. The service would retain ownership of orchestration, validation,
-cache identity, and publication; adapters would receive no service credentials
-or direct publication access. See [Slicer Project 3MF Adapters](slicer-3mf-adapters.md)
+step after raw geometry retention. The three separately versioned Bambu Studio,
+OrcaSlicer, and PrusaSlicer CLI generators in
+[`slicer-project-generators`](https://github.com/altendky/slicer-project-generators)
+would accept source-neutral geometry and return untrusted candidate artifacts.
+The service would retain ownership of orchestration, validation, cache identity,
+and publication; generators would receive no service credentials or direct
+publication access. See [Slicer Project Generators](slicer-project-generators.md)
 for the proposed boundary and unresolved details.
 
 ## Components
@@ -69,7 +71,7 @@ Current Rust boundaries are still mostly in one crate and several responsibiliti
 4. The site computes or requests a deterministic configuration hash.
 5. The site calls a public app route to check whether a preview artifact set exists for that configuration.
 6. If no preview artifact set exists, the user can request preview generation through the app route.
-7. User chooses STEP, STL, or 3MF for final download.
+7. User chooses STEP, STL, or raw Onshape geometry 3MF for final download.
 8. The app enqueues missing work through SQLite. A worker generates missing artifacts and stores them in Tigris.
 9. The UI polls status until preview or download artifacts are ready.
 10. Ready artifacts are served through stable public Tigris URLs.
@@ -91,7 +93,7 @@ Implemented routes on this branch:
 | `POST` | `/models/{slug}` | Validate submitted parameters and render normalized values or errors. |
 | `POST` | `/models/{slug}/preview` | Validate submitted parameters and create or find a preview job. |
 | `GET` | `/models/{slug}/preview/{config_hash}/status` | Poll preview status by server-computed hash. |
-| `POST` | `/models/{slug}/exports/{format}` | Validate submitted parameters and create or find a STEP, STL, or 3MF export job. |
+| `POST` | `/models/{slug}/exports/{format}` | Validate submitted parameters and create or find a STEP, STL, or raw Onshape geometry 3MF export job. |
 | `GET` | `/models/{slug}/exports/{format}/{config_hash}/status` | Poll download export status by server-computed hash. |
 | `GET` | `/healthz` | Process health check. |
 | `GET` | `/metrics` | Prometheus-style operational metrics. |

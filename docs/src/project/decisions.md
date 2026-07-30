@@ -34,7 +34,7 @@ The export layer needs element-kind-specific endpoint selection.
 
 ## Download Formats
 
-**Decision:** Support STEP, STL, and 3MF downloads.
+**Decision:** Support STEP, STL, and raw Onshape geometry 3MF downloads.
 
 GLB is a preview format for the MVP and is not a supported user-download format; adding GLB downloads later requires a separate decision. It is still cached like every other artifact.
 
@@ -44,13 +44,13 @@ GLB is a preview format for the MVP and is not a supported user-download format;
 
 Public users choose model parameters and download format only. Catalog entries define preview and download export settings explicitly so cache identity stays curated and predictable, and so users cannot accidentally request unexpectedly large or slow mesh translations.
 
-Current catalog values are typically GLB preview `FINE`, STEP `AP242`, STL `stlMode: BINARY` with lowercase generic translation `resolution: fine`, and 3MF lowercase generic translation `resolution: fine`. All current export requests explicitly use grouped output (`grouping: true`); separate-per-part packages are deferred until there is an intentional catalog/admin option. Numeric mesh tolerances are deferred until live testing establishes safe model-scale-aware settings. Generic async STL resolution did not affect tested outputs, but the catalog still records and sends lowercase `fine` as requested export intent.
+Current catalog values are typically GLB preview `FINE`, STEP `AP242`, STL `stlMode: BINARY` with lowercase generic translation `resolution: fine`, and raw Onshape geometry 3MF with lowercase generic translation `resolution: fine`. All current export requests explicitly use grouped output (`grouping: true`); separate-per-part packages are deferred until there is an intentional catalog/admin option. Numeric mesh tolerances are deferred until live testing establishes safe model-scale-aware settings. Generic async STL resolution did not affect tested outputs, but the catalog still records and sends lowercase `fine` as requested export intent.
 
 ## Preview Format
 
 **Decision:** Use GLB as the MVP browser preview artifact.
 
-GLB is generated as a separate Onshape export for the same selected configuration. It is not derived locally from STEP, STL, or 3MF in the MVP. Documentation may mention glTF only as the broader format family or Onshape translation terminology.
+GLB is generated as a separate Onshape export for the same selected configuration. It is not derived locally from STEP, STL, or raw Onshape geometry 3MF in the MVP. Documentation may mention glTF only as the broader format family or Onshape translation terminology.
 
 Target cache language should treat preview output as a preview artifact set, not as one guaranteed `.glb` file. GLB remains the preferred/current single-file preview case.
 
@@ -68,7 +68,7 @@ Use product/UI routes only. Add an API later only with explicit keys, quotas, an
 
 Tigris stores completed artifacts, previews, raw Onshape responses, and normalized parameter metadata. Completed public artifacts are durable cache outputs and should be served directly from stable, non-expiring Tigris URLs.
 
-Fly app egress is metered, so the Rust app should not proxy GLB, STEP, STL, or 3MF bytes in the steady state.
+Fly app egress is metered, so the Rust app should not proxy GLB, STEP, STL, or raw Onshape geometry 3MF bytes in the steady state.
 
 ## Job Coordination
 
@@ -100,7 +100,7 @@ The initial Fly deployment uses one Rust service process with the public `axum` 
 
 **Decision:** Completed artifacts are public.
 
-The product is a public anonymous catalog, so completed GLB, STEP, STL, and 3MF outputs do not need signed or expiring URLs. Keep internal operational state out of public object prefixes and do not expose object listing.
+The product is a public anonymous catalog, so completed GLB, STEP, STL, and raw Onshape geometry 3MF outputs do not need signed or expiring URLs. Keep internal operational state out of public object prefixes and do not expose object listing.
 
 ## Artifact Invalidation
 
@@ -110,18 +110,19 @@ Public artifact objects are immutable in normal operation. Exporter, schema, cat
 
 Current branch status: `artifacts invalidate` and `artifacts prune` mark ready SQLite artifact records superseded and leave public object-store artifacts untouched. Destructive deletion remains reserved for a future explicit cleanup command.
 
-## Slicer Project 3MF Adapters
+## Slicer Project Generators
 
 **Working decisions, proposed and not implemented:** Distinguish Onshape
-geometry 3MF from slicer project 3MF; provide adapters with source-neutral
-geometry input; use separately versioned Bambu, Orca, and Prusa CLI adapters;
-publish separate artifacts for each slicer dialect; require feature-level
-provenance and license classification; execute adapters in a sandbox; and
+geometry 3MF from slicer project 3MF; provide generators with source-neutral
+geometry input; use the separately versioned Bambu Studio, OrcaSlicer, and
+PrusaSlicer CLI generators in `slicer-project-generators`; publish separate
+artifacts for each slicer dialect; execute generators in a sandbox; and
 validate candidate artifacts before publication.
 
 These decisions define an investigation boundary, not a settled CLI protocol or
-license conclusion. See [Slicer Project 3MF Adapters](slicer-3mf-adapters.md) and
-the normative [Slicer Adapter Provenance And Licensing Policy](slicer-adapter-provenance.md).
+license conclusion. See [Slicer Project Generators](slicer-project-generators.md)
+and the normative
+[Slicer Project Generator Integration Policy](slicer-project-generator-integration.md).
 
 ## Admin Surface
 

@@ -10,7 +10,7 @@ Initial admin operations:
 - Import, list, show, and validate live SQL catalog entries.
 - Fetch and refresh parameter metadata.
 - Generate missing GLB previews.
-- Generate missing STEP, STL, and 3MF exports.
+- Generate missing STEP, STL, and raw Onshape geometry 3MF exports.
 - Inspect recent job status and failures.
 - Create a consistent SQLite backup snapshot for Fly volume recovery.
 - Run deploy maintenance with private backup upload and explicit reset modes.

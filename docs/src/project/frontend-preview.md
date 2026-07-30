@@ -8,7 +8,7 @@ For the viewer, start with `<model-viewer>` consuming cached preview artifact se
 
 ## Preview Is A Separate Export
 
-The preview is not generated from STEP, STL, or 3MF locally. It is another Onshape export for the same selected configuration:
+The preview is not generated from STEP, STL, or raw Onshape geometry 3MF locally. It is another Onshape export for the same selected configuration:
 
 ```text
 selected configuration -> Onshape GLB export -> Tigris -> browser viewer
@@ -21,7 +21,7 @@ Current branch status: preview handling writes direct or zipped GLB as `preview.
 The final download is independently cached:
 
 ```text
-selected configuration -> Onshape STEP/STL/3MF export -> Tigris -> download
+selected configuration -> Onshape STEP/STL/geometry 3MF export -> Tigris -> download
 ```
 
 ## Interaction Model
@@ -54,7 +54,7 @@ Because the browser viewer fetches preview assets directly from the Tigris publi
 4. Page calls an app cache/status route, which rebuilds the current canonical preview request for the selected `config_hash` and checks readiness for that exact `requestHash`.
 5. If cached for that exact request, the app returns the active preview artifact URL and the viewer updates.
 6. If missing, the user can generate the preview.
-7. User selects STEP, STL, or 3MF for download.
+7. User selects STEP, STL, or raw Onshape geometry 3MF for download.
 8. Missing download artifacts are generated and cached.
 
 ## Preview Quality
@@ -72,7 +72,7 @@ Final export settings:
 
 - STEP: currently explicit `AP242`.
 - STL: catalog-defined generic translation resolution and `stlMode` are explicit.
-- 3MF: catalog-defined generic translation resolution is explicit.
+- Onshape geometry 3MF: catalog-defined generic translation resolution is explicit.
 
 These quality settings are not public UI controls in the MVP. Public users choose parameters and a download format; catalog/admin configuration owns export quality.
 

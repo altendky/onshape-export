@@ -28,6 +28,11 @@ The main design goal is to keep every cache boundary explicit: selected source, 
 - A future slicer project 3MF is a local derived artifact, distinct from an
   Onshape geometry 3MF raw payload and from every other slicer dialect.
 
+Existing and downloadable 3MF output in the application means raw Onshape
+geometry 3MF. Its implemented machine identifier remains `3mf`. Future slicer
+project artifacts require explicit dialect-qualified output kinds and must not
+reuse that identifier ambiguously.
+
 ## Initial v2 Slice
 
 The full model below remains the forward-looking cache contract. The first v2 implementation should be a clean cut from the current v1 cache: existing v1 SQLite records, object keys, public URLs, and manifests are disposable during the migration.
@@ -128,7 +133,7 @@ The encoding response does not replace `configHash`. It is an Onshape representa
 
 Include:
 
-- output family: preview, STEP, STL, 3MF
+- output family: preview, STEP, STL, or raw Onshape geometry 3MF
 - format-specific logical options, such as STEP version
 - preview quality, mesh resolution or explicit tolerances
 - orientation and scale choices
@@ -196,7 +201,7 @@ Include:
 - image/buffer transformation policy
 - safe-path policy for extracted entries
 
-For proposed slicer project 3MF generation, also include the immutable adapter
+For proposed slicer project 3MF generation, also include the immutable generator
 build or package identity, CLI protocol version, slicer dialect and dialect
 revision, provenance-set version, exercised capability revisions,
 declared and detected geometry-input media type/kind, neutral-IR or input-schema
@@ -395,7 +400,10 @@ Suggested artifact-set shape:
 }
 ```
 
-For single-file STEP/STL/3MF outputs, the artifact set still has one primary file. Keeping the same shape avoids special cases and allows future sidecars such as validation reports.
+For single-file STEP, STL, raw Onshape geometry 3MF, or future
+dialect-qualified slicer project 3MF outputs, the artifact set still has one
+primary file. Keeping the same shape avoids special cases and allows future
+sidecars such as validation reports.
 
 ## Manifest Model
 
@@ -452,15 +460,15 @@ Supersede a ready artifact set when:
 - validation policy changes
 - a primary or required sidecar object is missing or corrupt
 - an operator invalidates or prunes the output
-- a slicer adapter build, protocol, dialect revision, provenance set,
+- a slicer generator build, protocol, dialect revision, provenance set,
   capability revision, normalization policy, or validation policy changes
-- the service-owned approved-adapter manifest no longer authorizes the exact
+- the service-owned approved-generator manifest no longer authorizes the exact
   package/build, protocol, dialect revision, provenance set, or exercised
   capabilities recorded for a slicer artifact, including after approval
   revocation or when required provenance or licensing evidence becomes
   non-releasable
 
-Approved-adapter manifest status is mutable publication policy, not processing
+Approved-generator manifest status is mutable publication policy, not processing
 or artifact identity. Re-evaluate affected artifact sets when approval changes
 and before cached reuse or publication. Supersede a set whose exact binding is
 no longer approved. Manifest changes that leave the binding approved do not
@@ -636,7 +644,7 @@ Run these against a real multi-part Part Studio and a real Assembly before locki
 6. Compare GLB `meshParams.resolution=FINE` versus explicit mesh tolerances and unit.
 7. Verify hidden parts, `partIds`, `partsExportFilter`, and assembly `occurrencesToExport`.
 8. Confirm STEP with omitted versus explicit `stepVersionString=AP242`.
-9. Validate generic STL and 3MF translations with lowercase explicit resolution, tolerances, and unit.
+9. Validate generic STL and Onshape geometry 3MF translations with lowercase explicit resolution, tolerances, and unit.
 10. Capture external data response headers and retry with `If-None-Match` if an `ETag` is returned.
 11. Test `storeInDocument=true` and inspect `resultElementIds`, document element metadata, `foreignDataId`, and `microversionId`.
 12. List `/translations/d/{did}` after exports to see whether completed translations can support crash recovery.
