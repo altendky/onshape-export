@@ -70,13 +70,14 @@ repos:
     hooks:
       - id: shellcheck
 
-  - repo: https://github.com/hadolint/hadolint
-    rev: v2.14.0
-    hooks:
-      - id: hadolint-docker
-
   - repo: local
     hooks:
+      - id: hadolint
+        name: hadolint
+        entry: hadolint
+        language: system
+        types: [dockerfile]
+
       - id: cargo-fmt
         name: cargo fmt
         entry: bash scripts/cargo-pinned.sh fmt --all --check

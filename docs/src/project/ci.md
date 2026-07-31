@@ -35,6 +35,7 @@ Configured tools include:
 - `cargo:lychee` for Markdown link checking.
 - `github:nextest-rs/nextest` for Rust test execution.
 - `aqua:EmbarkStudios/cargo-deny` for Rust dependency policy checks.
+- `aqua:hadolint/hadolint` for Dockerfile linting.
 - `aqua:superfly/flyctl` for Fly operations.
 
 Rust itself is pinned separately in `rust-toolchain.toml`.
