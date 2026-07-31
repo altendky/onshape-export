@@ -27,7 +27,7 @@ Slicer-aware transformation would run in external CLI generators:
 ```text
 Onshape API -> retained raw geometry -> neutral generator input
                                          |
-                      sandboxed external CLI process
+                       trusted external CLI process
                                          |
                   candidate project 3MF + result metadata
                                          |
@@ -36,11 +36,14 @@ Onshape API -> retained raw geometry -> neutral generator input
                             artifact publication
 ```
 
-The process boundary is also a trust boundary.
-Generator output is untrusted until the service validates source-neutral archive
-and identity requirements and completes any required target-aware check through
-separately approved target-side validation inputs or tools.
-A generator must not receive Onshape or object storage credentials and must not publish artifacts directly.
+The approved generator CLI is trusted to the same degree as the service's own
+code. The process boundary preserves repository ownership, source-ingress
+restrictions, provenance, release, distribution, and license responsibilities;
+it also defines a source-neutral interface and is not a runtime security
+boundary. A generator result does not authorize publication until the service
+validates source-neutral archive and identity requirements and completes any
+required target-aware check through separately approved target-side validation
+inputs or tools.
 
 The proposed generator responsibilities are:
 
@@ -48,21 +51,21 @@ The proposed generator responsibilities are:
 - Produce exactly one candidate project 3MF for its declared slicer dialect.
 - Report generator, protocol, dialect, capability, and provenance identities.
 - Reject unsupported requests rather than silently dropping project features.
-- Avoid network access and undeclared filesystem dependencies during a build.
-- Emit machine-readable diagnostics without exposing secrets or host paths.
+- Emit machine-readable diagnostics.
+- Produce candidates only; service publication remains a separate decision.
 
 The service would be responsible for:
 
 - Preparing the geometry input and canonical request.
 - Selecting a compatible generator through declared capabilities.
 - Verifying generator package/build identity, protocol, dialect, provenance, and capability metadata against a service-owned approved-generator manifest rather than trusting self-reported identity alone.
-- Applying time, memory, CPU, disk, process, and output-size limits.
+- Enforcing output-size and generic archive limits before publication.
 - Independently hashing the candidate output and comparing it with the generator's validation report before publication.
 - Recording the complete recipe in cache and artifact metadata.
 
 The service owns the source-neutral protocol and its request, result, error, and
 schema definitions. Those contracts may describe transport, identities, input
-roles, settings, limits, diagnostics, and output roles, but must not embed
+roles, settings, diagnostics, output constraints, and output roles, but must not embed
 target-derived slicer dialect facts. Exact JSON fields and schemas remain
 unsettled until a prototype validates the boundary.
 
@@ -168,11 +171,20 @@ independently hash the candidate output and compare it with the generator's
 validation report.
 A process exit code or successful ZIP parse alone is insufficient.
 
-## Sandboxing
+## Trusted CLI Execution
 
-Generators process potentially complex archives and run outside the service's trusted implementation.
-The intended runtime denies network access and service credentials, uses a fresh restricted working directory, passes only declared input files, limits resources and subprocesses, captures bounded diagnostics, and publishes no generator-created path directly.
-Platform-specific containment and whether generators run as local processes, containers, or another mechanism remain open.
+The service directly invokes only exact approved generator CLI package bytes at
+a fixed configured path and does not use a shell. The CLI exchanges declared
+request, input, result, and output files through the neutral protocol. Ordinary
+runner behavior handles success, structured failure, process crash, unexpected
+exit, and missing or malformed results.
+
+No runtime sandbox or containment mechanism is required. The approved CLI may
+run with the same ambient runtime access as the service because it is trusted to
+the same degree as service code. Independent result validation remains a
+publication-integrity gate, not a hostile-code boundary. The service stages and
+publishes independently accepted bytes rather than forwarding a
+generator-created path.
 
 ## Upgrade Overview
 
@@ -181,11 +193,11 @@ Generator release and service publication are separate gates:
 1. The generator repository completes its source-access, provenance, build, and
    release review and releases exact immutable package bytes.
 2. The service acquires and hashes those exact bytes without rebuilding them.
-3. The service reviews the interface, distribution, sandbox, validation,
+3. The service reviews the interface, distribution, trusted CLI, validation,
    deployment, cache, and publication behavior for the exact package identity.
 4. The service adds an approved immutable binding to its approved-generator
    manifest and may make that package selectable.
-5. A sandboxed invocation produces a private candidate project 3MF.
+5. A trusted external CLI invocation produces a private candidate project 3MF.
 6. The service independently validates and hashes the candidate and publishes
    only those exact validated artifact bytes.
 

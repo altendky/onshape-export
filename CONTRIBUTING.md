@@ -31,7 +31,8 @@ repository's stricter source access and ingress prohibitions.
 This repository retains only source-neutral protocol and service integration
 work. Follow the normative
 [Slicer Project Generator Integration Policy](docs/src/project/slicer-project-generator-integration.md)
-for service approval, sandboxing, independent validation and hashing, cache,
-publication, revocation, interface, distribution, and deployment review. A
-generator release is not service approval or permission to publish generated
-artifacts. Qualified legal review is required for licensing conclusions.
+for service approval, trusted external CLI invocation, independent validation
+and hashing, cache, publication, revocation, interface, distribution, and
+deployment review. A generator release is not service approval or permission to
+publish generated artifacts. Qualified legal review is required for licensing
+conclusions.

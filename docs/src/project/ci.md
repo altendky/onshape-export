@@ -158,8 +158,9 @@ They must not be reproduced in this repository.
 
 Integration workflows should test the versioned CLI protocol and error fixtures,
 deterministic or normalized output at the selected guarantee level,
-sandbox/resource-limit behavior, and compatibility against pinned slicer
-versions.
+ordinary process and protocol failure handling, and compatibility against pinned
+slicer versions. They do not test a runtime sandbox or containment boundary for
+approved generator CLIs.
 Before service approval or publication, the service must validate generator package/build identity,
 protocol version, dialect and dialect revision, provenance-set version, and
 capability metadata against a service-owned approved-generator manifest.

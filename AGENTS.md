@@ -21,6 +21,6 @@ releases must follow its pinned provenance, build, and release policy:
 That generator-local policy does not relax this repository's stricter source
 access and ingress prohibitions above.
 
-Keep service-owned neutral protocol, approval, sandboxing, validation, cache,
-publication, revocation, interface, distribution, and deployment rules in
+Keep service-owned neutral protocol, approval, trusted external CLI invocation,
+validation, cache, publication, revocation, interface, distribution, and deployment rules in
 `docs/src/project/slicer-project-generator-integration.md`.

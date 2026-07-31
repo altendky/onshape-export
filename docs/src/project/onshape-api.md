@@ -131,8 +131,8 @@ any local transformation. The existing downloadable 3MF is Onshape geometry
 3MF, not a slicer project 3MF. It is only one candidate input to the proposed
 external slicer project generators; STEP, STL, or another source-neutral
 geometry package may prove more suitable. Generator input selection must not
-move Onshape credentials, translation polling, or raw-payload ownership into a
-generator. The
+transfer responsibility for Onshape API authentication, translation polling, or
+raw-payload ownership to a generator. The
 [Onshape Geometry Input Characterization](onshape-geometry-input-characterization.md)
 records the opaque grouped retained shapes observed for its tested sources and
 the object mappings that remain unproven. See

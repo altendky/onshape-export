@@ -11,9 +11,9 @@ for licensing conclusions.
 ## Authority And Ownership
 
 This MIT OR Apache-2.0 repository owns the source-neutral generator protocol and
-schemas, approved-generator manifest, runtime sandbox, independent output
-validation and hashing, cache, generated-artifact publication and revocation,
-and interface, distribution, and deployment review.
+schemas, approved-generator manifest, trusted external CLI invocation,
+independent output validation and hashing, cache, generated-artifact publication
+and revocation, and interface, distribution, and deployment review.
 
 The canonical target-side project is
 [`slicer-project-generators`](https://github.com/altendky/slicer-project-generators).
@@ -39,7 +39,7 @@ implementation, constants, schemas, fixtures, templates, or source-informed
 summaries here.
 
 The neutral protocol may express service-owned transport, request, result,
-error, identity, and resource-limit concepts. It must not absorb target-derived
+error, identity, diagnostic, and output-limit concepts. It must not absorb target-derived
 slicer facts merely to avoid the target repository boundary.
 
 ## Approved-Generator Manifest
@@ -75,8 +75,8 @@ entry becomes selectable, the service review must verify:
 - Distribution rights, notices, acquisition path, and package retention.
 - The source-neutral interface and absence of target-derived facts in service
   code and schemas.
-- Sandbox and deployment configuration for the exact package.
-- Independent validation, hashing, compatibility, and resource-limit results.
+- Trusted CLI and deployment configuration for the exact package.
+- Independent validation, hashing, compatibility, and output-limit results.
 - Cache, publication, rollback, and revocation behavior.
 
 Unknown, disputed, provisional, incomplete, or inconsistent records block
@@ -86,13 +86,21 @@ to satisfy a gate.
 
 ## Runtime And Validation
 
-Run an approved generator with no service credentials or network access, a
-fresh restricted work directory, declared read-only inputs, bounded diagnostics,
-and explicit elapsed-time, CPU, memory, disk, file/member-count, output-size,
-and subprocess limits. The containment mechanism remains an implementation
-decision and must be reviewed before deployment.
+Invoke the exact approved generator CLI directly at its fixed configured path,
+without a shell, using the declared file-backed request, input, result, and
+output protocol. Handle success, structured failure, process crash, unexpected
+exit, and missing or malformed results as ordinary runner outcomes.
 
-Treat every generator result as untrusted. The service must independently:
+The approved generator CLI is trusted to the same degree as the service's own
+code. The external-process boundary preserves repository ownership,
+source-ingress restrictions, provenance, release, distribution, and license
+responsibilities and defines a source-neutral interface; it is not a runtime
+security boundary. The service does not require sandboxing, containment,
+hostile-code defenses, credential stripping, network or filesystem isolation,
+or process resource limits for an approved generator CLI.
+
+CLI trust does not make a result sufficient for publication. The service must
+independently:
 
 - Recompute the exact candidate artifact hash.
 - Match reported package, protocol, dialect, provenance, and capability
@@ -102,9 +110,13 @@ Treat every generator result as untrusted. The service must independently:
 - Reject missing, extra, malformed, incompatible, or unsupported output rather
   than silently substituting another dialect or raw Onshape geometry.
 
+The CLI produces candidate files only. The service, not the CLI, owns private
+staging and publication and publishes only independently accepted bytes rather
+than forwarding a generator-created path.
+
 The service owns the validation policy, orchestration, and publication decision,
 not target-derived validation facts. Local code may perform source-neutral
-protocol, identity, archive-safety, resource-limit, and hash validation. Any
+protocol, identity, archive-safety, output-limit, and hash validation. Any
 target-aware structure, dialect, or compatibility check must consume an exact,
 separately approved target-side validation input or tool released from
 `slicer-project-generators`; its identity belongs in the approved-generator
@@ -140,11 +152,12 @@ place.
 1. `slicer-project-generators` completes provenance, build, and release review
    under its canonical policy and releases exact immutable package bytes.
 2. The service acquires and hashes those exact bytes without rebuilding them.
-3. The service completes interface, distribution, sandbox, validation, cache,
-   deployment, and publication review for that exact package identity.
+3. The service completes interface, distribution, trusted CLI, validation,
+   cache, deployment, and publication review for that exact package identity.
 4. The service records the approved immutable identities in the
    approved-generator manifest and may make the generator selectable.
-5. A sandboxed invocation produces a private candidate project artifact.
+5. A trusted external CLI invocation produces a private candidate project
+   artifact.
 6. The service independently validates and hashes the candidate, records its
    complete recipe, and only then publishes the exact validated artifact bytes.
 7. Revocation or changed approval prevents further selection or publication and

@@ -49,16 +49,20 @@ capability, the job should fail with a stable unsupported/unavailable result. It
 must not silently substitute another slicer dialect, omit settings, or fall back
 to an Onshape geometry 3MF while labeling it as a slicer project.
 
-Execution should use a fresh restricted work directory, declared read-only
-inputs, no service credentials, no network access, bounded diagnostics, and
-limits for elapsed time, CPU, memory, disk, file/member count, output size, and
-subprocesses. Candidate output remains private until source-neutral service
-validation and every required separately approved target-aware validation check
-passes and the service independently hashes it and matches that value to the
-generator's validation report. Target schemas and fixtures remain in the
-generator repository. The
-containment mechanism is intentionally unresolved pending a prototype; see
-[Slicer Project Generators](slicer-project-generators.md).
+Execution should directly invoke the exact approved CLI at a fixed configured
+path without a shell and exchange declared request, input, result, and output
+files through the neutral protocol. The approved CLI is trusted like service
+code; no runtime sandbox, credential stripping, network or filesystem isolation,
+or process resource limits are required. The process boundary preserves
+repository, source-ingress, provenance, release, distribution, and license
+responsibilities, defines a source-neutral interface, and does not provide
+runtime security isolation.
+
+Candidate output remains private until source-neutral service validation and
+every required separately approved target-aware validation check passes and the
+service independently hashes it and matches that value to the generator's
+validation report. Target schemas and fixtures remain in the generator
+repository. See [Slicer Project Generators](slicer-project-generators.md).
 
 Initial public hostname:
 
