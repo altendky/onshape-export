@@ -64,7 +64,7 @@
 - Which independent service validation and normalization guarantees are required
   before exact candidate artifact bytes may be published?
 - How should exact target-side validation inputs or tools be packaged, approved,
-  sandboxed, and invoked without moving target schemas or fixtures here?
+  and invoked without moving target schemas or fixtures here?
 - How are released generator packages discovered, acquired, approved, installed,
   verified, retained for rollback, revoked, distributed, and deployed?
 

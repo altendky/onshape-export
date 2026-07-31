@@ -116,8 +116,11 @@ Current branch status: `artifacts invalidate` and `artifacts prune` mark ready S
 geometry 3MF from slicer project 3MF; provide generators with source-neutral
 geometry input; use the separately versioned Bambu Studio, OrcaSlicer, and
 PrusaSlicer CLI generators in `slicer-project-generators`; publish separate
-artifacts for each slicer dialect; execute generators in a sandbox; and
-validate candidate artifacts before publication.
+artifacts for each slicer dialect; execute exact approved packages as trusted
+external CLIs; and validate candidate artifacts before publication. The process
+boundary preserves repository, source-ingress, provenance, release,
+distribution, and license responsibilities, defines a source-neutral interface,
+and is not a runtime security boundary.
 
 These decisions define an investigation boundary, not a settled CLI protocol or
 license conclusion. See [Slicer Project Generators](slicer-project-generators.md)

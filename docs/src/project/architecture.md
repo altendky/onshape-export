@@ -31,15 +31,18 @@ Onshape API
 
 The public site should be able to serve cached content even when no export job is running. The Rust service owns catalog validation, queue submission, status routes, Onshape calls, translation polling, and Tigris uploads. SQLite owns live catalog data and transactional coordination so duplicate Onshape work is not started for the same deterministic key.
 
-Future slicer project 3MF generation is proposed as a sandboxed external-process
-step after raw geometry retention. The three separately versioned Bambu Studio,
+Future slicer project 3MF generation is proposed as a trusted external CLI step
+after raw geometry retention. The three separately versioned Bambu Studio,
 OrcaSlicer, and PrusaSlicer CLI generators in
 [`slicer-project-generators`](https://github.com/altendky/slicer-project-generators)
-would accept source-neutral geometry and return untrusted candidate artifacts.
+would accept source-neutral geometry and return unvalidated candidate artifacts.
 The service would retain ownership of orchestration, validation, cache identity,
-and publication; generators would receive no service credentials or direct
-publication access. See [Slicer Project Generators](slicer-project-generators.md)
-for the proposed boundary and unresolved details.
+and publication. The approved CLI is trusted like service code; the process
+boundary preserves repository, source-ingress, provenance, release,
+distribution, and license responsibilities, defines a source-neutral interface,
+and does not provide runtime security isolation. See
+[Slicer Project Generators](slicer-project-generators.md) for the proposed
+boundary and unresolved details.
 
 ## Components
 
