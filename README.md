@@ -140,6 +140,7 @@ Project documentation is under `docs/src/project/`.
 - [Runtime Options](docs/src/project/runtime.md)
 - [Caching](docs/src/project/caching.md)
 - [Onshape API Flow](docs/src/project/onshape-api.md)
+- [Onshape Geometry Input Characterization](docs/src/project/onshape-geometry-input-characterization.md)
 - [Slicer Project Generators](docs/src/project/slicer-project-generators.md)
 - [Slicer Project Generator Integration Policy](docs/src/project/slicer-project-generator-integration.md)
 - [Frontend and Preview](docs/src/project/frontend-preview.md)

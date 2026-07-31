@@ -636,6 +636,13 @@ For initial v2, prefer the neutral content-addressed raw key shape ending in `pa
 
 Run these against a real multi-part Part Studio and a real Assembly before locking v2 cache semantics.
 
+The source-neutral identity and export-shape subset has been run and documented
+in the
+[Onshape Geometry Input Characterization](onshape-geometry-input-characterization.md).
+That report records sanitized observations and keeps unsupported mappings
+fail-closed. Items below that require additional sources or broader cache
+behavior remain open.
+
 1. Fetch `/configuration` and record `currentConfiguration`, defaults, `sourceMicroversion`, `serializationVersion`, and `libraryVersion`.
 2. Encode empty config, explicit default config, and non-default config. Decode each and compare explicit/default flags when available.
 3. Export glTF with omitted defaults and explicit defaults. Compare translation responses, external data headers, raw byte hashes, and derived artifacts.

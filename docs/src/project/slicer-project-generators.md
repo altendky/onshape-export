@@ -11,7 +11,10 @@
   Bambu Studio, OrcaSlicer, and PrusaSlicer project files are separate dialect artifacts even where their formats overlap.
 - **Geometry input** is the source-neutral input passed to a generator.
   It might eventually be STEP, STL, geometry-only 3MF, or a manifest plus several files.
-  Onshape geometry 3MF is one candidate, not the required architecture.
+  Onshape geometry 3MF is one candidate, not the required architecture. The
+  [Onshape Geometry Input Characterization](onshape-geometry-input-characterization.md)
+  supports an opaque grouped-payload boundary only for its tested sources and
+  retained shapes, and keeps per-object mappings fail-closed.
 
 The product and cache model must not label an Onshape geometry 3MF as a slicer project 3MF.
 User-visible output kinds and media metadata should retain this distinction.
@@ -101,6 +104,9 @@ The request would identify the protocol version, requested dialect and features,
 The result would report success or structured failure, actual capabilities used, generator build identity, dialect revision, candidate output hash, warnings, and provenance-set version.
 The service would independently recompute the candidate output hash rather than trust the report.
 Exact flags, field names, JSON Schema, atomic-write rules, and diagnostic format remain open until a prototype tests crash behavior and portability.
+The future protocol must also carry the identity distinctions, ordered input-set
+requirements, mapping status, and rejection rules established by the
+[geometry input characterization](onshape-geometry-input-characterization.md).
 
 ## Capabilities And Versioning
 
@@ -131,6 +137,9 @@ Project-3MF post-processing identity must include the generator build or immutab
 Requested dialect, requested capabilities, and canonical project settings are logical export-option identity.
 The current single retained geometry input remains bound through the existing raw-payload/content identity, not a duplicate content hash inside processing-recipe or policy identity.
 If a future invocation accepts multiple input blobs, it must use a separate explicit input-set or invocation identity rather than placing their hashes in processing policy.
+A multi-blob invocation must not infer source-object identity from archive order,
+filenames, display names, or result-array position. Only mappings proven under
+the characterization rules may populate that ordered input set.
 A service-owned approved-generator manifest must bind the allowed package/build identity to its approved protocol, dialect, provenance set, and capabilities.
 Candidate output hashes are independently computed per invocation and do not belong in the approved-generator manifest.
 
