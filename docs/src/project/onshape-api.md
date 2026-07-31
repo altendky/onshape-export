@@ -132,7 +132,11 @@ any local transformation. The existing downloadable 3MF is Onshape geometry
 external slicer project generators; STEP, STL, or another source-neutral
 geometry package may prove more suitable. Generator input selection must not
 move Onshape credentials, translation polling, or raw-payload ownership into a
-generator. See [Slicer Project Generators](slicer-project-generators.md).
+generator. The
+[Onshape Geometry Input Characterization](onshape-geometry-input-characterization.md)
+records the opaque grouped retained shapes observed for its tested sources and
+the object mappings that remain unproven. See
+[Slicer Project Generators](slicer-project-generators.md).
 
 For STEP, use format-specific async endpoints where available:
 
@@ -225,7 +229,12 @@ Terminal states:
 - `DONE`
 - `FAILED`
 
-When done, the response includes `resultExternalDataIds`. Download the first result for single-file exports, while keeping the manifest schema able to represent multiple outputs:
+When done, the response includes `resultExternalDataIds`. The implemented flow
+requires exactly one parsed string result. Zero or multiple parsed string
+results fail closed; it does not select the first result. Full malformed-array,
+empty-ID, and duplicate-ID validation remains a future protocol requirement.
+The characterization report also treats result cardinality and
+object/archive-member cardinality as independent:
 
 ```text
 GET /api/documents/d/{did}/externaldata/{fid}

@@ -18,7 +18,10 @@
 - Are format-specific endpoints better than generic translation endpoints for STEP and GLB in practice?
 - Does synchronous Part Studio glTF/GLB export produce suitable single-file GLB previews faster than async export?
 - Do Assemblies and Part Studios need different default export options?
-- Which exports return multiple `resultExternalDataIds` in practice, and which should initial v2 reject as unsupported multi-result shapes?
+- Which exports return multiple `resultExternalDataIds` in practice? The
+  [geometry input characterization](onshape-geometry-input-characterization.md)
+  observed exactly one in its controlled matrix; zero, multiple, and duplicate
+  result shapes remain unproven and fail closed.
 - Does Onshape expose a reliable version-to-microversion resolution path for every versioned Part Studio and Assembly source we need?
 - Which download response headers are reliable enough for diagnostics or conditional requests, such as `ETag`, `Last-Modified`, `Content-Disposition`, and content length?
 
@@ -49,6 +52,11 @@
 
 - Which Onshape export or neutral geometry representation best preserves the
   geometry, units, object identity, assemblies, and metadata generators need?
+- Which additional controlled sources can prove or reject the mappings left
+  unproven by the
+  [geometry input characterization](onshape-geometry-input-characterization.md),
+  including duplicate names, nested/suppressed occurrences, non-default
+  configurations, and selected Part Studio parts?
 - What exact CLI invocation, file transport, JSON schema, error model, and
   atomic-write contract should the prototype use?
 - Which generator, protocol, dialect, and slicer-version compatibility windows are
