@@ -32,6 +32,45 @@ url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.19.9/carg
 checksum = "sha256:a0f2b3da55444f1a354fcbd20ce4b94981ab8193c1b674362d4761905f31ffd0"
 url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.19.9/cargo-deny-0.19.9-x86_64-pc-windows-msvc.tar.gz"
 
+[[tools."aqua:hadolint/hadolint"]]
+version = "2.15.0"
+backend = "aqua:hadolint/hadolint"
+
+[tools."aqua:hadolint/hadolint"."platforms.linux-arm64"]
+checksum = "sha256:17993abf41a0a4da7f2e08970b4f4baf3f95e5e79b9ac80ba6b2aac1960ca71c"
+url = "https://github.com/hadolint/hadolint/releases/download/v2.15.0/hadolint-linux-arm64"
+url_api = "https://api.github.com/repos/hadolint/hadolint/releases/assets/495394498"
+
+[tools."aqua:hadolint/hadolint"."platforms.linux-arm64-musl"]
+checksum = "sha256:17993abf41a0a4da7f2e08970b4f4baf3f95e5e79b9ac80ba6b2aac1960ca71c"
+url = "https://github.com/hadolint/hadolint/releases/download/v2.15.0/hadolint-linux-arm64"
+url_api = "https://api.github.com/repos/hadolint/hadolint/releases/assets/495394498"
+
+[tools."aqua:hadolint/hadolint"."platforms.linux-x64"]
+checksum = "sha256:eb8eb4dd06a068cce65cb84743fba69f09ed12a36ff13d58f9af090d6d696970"
+url = "https://github.com/hadolint/hadolint/releases/download/v2.15.0/hadolint-linux-x86_64"
+url_api = "https://api.github.com/repos/hadolint/hadolint/releases/assets/495394499"
+
+[tools."aqua:hadolint/hadolint"."platforms.linux-x64-musl"]
+checksum = "sha256:eb8eb4dd06a068cce65cb84743fba69f09ed12a36ff13d58f9af090d6d696970"
+url = "https://github.com/hadolint/hadolint/releases/download/v2.15.0/hadolint-linux-x86_64"
+url_api = "https://api.github.com/repos/hadolint/hadolint/releases/assets/495394499"
+
+[tools."aqua:hadolint/hadolint"."platforms.macos-arm64"]
+checksum = "sha256:1d701a41d2760ec88f8eff8d93f78b743d6ed57c53146ef274dbeb540816e563"
+url = "https://github.com/hadolint/hadolint/releases/download/v2.15.0/hadolint-macos-arm64"
+url_api = "https://api.github.com/repos/hadolint/hadolint/releases/assets/495394500"
+
+[tools."aqua:hadolint/hadolint"."platforms.macos-x64"]
+checksum = "sha256:1d701a41d2760ec88f8eff8d93f78b743d6ed57c53146ef274dbeb540816e563"
+url = "https://github.com/hadolint/hadolint/releases/download/v2.15.0/hadolint-macos-x86_64"
+url_api = "https://api.github.com/repos/hadolint/hadolint/releases/assets/495394502"
+
+[tools."aqua:hadolint/hadolint"."platforms.windows-x64"]
+checksum = "sha256:8a155b50a75d7afb26a03bd29e7c67f32d83f2e5992d918010b1832fcb5866c6"
+url = "https://github.com/hadolint/hadolint/releases/download/v2.15.0/hadolint-windows-x86_64.exe"
+url_api = "https://api.github.com/repos/hadolint/hadolint/releases/assets/495394496"
+
 [[tools."aqua:superfly/flyctl"]]
 version = "0.4.75"
 backend = "aqua:superfly/flyctl"
