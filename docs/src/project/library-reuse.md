@@ -34,7 +34,7 @@ From `onshape3mf`:
 Target-derived generator reuse and implementation decisions belong in
 [`slicer-project-generators`](https://github.com/altendky/slicer-project-generators)
 under its pinned
-[Slicer Project Generator Provenance Policy](https://github.com/altendky/slicer-project-generators/blob/7650510c72ef5af05b0d62388020f525cface0d9/docs/src/project/slicer-project-generator-provenance.md).
+[Slicer Project Generator Provenance Policy](https://github.com/altendky/slicer-project-generators/blob/ced6585d5a8e1a47690e7eabdf92beaa7fea7fc4/docs/src/project/slicer-project-generator-provenance.md).
 The external process boundary does not itself establish license compatibility.
 Service integration follows the local
 [Slicer Project Generator Integration Policy](slicer-project-generator-integration.md);

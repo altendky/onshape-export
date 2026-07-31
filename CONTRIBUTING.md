@@ -21,11 +21,12 @@ in this repository. Target-derived or source-informed slicer implementation,
 constants, schemas, fixtures, templates, and summaries belong only in the
 canonical
 [`slicer-project-generators`](https://github.com/altendky/slicer-project-generators)
-project. Before source access or generator capability work, follow its pinned
-normative
-[Slicer Project Generator Provenance Policy](https://github.com/altendky/slicer-project-generators/blob/7650510c72ef5af05b0d62388020f525cface0d9/docs/src/project/slicer-project-generator-provenance.md)
+project. Generator-local source-informed derivative development and capability
+work must follow its pinned normative
+[Slicer Project Generator Provenance Policy](https://github.com/altendky/slicer-project-generators/blob/ced6585d5a8e1a47690e7eabdf92beaa7fea7fc4/docs/src/project/slicer-project-generator-provenance.md)
 for source access, provenance, evidence, target implementation, builds, and
-generator releases.
+generator releases. That generator-local policy does not relax this
+repository's stricter source access and ingress prohibitions.
 
 This repository retains only source-neutral protocol and service integration
 work. Follow the normative

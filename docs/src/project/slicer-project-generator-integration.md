@@ -20,7 +20,7 @@ The canonical target-side project is
 It owns target-derived generator implementation, slicer dialect schemas and
 fixtures, provenance evidence, package builds, and generator package release
 decisions. Its pinned normative
-[Slicer Project Generator Provenance Policy](https://github.com/altendky/slicer-project-generators/blob/7650510c72ef5af05b0d62388020f525cface0d9/docs/src/project/slicer-project-generator-provenance.md)
+[Slicer Project Generator Provenance Policy](https://github.com/altendky/slicer-project-generators/blob/ced6585d5a8e1a47690e7eabdf92beaa7fea7fc4/docs/src/project/slicer-project-generator-provenance.md)
 governs source access, classification, evidence, target development, builds, and
 releases. Those procedures are not duplicated here.
 
@@ -30,11 +30,13 @@ approval likewise does not replace generator provenance or release review.
 
 ## Repository Ingress Boundary
 
-The repository-root `AGENTS.md` boundary applies to every contribution and tool.
-Do not inspect relevant GPL- or AGPL-covered slicer implementation source for
-work in this repository. Do not add target-derived implementation, constants,
-schemas, fixtures, templates, or source-informed summaries here. Begin such work
-only in `slicer-project-generators` under its pinned policy.
+Generator-local source-informed derivative development may proceed in
+`slicer-project-generators` under its pinned policy. That does not relax the
+stricter repository-root `AGENTS.md` boundary, which applies to every
+contribution and tool here. Do not inspect relevant GPL- or AGPL-covered slicer
+implementation source for work in this repository. Do not add target-derived
+implementation, constants, schemas, fixtures, templates, or source-informed
+summaries here.
 
 The neutral protocol may express service-owned transport, request, result,
 error, identity, and resource-limit concepts. It must not absorb target-derived
