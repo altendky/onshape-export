@@ -29,6 +29,13 @@ This assumption must be verified with real calls before the export vertical slic
 
 Current branch status: API-key signing is implemented, but the docs do not record successful real Onshape smoke-test results yet.
 
+Authenticated OAuth characterization of Free-account part metadata, configured
+part IDs, Assembly instances, and complete occurrence paths is recorded in the
+[Onshape Annotation Carrier And Selector Characterization](onshape-annotation-carrier-characterization.md).
+That report is bounded evidence, not an annotation convention. In particular,
+it proves representative built-in part-property writes but no occurrence-level
+metadata bag.
+
 ## Parameter Discovery
 
 Fetch configuration parameters for a Part Studio or Assembly:

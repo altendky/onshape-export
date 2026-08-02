@@ -297,3 +297,8 @@ Per-part/per-occurrence inputs, hierarchy preservation, semantic name/role
 mapping, and multi-result support remain blocked until controlled evidence proves
 the required sideband relationships. Protocol v1 carries this limitation
 explicitly rather than hiding it through naming or ordering conventions.
+
+Later authenticated work separately characterized configured Part Studio part
+IDs, complete ordered Assembly occurrence paths, and built-in metadata carriers
+without changing this report's export-mapping conclusion. See the
+[Onshape Annotation Carrier And Selector Characterization](onshape-annotation-carrier-characterization.md).

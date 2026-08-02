@@ -52,11 +52,14 @@
 
 - Which Onshape export or neutral geometry representation best preserves the
   geometry, units, object identity, assemblies, and metadata generators need?
-- Which additional controlled sources can prove or reject the mappings left
+- Which additional controlled sources can prove or reject export mappings left
   unproven by the
-  [geometry input characterization](onshape-geometry-input-characterization.md),
-  including duplicate names, nested/suppressed occurrences, non-default
-  configurations, and selected Part Studio parts?
+  [geometry input characterization](onshape-geometry-input-characterization.md)?
+  The separate
+  [annotation carrier and selector characterization](onshape-annotation-carrier-characterization.md)
+  now covers configured part IDs, duplicate names, repeated references,
+  nested/suppressed occurrences, and source metadata, but it does not prove a
+  source-object-to-export-payload mapping.
 - What exact CLI arguments and runner implementation should carry the defined
   [file-backed neutral protocol](neutral-generator-protocol.md)?
 - Which generator, protocol, dialect, and slicer-version compatibility windows are
