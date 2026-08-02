@@ -51,12 +51,17 @@
 ## Service-Owned Generator Integration
 
 - Which Onshape export or neutral geometry representation best preserves the
-  geometry, units, object identity, assemblies, and metadata generators need?
+  geometry and units generators need? Geometry 3MF is the strongest neutral
+  candidate observed so far, but no MVP profile was selected because the common
+  generic export request did not prove complete nested Assembly occurrence
+  selection and exact duplicate-name coverage remains incomplete.
 - Which additional controlled sources can prove or reject the mappings left
   unproven by the
   [geometry input characterization](onshape-geometry-input-characterization.md),
-  including duplicate names, nested/suppressed occurrences, non-default
-  configurations, and selected Part Studio parts?
+  including exact duplicate display names and any future supported complete
+  nested occurrence-path request encoding? Official Part Studio IDs,
+  non-default configurations, repeated references, and suppressed/nested
+  failure behavior now have bounded observations.
 - What exact CLI arguments and runner implementation should carry the defined
   [file-backed neutral protocol](neutral-generator-protocol.md)?
 - Which generator, protocol, dialect, and slicer-version compatibility windows are

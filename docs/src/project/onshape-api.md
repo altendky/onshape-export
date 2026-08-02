@@ -27,7 +27,9 @@ This assumption must be verified with real calls before the export vertical slic
 - Create, poll, and download STEP, STL, and raw Onshape geometry 3MF exports.
 - Confirm required access for linked-document assembly contexts.
 
-Current branch status: API-key signing is implemented, but the docs do not record successful real Onshape smoke-test results yet.
+Current branch status: API-key signing is implemented, but the docs do not record
+successful API-key-signed service smoke-test results yet. The geometry
+characterization report records separate authenticated OAuth observations.
 
 ## Parameter Discovery
 
@@ -138,6 +140,20 @@ records the opaque grouped retained shapes observed for its tested sources and
 the object mappings that remain unproven. See
 [Slicer Project Generators](slicer-project-generators.md).
 
+The 2026-08-02 selected-object follow-up proved that official Part Studio part
+IDs from the parts endpoint and one-segment root Assembly occurrence IDs can each
+produce one external payload through the generic translation endpoints. It did
+not prove an encoding for complete ordered nested Assembly occurrence paths;
+tail-only and attempted full-path requests through the generic endpoint failed,
+as did a generated repeated occurrence that shared a source with a successful
+seed. Consequently no
+tested selected-object geometry profile is available for production use.
+
+Async translation paths accept a workspace or version, not a microversion. The
+service can resolve an immutable version to its microversion before planning and
+record both identities, but it must not claim the request path was directly
+microversion-addressed.
+
 For STEP, use format-specific async endpoints where available:
 
 ```text
@@ -239,6 +255,12 @@ object/archive-member cardinality as independent:
 ```text
 GET /api/documents/d/{did}/externaldata/{fid}
 ```
+
+For selected-object characterization, one result meant one completed translation
+lifecycle, exactly one unique nonempty external-data ID, no result-element IDs,
+and one downloaded payload. Download responses were labeled only
+`application/octet-stream`, so profile-specific byte validation remains
+mandatory and media labels alone cannot establish geometry kind.
 
 ## Polling Policy
 
