@@ -57,8 +57,8 @@
   [geometry input characterization](onshape-geometry-input-characterization.md),
   including duplicate names, nested/suppressed occurrences, non-default
   configurations, and selected Part Studio parts?
-- What exact CLI invocation, file transport, JSON schema, error model, and
-  atomic-write contract should the prototype use?
+- What exact CLI arguments and runner implementation should carry the defined
+  [file-backed neutral protocol](neutral-generator-protocol.md)?
 - Which generator, protocol, dialect, and slicer-version compatibility windows are
   supportable, and how should incompatibility be reported?
 - Which independent service validation and normalization guarantees are required

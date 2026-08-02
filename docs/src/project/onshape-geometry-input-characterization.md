@@ -2,8 +2,8 @@
 
 > **Status: source-neutral characterization, not a production protocol.** This
 > report records sanitized observations made on 2026-07-30. It defines
-> fail-closed requirements for later protocol work, but it does not define a
-> production schema, migration, or generator interface.
+> fail-closed requirements consumed by the neutral protocol, but it does not
+> itself define a production schema, migration, or generator interface.
 
 ## Scope And Boundary
 
@@ -17,7 +17,9 @@ target-derived schema, target fixture, generator, or generated slicer project
 was inspected. The repository-root `AGENTS.md` boundary and the
 [Slicer Project Generator Integration Policy](slicer-project-generator-integration.md#repository-ingress-boundary)
 govern this work. Production `InputManifest` and `InputObject` definitions are
-deferred to the protocol issue that consumes this report.
+now provided by the [Neutral Generator Protocol](neutral-generator-protocol.md);
+this report remains the source-neutral evidence and requirements input to that
+contract.
 
 Two authorized, immutable versioned sources were observed through official
 Onshape APIs:
@@ -215,10 +217,11 @@ depends on them:
 9. Record `unproven`, `missing`, `duplicate`, or `ambiguous` explicitly and block
    generator input preparation when the requested relation depends on it.
 
-## Future Manifest Requirements
+## Manifest Requirements Consumed By Protocol V1
 
-The following are requirements for later protocol design, not settled field
-names or a JSON schema.
+The following requirements were consumed by protocol v1. The normative field
+names and schema are defined by the
+[Neutral Generator Protocol](neutral-generator-protocol.md).
 
 An `InputManifest` must declare:
 
@@ -277,8 +280,8 @@ decision: reject; do not select the first result or infer array correspondence
 
 The examples use synthetic values and generic roles deliberately. Target
 capabilities, dialects, schemas, fixtures, and validation facts remain outside
-this repository. Production schema and protocol decisions belong to the
-follow-up protocol work.
+this repository. Production schema and protocol decisions are defined by
+protocol v1.
 
 ## Decision
 
@@ -292,6 +295,5 @@ mapping for STEP, STL, geometry 3MF, or preview output.
 
 Per-part/per-occurrence inputs, hierarchy preservation, semantic name/role
 mapping, and multi-result support remain blocked until controlled evidence proves
-the required sideband relationships. This limitation must be carried into the
-future source-neutral protocol rather than hidden by naming or ordering
-conventions.
+the required sideband relationships. Protocol v1 carries this limitation
+explicitly rather than hiding it through naming or ordering conventions.

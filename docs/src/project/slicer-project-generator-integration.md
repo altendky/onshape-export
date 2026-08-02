@@ -2,7 +2,8 @@
 
 > **Status: Normative.** This is the service-side policy for integrating,
 > approving, running, and publishing output from slicer project generators.
-> The generator architecture remains proposed and is not implemented here.
+> The neutral protocol is defined, but generator execution and the remaining
+> integration architecture are not implemented here.
 
 This policy does not provide legal advice. Repository or process separation does
 not itself decide whether licenses are compatible; qualified review is required
@@ -41,6 +42,11 @@ summaries here.
 The neutral protocol may express service-owned transport, request, result,
 error, identity, diagnostic, and output-limit concepts. It must not absorb target-derived
 slicer facts merely to avoid the target repository boundary.
+
+The normative [Neutral Generator Protocol](neutral-generator-protocol.md)
+defines the versioned document set, identity rules, file roles, bounds, and
+atomic commit behavior. This policy remains authoritative for approval,
+execution, validation, cache, publication, and revocation outside that exchange.
 
 ## Approved-Generator Manifest
 
