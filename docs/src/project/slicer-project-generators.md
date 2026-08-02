@@ -14,8 +14,10 @@
   It might eventually be STEP, STL, geometry-only 3MF, or a manifest plus several files.
   Onshape geometry 3MF is one candidate, not the required architecture. The
   [Onshape Geometry Input Characterization](onshape-geometry-input-characterization.md)
-  supports an opaque grouped-payload boundary only for its tested sources and
-  retained shapes, and keeps per-object mappings fail-closed.
+  supports an opaque grouped-payload boundary and bounded official-part/root-
+  occurrence exports only. Its selected-object follow-up chose no MVP profile
+  because complete nested Assembly paths and one tested generated repeated
+  occurrence could not be selected causally; those mappings remain fail-closed.
 
 The product and cache model must not label an Onshape geometry 3MF as a slicer project 3MF.
 User-visible output kinds and media metadata should retain this distinction.
@@ -144,7 +146,10 @@ The current single retained geometry input remains bound through the existing ra
 If a future invocation accepts multiple input blobs, it must use a separate explicit input-set or invocation identity rather than placing their hashes in processing policy.
 A multi-blob invocation must not infer source-object identity from archive order,
 filenames, display names, or result-array position. Only mappings proven under
-the characterization rules may populate that ordered input set.
+the characterization rules may populate that ordered input set. As of the
+selected-object follow-up, no profile satisfies the required Part Studio and
+complete Assembly occurrence-path contract, so production multi-object dispatch
+remains unavailable.
 A service-owned approved-generator manifest must bind the allowed package/build identity to its approved protocol, dialect, provenance set, and capabilities.
 Candidate output hashes are independently computed per invocation and do not belong in the approved-generator manifest.
 
