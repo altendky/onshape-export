@@ -1,0 +1,39 @@
+{
+  "documentType": "generatorResult",
+  "protocolVersion": 1,
+  "status": "success",
+  "invocationIdentity": "b8a0be97cc27b7b3b9a6caa866ddc3fc1258b263469bcd7f06a5f09e34c50a72",
+  "reportedIdentities": {
+    "packageIdentity": "package-synthetic-001",
+    "buildIdentity": "build-synthetic-001",
+    "binaryIdentity": "binary-synthetic-001",
+    "dialectIdentity": "dialect-synthetic-alpha-v1",
+    "capabilityIdentities": [
+      "capability-synthetic-alpha-v1"
+    ],
+    "inputKindIdentity": "input-kind-synthetic-geometry-v1",
+    "inputSchemaIdentity": "input-schema-synthetic-v1",
+    "settingsIdentity": "settings-synthetic-001",
+    "settingsSchemaIdentity": "settings-schema-synthetic-v1",
+    "provenanceSetIdentity": "provenance-synthetic-001",
+    "normalizationIdentity": "normalization-synthetic-v1",
+    "validationIdentity": "validation-synthetic-v1"
+  },
+  "output": {
+    "outputIdentity": "output-synthetic-project-001",
+    "role": "generatedProject",
+    "path": "outputs/project.bin",
+    "mediaType": "application/x.synthetic-project",
+    "byteLength": 8192,
+    "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "diagnostics": [
+    {
+      "severity": "info",
+      "code": "synthetic_complete",
+      "message": "Synthetic generation completed.",
+      "context": []
+    }
+  ],
+  "errors": []
+}

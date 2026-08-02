@@ -1,7 +1,8 @@
 # Slicer Project Generators
 
-> **Status: Proposed, not implemented.** This page describes a direction for prototyping.
-> Protocol fields, invocation flags, compatibility windows, and installation details are not settled commitments.
+> **Status: Proposed integration, not implemented.** The neutral protocol is a
+> settled v1 contract; invocation flags, compatibility windows, and installation
+> details remain unsettled.
 
 ## Terminology
 
@@ -66,8 +67,8 @@ The service would be responsible for:
 The service owns the source-neutral protocol and its request, result, error, and
 schema definitions. Those contracts may describe transport, identities, input
 roles, settings, diagnostics, output constraints, and output roles, but must not embed
-target-derived slicer dialect facts. Exact JSON fields and schemas remain
-unsettled until a prototype validates the boundary.
+target-derived slicer dialect facts. The exact v1 contract is the normative
+[Neutral Generator Protocol](neutral-generator-protocol.md).
 
 ## Generator Repository And Binaries
 
@@ -94,8 +95,9 @@ No generator should claim another slicer's compatibility unless that combination
 
 ## Conceptual CLI Boundary
 
-The initial prototype should prefer a file-backed JSON exchange over a streaming or long-running service protocol.
-Conceptually, the service would invoke a generator with paths for:
+Protocol v1 uses a file-backed JSON exchange rather than a streaming or
+long-running service protocol. The later runner will invoke a generator with
+paths for:
 
 - A request JSON file.
 - A geometry file or input-directory manifest.
@@ -103,13 +105,13 @@ Conceptually, the service would invoke a generator with paths for:
 - A candidate output 3MF file.
 - A private working directory.
 
-The request would identify the protocol version, requested dialect and features, the geometry input's existing retained-content identity and role, and canonical project settings.
-The result would report success or structured failure, actual capabilities used, generator build identity, dialect revision, candidate output hash, warnings, and provenance-set version.
+The request identifies the protocol version, opaque expected identities, the
+ordered geometry input set and roles, settings, and one output declaration. The
+result reports success or structured failure, exact reported identities,
+candidate output hash, and bounded diagnostics.
 The service would independently recompute the candidate output hash rather than trust the report.
-Exact flags, field names, JSON Schema, atomic-write rules, and diagnostic format remain open until a prototype tests crash behavior and portability.
-The future protocol must also carry the identity distinctions, ordered input-set
-requirements, mapping status, and rejection rules established by the
-[geometry input characterization](onshape-geometry-input-characterization.md).
+Field names, JSON Schema, atomic-write rules, and diagnostic format are defined
+by protocol v1. Exact process flags and runner implementation remain open.
 
 ## Capabilities And Versioning
 

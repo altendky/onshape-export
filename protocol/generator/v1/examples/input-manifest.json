@@ -1,0 +1,43 @@
+{
+  "documentType": "inputManifest",
+  "protocolVersion": 1,
+  "manifestVersion": 1,
+  "manifestIdentity": "4836a394acc4823af83bb9a897235e2c18e1ae4e7a1e1a6c0366851aaf726287",
+  "inputSetIdentity": "e747d1001f0973fb2bb7847fd54d89ce87e7626a51a1ef995a3e431e22d9bb72",
+  "requirementsIdentity": "requirements-synthetic-v1",
+  "sourceIdentity": "source-synthetic-001",
+  "configurationIdentity": "configuration-synthetic-default",
+  "export": {
+    "kindIdentity": "input-kind-synthetic-geometry-v1",
+    "schemaIdentity": "input-schema-synthetic-v1",
+    "groupingPolicy": "grouped",
+    "observationStatus": "proven",
+    "observationEvidenceIdentity": "evidence-synthetic-grouped-v1"
+  },
+  "decision": {
+    "status": "available"
+  },
+  "objects": [
+    {
+      "objectIdentity": "object-synthetic-001",
+      "role": "rawGeometry",
+      "retainedContent": {
+        "contentIdentity": "content-synthetic-geometry-001",
+        "path": "inputs/geometry-001.bin",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "byteLength": 4096,
+        "mediaType": "model/example",
+        "detectedKindIdentity": "detected-kind-synthetic-binary-v1"
+      },
+      "mapping": {
+        "status": "proven",
+        "evidence": {
+          "classification": "opaque-grouped-payload",
+          "evidenceIdentity": "evidence-synthetic-object-001"
+        }
+      },
+      "sourceFilename": "synthetic-geometry.bin",
+      "displayName": "Synthetic grouped geometry"
+    }
+  ]
+}

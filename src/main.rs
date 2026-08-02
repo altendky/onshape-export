@@ -3,6 +3,7 @@ mod cache_model;
 mod catalog;
 mod config;
 mod db;
+pub mod generator_protocol;
 mod onshape;
 mod parameters;
 mod storage;
