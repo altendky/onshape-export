@@ -655,7 +655,12 @@ That report does not define cache keys, an annotation convention, or a schema.
 4. Repeat identical glTF requests several times. Compare `translationId`, `externalDataId`, raw headers, ZIP entry order, ZIP timestamps, raw byte hash, and processed artifact hash.
 5. Test Part Studio and Assembly glTF with `grouping=true` and `grouping=false`. Record direct GLB, direct glTF, ZIP with GLB, ZIP with one glTF, and ZIP with multiple glTF behavior.
 6. Compare GLB `meshParams.resolution=FINE` versus explicit mesh tolerances and unit.
-7. Verify hidden parts, `partIds`, `partsExportFilter`, and assembly `occurrencesToExport`.
+7. Verify hidden parts, `partIds`, `partsExportFilter`, and assembly
+   `occurrencesToExport`. The selected-object follow-up proved official part IDs
+   and root occurrence IDs for bounded sources, but found no proven complete
+   nested occurrence-path encoding and no uniform generated-occurrence behavior.
+   See the
+   [Onshape Geometry Input Characterization](onshape-geometry-input-characterization.md#selected-object-follow-up).
 8. Confirm STEP with omitted versus explicit `stepVersionString=AP242`.
 9. Validate generic STL and Onshape geometry 3MF translations with lowercase explicit resolution, tolerances, and unit.
 10. Capture external data response headers and retry with `If-None-Match` if an `ETag` is returned.

@@ -52,14 +52,19 @@
 
 - Which Onshape export or neutral geometry representation best preserves the
   geometry, units, object identity, assemblies, and metadata generators need?
-- Which additional controlled sources can prove or reject export mappings left
-  unproven by the
-  [geometry input characterization](onshape-geometry-input-characterization.md)?
-  The separate
+  Geometry 3MF is the strongest neutral candidate observed so far, but no MVP
+  profile was selected because the common generic export request did not prove
+  complete nested Assembly occurrence selection and exact duplicate-name
+  coverage remains incomplete.
+- Which additional controlled sources can prove or reject
+  source-object-to-export-payload mappings left unproven by the
+  [geometry input characterization](onshape-geometry-input-characterization.md),
+  including exact duplicate display names and any future supported complete
+  nested occurrence-path request encoding? The separate
   [annotation carrier and selector characterization](onshape-annotation-carrier-characterization.md)
-  now covers configured part IDs, duplicate names, repeated references,
-  nested/suppressed occurrences, and source metadata, but it does not prove a
-  source-object-to-export-payload mapping.
+  now covers configured Part Studio IDs, duplicate names, repeated references,
+  nested/suppressed occurrences, and source metadata, but it does not prove an
+  export-payload mapping.
 - What exact CLI arguments and runner implementation should carry the defined
   [file-backed neutral protocol](neutral-generator-protocol.md)?
 - Which generator, protocol, dialect, and slicer-version compatibility windows are
