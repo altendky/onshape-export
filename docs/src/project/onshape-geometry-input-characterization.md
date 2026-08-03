@@ -411,3 +411,8 @@ Production selected-object planning, acquisition, manifest construction, and
 generator dispatch must remain unavailable rather than falling back to a root
 occurrence, tail ID, name, member order, count, or equal content. A future API
 or documented selector-bearing endpoint can be characterized separately.
+
+Later authenticated work separately characterized configured Part Studio part
+IDs, complete ordered Assembly occurrence paths, and built-in metadata carriers
+without changing this report's export-mapping conclusion. See the
+[Onshape Annotation Carrier And Selector Characterization](onshape-annotation-carrier-characterization.md).

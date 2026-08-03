@@ -643,6 +643,12 @@ That report records sanitized observations and keeps unsupported mappings
 fail-closed. Items below that require additional sources or broader cache
 behavior remain open.
 
+Configured part IDs, complete ordered Assembly occurrence paths, built-in part
+metadata, and the bounded absence of an occurrence-level metadata bag are
+documented separately in the
+[Onshape Annotation Carrier And Selector Characterization](onshape-annotation-carrier-characterization.md).
+That report does not define cache keys, an annotation convention, or a schema.
+
 1. Fetch `/configuration` and record `currentConfiguration`, defaults, `sourceMicroversion`, `serializationVersion`, and `libraryVersion`.
 2. Encode empty config, explicit default config, and non-default config. Decode each and compare explicit/default flags when available.
 3. Export glTF with omitted defaults and explicit defaults. Compare translation responses, external data headers, raw byte hashes, and derived artifacts.

@@ -12,6 +12,7 @@
 - [Forward-Looking Cache Model](project/cache-model.md)
 - [Onshape API Flow](project/onshape-api.md)
 - [Onshape Geometry Input Characterization](project/onshape-geometry-input-characterization.md)
+- [Onshape Annotation Carrier And Selector Characterization](project/onshape-annotation-carrier-characterization.md)
 - [Neutral Generator Protocol](project/neutral-generator-protocol.md)
 - [Slicer Project Generators](project/slicer-project-generators.md)
 - [Slicer Project Generator Integration Policy](project/slicer-project-generator-integration.md)
