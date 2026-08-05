@@ -11,13 +11,15 @@
 - **Slicer project 3MF** is a slicer-specific project archive containing geometry plus the metadata, configuration, and archive conventions expected by a slicer family.
   Bambu Studio, OrcaSlicer, and PrusaSlicer project files are separate dialect artifacts even where their formats overlap.
 - **Geometry input** is the source-neutral input passed to a generator.
-  It might eventually be STEP, STL, geometry-only 3MF, or a manifest plus several files.
-  Onshape geometry 3MF is one candidate, not the required architecture. The
+   It might eventually be STEP, STL, geometry-only 3MF, or a manifest plus several files.
+   Onshape geometry 3MF is one candidate, not the required architecture. The
   [Onshape Geometry Input Characterization](onshape-geometry-input-characterization.md)
   supports an opaque grouped-payload boundary and bounded official-part/root-
-  occurrence exports only. Its selected-object follow-up chose no MVP profile
-  because complete nested Assembly paths and one tested generated repeated
-  occurrence could not be selected causally; those mappings remain fail-closed.
+  occurrence exports only. Its controlled selected-object follow-ups chose no
+  MVP profile: comma-separated root and tail IDs did not causally select one
+  ordered nested leaf, a root-leaf payload omitted Assembly placement, and the
+  immutable-leaf fallback remains incomplete. Those mappings remain
+  fail-closed.
 
 The product and cache model must not label an Onshape geometry 3MF as a slicer project 3MF.
 User-visible output kinds and media metadata should retain this distinction.
@@ -147,9 +149,9 @@ If a future invocation accepts multiple input blobs, it must use a separate expl
 A multi-blob invocation must not infer source-object identity from archive order,
 filenames, display names, or result-array position. Only mappings proven under
 the characterization rules may populate that ordered input set. As of the
-selected-object follow-up, no profile satisfies the required Part Studio and
-complete Assembly occurrence-path contract, so production multi-object dispatch
-remains unavailable.
+controlled selected-object follow-ups, no profile satisfies the required Part
+Studio and complete Assembly occurrence-path contract, so production multi-object
+dispatch remains unavailable.
 A service-owned approved-generator manifest must bind the allowed package/build identity to its approved protocol, dialect, provenance set, and capabilities.
 Candidate output hashes are independently computed per invocation and do not belong in the approved-generator manifest.
 
