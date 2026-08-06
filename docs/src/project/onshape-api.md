@@ -153,8 +153,16 @@ produce one external payload through the generic translation endpoints. It did
 not prove an encoding for complete ordered nested Assembly occurrence paths;
 tail-only and attempted full-path requests through the generic endpoint failed,
 as did a generated repeated occurrence that shared a source with a successful
-seed. Consequently no
-tested selected-object geometry profile is available for production use.
+seed.
+
+The 2026-08-04 controlled follow-up tested comma-separated root and tail IDs
+causally. Reordering those IDs and replacing an available tail with a suppressed
+tail still exported the available subtree selected by the root subassembly ID.
+The field therefore did not establish ordered complete-path or exact-leaf
+identity. A direct root-leaf geometry 3MF also remained in its Part Studio frame
+rather than carrying the occurrence's nonidentity Assembly placement. The
+format-specific GLB and STEP schemas expose no occurrence selector. Consequently
+no tested selected-object geometry profile is available for production use.
 
 Async translation paths accept a workspace or version, not a microversion. The
 service can resolve an immutable version to its microversion before planning and

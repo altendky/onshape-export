@@ -53,14 +53,19 @@
 - Which Onshape export or neutral geometry representation best preserves the
   geometry, units, object identity, assemblies, and metadata generators need?
   Geometry 3MF is the strongest neutral candidate observed so far, but no MVP
-  profile was selected because the common generic export request did not prove
-  complete nested Assembly occurrence selection and exact duplicate-name
-  coverage remains incomplete.
+  profile was selected. Controlled differential requests showed that
+  comma-separated root and tail IDs did not behave as an ordered exact-leaf
+  path, and a direct root-leaf payload omitted its Assembly placement. A bounded
+  immutable-leaf geometry 3MF fallback preserved indexed geometry under
+  one-time absolute placement, but it still lacks a reviewed production
+  converter/output-validator contract and the complete required matrix.
 - Which additional controlled sources can prove or reject
   source-object-to-export-payload mappings left unproven by the
   [geometry input characterization](onshape-geometry-input-characterization.md),
-  including exact duplicate display names and any future supported complete
-  nested occurrence-path request encoding? The separate
+  including exact duplicate display names, linked and configured immutable-leaf
+  resolution, pattern/flexible occurrences, non-solids, composite solids, and
+  any future supported complete nested occurrence-path request encoding? The
+  separate
   [annotation carrier and selector characterization](onshape-annotation-carrier-characterization.md)
   now covers configured Part Studio IDs, duplicate names, repeated references,
   nested/suppressed occurrences, and source metadata, but it does not prove an

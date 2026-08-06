@@ -657,10 +657,14 @@ That report does not define cache keys, an annotation convention, or a schema.
 6. Compare GLB `meshParams.resolution=FINE` versus explicit mesh tolerances and unit.
 7. Verify hidden parts, `partIds`, `partsExportFilter`, and assembly
    `occurrencesToExport`. The selected-object follow-up proved official part IDs
-   and root occurrence IDs for bounded sources, but found no proven complete
-   nested occurrence-path encoding and no uniform generated-occurrence behavior.
+   and root occurrence IDs for bounded sources. A later controlled differential
+   test found that comma-separated root and tail IDs did not establish an ordered
+   exact-leaf path: reordering and substituting a suppressed tail still exported
+   the available subtree selected by the root ID. A direct root-leaf geometry
+   3MF also omitted the Assembly placement. No production selected-occurrence
+   cache identity is therefore available.
    See the
-   [Onshape Geometry Input Characterization](onshape-geometry-input-characterization.md#selected-object-follow-up).
+   [Onshape Geometry Input Characterization](onshape-geometry-input-characterization.md#production-geometry-profile-follow-up).
 8. Confirm STEP with omitted versus explicit `stepVersionString=AP242`.
 9. Validate generic STL and Onshape geometry 3MF translations with lowercase explicit resolution, tolerances, and unit.
 10. Capture external data response headers and retry with `If-None-Match` if an `ETag` is returned.
