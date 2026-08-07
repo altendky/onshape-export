@@ -5,6 +5,7 @@ mod config;
 mod db;
 pub mod generator_protocol;
 mod onshape;
+pub mod onshape_annotation;
 mod parameters;
 mod storage;
 
