@@ -149,7 +149,7 @@ Permitted unreferenced duplicates do not identify, order, or deduplicate
 anything. V1 has no occurrence-specific override. A future occurrence carrier
 requires a separately reviewed schema revision.
 
-## Generator Settings
+## Generator Settings V1
 
 The Draft 2020-12 schema is
 [`protocol/generator-settings/v1/generator-settings.schema.json`](../../../protocol/generator-settings/v1/generator-settings.schema.json).
@@ -180,6 +180,11 @@ must equal the manifest `auxiliaryGeometry` set exactly. Every blocker occurs
 once and references an existing auxiliary object; every target references an
 existing `rawGeometry` object. Raw objects may be untargeted. Missing, extra,
 duplicate, wrong-role, or unresolved references fail closed.
+
+Generator settings v1 remains unchanged. The separate normative
+[Neutral Generator Settings V2](neutral-generator-settings-v2.md) adds one
+neutral absolute placement per manifest object while preserving this blocker
+contract exactly.
 
 ## Limits And Validation
 
@@ -223,10 +228,13 @@ in explicit plan order from exact captured carriers, constructs the aligned
 configured-part context, and invokes contextual validation before assigning
 plan-local IDs. This contract does not discover or reorder those objects.
 
-The manifest owner later maps plan-local objects to manifest-local identities,
-copies exact validated display names into protocol `InputObject.displayName`,
-constructs settings in blocker order and declared target order, and invokes the
-settings contextual validator before generator input becomes available.
+The manifest owner later maps plan-local objects to manifest-local identities
+and copies exact validated display names into protocol `InputObject.displayName`.
+Issue [#173](https://github.com/altendky/onshape-export/issues/173) owns expected
+neutral placement derivation and source-evidence proof. Issue
+[#175](https://github.com/altendky/onshape-export/issues/175) owns manifest
+ordering and roles, settings construction in blocker and declared target order,
+and contextual-validator invocation before generator input becomes available.
 
 A rename does not change source identity, configured-part identity, plan-local
 or manifest-local object identity, retained-content identity, causal mapping,

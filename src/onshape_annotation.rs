@@ -13,6 +13,7 @@ use thiserror::Error;
 use crate::{cache_key, generator_protocol::InputRole};
 
 pub const SCHEMA_VERSION: u32 = 1;
+pub const SETTINGS_V2_SCHEMA_VERSION: u32 = 2;
 pub const MAX_DOCUMENT_BYTES: usize = 1_048_576;
 pub const MAX_OBJECTS: usize = 256;
 pub const MAX_DESCRIPTION_BYTES: usize = 65_536;
@@ -33,11 +34,15 @@ const AUTHORING_SCHEMA_DOMAIN: &str = "onshape-export-authoring-schema-v1";
 const AUTHORING_DOCUMENT_DOMAIN: &str = "onshape-export-authoring-document-v1";
 const SETTINGS_SCHEMA_DOMAIN: &str = "onshape-export-generator-settings-schema-v1";
 const SETTINGS_DOCUMENT_DOMAIN: &str = "onshape-export-generator-settings-v1";
+const SETTINGS_V2_SCHEMA_DOMAIN: &str = "onshape-export-generator-settings-schema-v2";
+const SETTINGS_V2_DOCUMENT_DOMAIN: &str = "onshape-export-generator-settings-v2";
 
 const AUTHORING_SCHEMA: &str =
     include_str!("../protocol/authoring/v1/onshape-authoring.schema.json");
 const SETTINGS_SCHEMA: &str =
     include_str!("../protocol/generator-settings/v1/generator-settings.schema.json");
+const SETTINGS_V2_SCHEMA: &str =
+    include_str!("../protocol/generator-settings/v2/generator-settings.schema.json");
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AnnotationError {
@@ -152,10 +157,32 @@ pub struct GeneratorSettings {
     pub blockers: Vec<GeneratorSettingsBlocker>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GeneratorSettingsPlacementV2 {
+    pub object_identity: String,
+    pub matrix: Vec<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GeneratorSettingsV2 {
+    pub schema_version: u32,
+    pub blockers: Vec<GeneratorSettingsBlocker>,
+    pub placements: Vec<GeneratorSettingsPlacementV2>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestObjectSummary {
     pub object_identity: String,
     pub transport_role: InputRole,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExpectedPlacementSummaryV2 {
+    pub object_identity: String,
+    pub transport_role: InputRole,
+    pub expected_neutral_placement_matrix: Vec<f64>,
 }
 
 pub fn parse_carriers(description: &str, name: &str) -> Result<ParsedCarriers, AnnotationError> {
@@ -609,6 +636,133 @@ pub fn validate_settings_context(
     Ok(())
 }
 
+pub fn normalize_generator_settings_v2(settings: &GeneratorSettingsV2) -> GeneratorSettingsV2 {
+    let mut normalized = settings.clone();
+    for placement in &mut normalized.placements {
+        normalize_matrix(&mut placement.matrix);
+    }
+    normalized
+}
+
+pub fn parse_generator_settings_v2(bytes: &[u8]) -> Result<GeneratorSettingsV2, AnnotationError> {
+    let settings: GeneratorSettingsV2 =
+        parse_typed_json(bytes, MAX_DOCUMENT_BYTES, "generator settings v2")?;
+    let normalized = normalize_generator_settings_v2(&settings);
+    validate_normalized_generator_settings_v2(&normalized)?;
+    Ok(normalized)
+}
+
+pub fn validate_generator_settings_v2(
+    settings: &GeneratorSettingsV2,
+) -> Result<(), AnnotationError> {
+    validate_normalized_generator_settings_v2(&normalize_generator_settings_v2(settings))
+}
+
+fn validate_normalized_generator_settings_v2(
+    settings: &GeneratorSettingsV2,
+) -> Result<(), AnnotationError> {
+    validate_serialized_size(settings, "generator settings v2")?;
+    ensure(
+        settings.schema_version == SETTINGS_V2_SCHEMA_VERSION,
+        format!(
+            "unsupported generator settings v2 schemaVersion: {}",
+            settings.schema_version
+        ),
+    )?;
+    validate_generator_settings(&GeneratorSettings {
+        schema_version: SCHEMA_VERSION,
+        blockers: settings.blockers.clone(),
+    })?;
+    ensure(
+        settings.placements.len() <= MAX_OBJECTS,
+        format!("generator settings v2 exceed {MAX_OBJECTS} placements"),
+    )?;
+    let mut identities = HashSet::new();
+    for (index, placement) in settings.placements.iter().enumerate() {
+        validate_identity(
+            &placement.object_identity,
+            &format!("placements[{index}].objectIdentity"),
+        )?;
+        ensure(
+            identities.insert(placement.object_identity.as_str()),
+            format!(
+                "duplicate placement identity: {}",
+                placement.object_identity
+            ),
+        )?;
+        validate_matrix(&placement.matrix, &format!("placements[{index}].matrix"))?;
+    }
+    Ok(())
+}
+
+pub fn validate_settings_context_v2(
+    settings: &GeneratorSettingsV2,
+    expected: &[ExpectedPlacementSummaryV2],
+) -> Result<(), AnnotationError> {
+    let normalized = normalize_generator_settings_v2(settings);
+    validate_normalized_generator_settings_v2(&normalized)?;
+    ensure(
+        normalized.placements.len() == expected.len(),
+        "settings placements must contain exactly one entry per expected manifest object",
+    )?;
+
+    let manifest: Vec<_> = expected
+        .iter()
+        .map(|entry| ManifestObjectSummary {
+            object_identity: entry.object_identity.clone(),
+            transport_role: entry.transport_role,
+        })
+        .collect();
+    validate_settings_context(
+        &GeneratorSettings {
+            schema_version: SCHEMA_VERSION,
+            blockers: normalized.blockers.clone(),
+        },
+        &manifest,
+    )?;
+
+    for (index, (placement, entry)) in normalized.placements.iter().zip(expected).enumerate() {
+        ensure(
+            placement.object_identity == entry.object_identity,
+            format!("placements[{index}].objectIdentity does not match expected manifest order"),
+        )?;
+        let mut expected_matrix = entry.expected_neutral_placement_matrix.clone();
+        normalize_matrix(&mut expected_matrix);
+        validate_matrix(
+            &expected_matrix,
+            &format!("expected[{index}].expectedNeutralPlacementMatrix"),
+        )?;
+        ensure(
+            placement.matrix == expected_matrix,
+            format!("placements[{index}].matrix does not match expected neutral placement"),
+        )?;
+    }
+    Ok(())
+}
+
+fn normalize_matrix(matrix: &mut [f64]) {
+    for scalar in matrix {
+        if *scalar == 0.0 {
+            *scalar = 0.0;
+        }
+    }
+}
+
+fn validate_matrix(matrix: &[f64], field: &str) -> Result<(), AnnotationError> {
+    ensure(
+        matrix.len() == 16,
+        format!("{field} must contain exactly 16 scalars"),
+    )?;
+    ensure(
+        matrix.iter().all(|scalar| scalar.is_finite()),
+        format!("{field} must contain only finite scalars"),
+    )?;
+    ensure(
+        matrix[12..] == [0.0, 0.0, 0.0, 1.0],
+        format!("{field} final row must be [0,0,0,1] after signed-zero normalization"),
+    )
+}
+
 pub fn authoring_schema_identity() -> Result<String, AnnotationError> {
     schema_identity(
         AUTHORING_SCHEMA.as_bytes(),
@@ -625,6 +779,14 @@ pub fn generator_settings_schema_identity() -> Result<String, AnnotationError> {
     )
 }
 
+pub fn generator_settings_v2_schema_identity() -> Result<String, AnnotationError> {
+    schema_identity(
+        SETTINGS_V2_SCHEMA.as_bytes(),
+        SETTINGS_V2_SCHEMA_DOMAIN,
+        "generator settings v2 schema",
+    )
+}
+
 pub fn authoring_document_identity(
     document: &AuthoringDocument,
 ) -> Result<String, AnnotationError> {
@@ -637,6 +799,23 @@ pub fn generator_settings_identity(
 ) -> Result<String, AnnotationError> {
     validate_generator_settings(settings)?;
     hash_json(SETTINGS_DOCUMENT_DOMAIN, settings)
+}
+
+pub fn generator_settings_v2_canonical_json_bytes(
+    settings: &GeneratorSettingsV2,
+) -> Result<Vec<u8>, AnnotationError> {
+    let normalized = normalize_generator_settings_v2(settings);
+    validate_normalized_generator_settings_v2(&normalized)?;
+    cache_key::canonical_json_bytes(&normalized)
+        .map_err(|error| AnnotationError::Identity(error.to_string()))
+}
+
+pub fn generator_settings_v2_identity(
+    settings: &GeneratorSettingsV2,
+) -> Result<String, AnnotationError> {
+    let normalized = normalize_generator_settings_v2(settings);
+    validate_normalized_generator_settings_v2(&normalized)?;
+    hash_json(SETTINGS_V2_DOCUMENT_DOMAIN, &normalized)
 }
 
 fn schema_identity(
@@ -1014,6 +1193,10 @@ mod tests {
                 SETTINGS_SCHEMA,
                 "https://github.com/altendky/onshape-export/protocol/generator-settings/v1/generator-settings.schema.json",
             ),
+            (
+                SETTINGS_V2_SCHEMA,
+                "https://github.com/altendky/onshape-export/protocol/generator-settings/v2/generator-settings.schema.json",
+            ),
         ] {
             let schema = schema_value(schema);
             assert!(jsonschema::draft202012::meta::is_valid(&schema));
@@ -1046,6 +1229,11 @@ mod tests {
             &schema_value(SETTINGS_SCHEMA),
             &serde_json::to_value(&settings).unwrap()
         ));
+        let settings_v2 = settings_v2();
+        assert!(jsonschema::draft202012::is_valid(
+            &schema_value(SETTINGS_V2_SCHEMA),
+            &serde_json::to_value(&settings_v2).unwrap()
+        ));
 
         let mut invalid = serde_json::to_value(authoring).unwrap();
         invalid["objects"][0]["annotation"]["displayName"] = json!("forbidden");
@@ -1057,6 +1245,12 @@ mod tests {
         invalid["blockers"][0]["sourceSelector"] = json!("forbidden");
         assert!(!jsonschema::draft202012::is_valid(
             &schema_value(SETTINGS_SCHEMA),
+            &invalid
+        ));
+        let mut invalid = serde_json::to_value(settings_v2).unwrap();
+        invalid["placements"][0]["sourceSelector"] = json!("forbidden");
+        assert!(!jsonschema::draft202012::is_valid(
+            &schema_value(SETTINGS_V2_SCHEMA),
             &invalid
         ));
     }
@@ -1783,6 +1977,174 @@ mod tests {
         assert_ne!(
             generator_settings_identity(&forward_settings).unwrap(),
             generator_settings_identity(&reversed_settings).unwrap()
+        );
+    }
+
+    fn identity_matrix() -> Vec<f64> {
+        vec![
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]
+    }
+
+    fn translated_matrix() -> Vec<f64> {
+        vec![
+            1.0, 0.0, 0.0, 0.25, 0.0, 1.0, 0.0, -0.5, 0.0, 0.0, 1.0, 1.25, 0.0, 0.0, 0.0, 1.0,
+        ]
+    }
+
+    fn settings_v2() -> GeneratorSettingsV2 {
+        GeneratorSettingsV2 {
+            schema_version: SETTINGS_V2_SCHEMA_VERSION,
+            blockers: vec![GeneratorSettingsBlocker {
+                object_identity: "blocker".to_owned(),
+                targets: vec!["printable".to_owned()],
+            }],
+            placements: vec![
+                GeneratorSettingsPlacementV2 {
+                    object_identity: "printable".to_owned(),
+                    matrix: identity_matrix(),
+                },
+                GeneratorSettingsPlacementV2 {
+                    object_identity: "blocker".to_owned(),
+                    matrix: translated_matrix(),
+                },
+            ],
+        }
+    }
+
+    fn expected_v2() -> Vec<ExpectedPlacementSummaryV2> {
+        vec![
+            ExpectedPlacementSummaryV2 {
+                object_identity: "printable".to_owned(),
+                transport_role: InputRole::RawGeometry,
+                expected_neutral_placement_matrix: identity_matrix(),
+            },
+            ExpectedPlacementSummaryV2 {
+                object_identity: "blocker".to_owned(),
+                transport_role: InputRole::AuxiliaryGeometry,
+                expected_neutral_placement_matrix: translated_matrix(),
+            },
+        ]
+    }
+
+    #[test]
+    fn settings_v2_accepts_zero_placements_and_rejects_matrix_failures() {
+        validate_generator_settings_v2(&GeneratorSettingsV2 {
+            schema_version: SETTINGS_V2_SCHEMA_VERSION,
+            blockers: Vec::new(),
+            placements: Vec::new(),
+        })
+        .unwrap();
+
+        for matrix in [vec![0.0; 15], vec![0.0; 17]] {
+            let mut invalid = settings_v2();
+            invalid.placements[0].matrix = matrix;
+            assert!(validate_generator_settings_v2(&invalid).is_err());
+        }
+        for scalar in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut invalid = settings_v2();
+            invalid.placements[0].matrix[0] = scalar;
+            assert!(validate_generator_settings_v2(&invalid).is_err());
+        }
+        for (index, scalar) in [(12, 1.0), (13, 1.0), (14, 1.0), (15, 0.0)] {
+            let mut invalid = settings_v2();
+            invalid.placements[0].matrix[index] = scalar;
+            assert!(validate_generator_settings_v2(&invalid).is_err());
+        }
+        assert!(
+            parse_generator_settings_v2(
+                br#"{"schemaVersion":2,"blockers":[],"placements":[{"objectIdentity":"a","matrix":[0,0]}]}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn settings_v2_context_fails_closed_on_correspondence_and_scalar_errors() {
+        let settings = settings_v2();
+        let expected = expected_v2();
+        validate_settings_context_v2(&settings, &expected).unwrap();
+
+        assert!(validate_settings_context_v2(&settings, &expected[..1]).is_err());
+        let mut extra = expected.clone();
+        extra.push(expected[0].clone());
+        assert!(validate_settings_context_v2(&settings, &extra).is_err());
+
+        let mut duplicate = settings.clone();
+        duplicate.placements[1].object_identity = "printable".to_owned();
+        assert!(validate_settings_context_v2(&duplicate, &expected).is_err());
+
+        let mut reordered = settings.clone();
+        reordered.placements.reverse();
+        assert!(validate_settings_context_v2(&reordered, &expected).is_err());
+
+        let mut wrong_identity = settings.clone();
+        wrong_identity.placements[0].object_identity = "other".to_owned();
+        assert!(validate_settings_context_v2(&wrong_identity, &expected).is_err());
+
+        let mut wrong_role = expected.clone();
+        wrong_role[0].transport_role = InputRole::AuxiliaryGeometry;
+        assert!(validate_settings_context_v2(&settings, &wrong_role).is_err());
+
+        let mut scalar_mismatch = expected.clone();
+        scalar_mismatch[1].expected_neutral_placement_matrix[3] = 0.5;
+        assert!(validate_settings_context_v2(&settings, &scalar_mismatch).is_err());
+    }
+
+    #[test]
+    fn settings_v2_normalizes_signed_zero_before_all_observable_operations() {
+        let positive = settings_v2();
+        let mut negative = positive.clone();
+        for index in [1, 7, 12, 13, 14] {
+            negative.placements[0].matrix[index] = -0.0;
+        }
+        let parsed = parse_generator_settings_v2(&serde_json::to_vec(&negative).unwrap()).unwrap();
+        assert!(
+            parsed.placements[0]
+                .matrix
+                .iter()
+                .filter(|scalar| **scalar == 0.0)
+                .all(|scalar| scalar.is_sign_positive())
+        );
+        assert_eq!(normalize_generator_settings_v2(&positive), parsed);
+        assert_eq!(
+            generator_settings_v2_canonical_json_bytes(&positive).unwrap(),
+            generator_settings_v2_canonical_json_bytes(&negative).unwrap()
+        );
+        assert_eq!(
+            generator_settings_v2_identity(&positive).unwrap(),
+            generator_settings_v2_identity(&negative).unwrap()
+        );
+
+        let mut expected = expected_v2();
+        expected[0].expected_neutral_placement_matrix[1] = -0.0;
+        expected[0].expected_neutral_placement_matrix[3] = -0.0;
+        expected[0].expected_neutral_placement_matrix[12] = -0.0;
+        validate_settings_context_v2(&positive, &expected).unwrap();
+
+        let mut opposite_nonzero = positive.clone();
+        opposite_nonzero.placements[1].matrix[3] = -0.25;
+        assert_ne!(
+            generator_settings_v2_identity(&positive).unwrap(),
+            generator_settings_v2_identity(&opposite_nonzero).unwrap()
+        );
+    }
+
+    #[test]
+    fn settings_v2_has_golden_schema_document_and_jcs_identities() {
+        let settings = settings_v2();
+        assert_eq!(
+            generator_settings_v2_schema_identity().unwrap(),
+            "adfbdd411a8562cd84918ca9facf8c91f9cfeebed1a5cc606f46b2289920e465"
+        );
+        assert_eq!(
+            generator_settings_v2_identity(&settings).unwrap(),
+            "80d005dc2fb36187a0112890c7b263fbad18d0641e82ef9addd13a6b73767a89"
+        );
+        assert_eq!(
+            String::from_utf8(generator_settings_v2_canonical_json_bytes(&settings).unwrap())
+                .unwrap(),
+            "{\"blockers\":[{\"objectIdentity\":\"blocker\",\"targets\":[\"printable\"]}],\"placements\":[{\"matrix\":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1],\"objectIdentity\":\"printable\"},{\"matrix\":[1,0,0,0.25,0,1,0,-0.5,0,0,1,1.25,0,0,0,1],\"objectIdentity\":\"blocker\"}],\"schemaVersion\":2}"
         );
     }
 }
