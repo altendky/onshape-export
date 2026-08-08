@@ -47,6 +47,9 @@ The normative [Neutral Generator Protocol](neutral-generator-protocol.md)
 defines the versioned document set, identity rules, file roles, bounds, and
 atomic commit behavior. This policy remains authoritative for approval,
 execution, validation, cache, publication, and revocation outside that exchange.
+The normative
+[Neutral Generator Settings V2](neutral-generator-settings-v2.md) defines only
+its closed document, normalization, identity, and pure validation contracts.
 
 ## Approved-Generator Manifest
 
@@ -130,6 +133,16 @@ manifest and processing recipe. Do not copy its target schemas or fixtures into
 this repository. The packaging and execution boundary for such validation are
 unsettled. Until an independent target-aware check required by publication
 policy exists, publication remains blocked.
+
+Expected neutral placement derivation and source/path proof are owned by
+[#173](https://github.com/altendky/onshape-export/issues/173). Manifest-order
+orchestration, settings construction, and contextual-validator invocation are
+owned by [#175](https://github.com/altendky/onshape-export/issues/175). Generator
+raw-input bounds and final target-aware self-validation belong to
+[`slicer-project-generators#8`](https://github.com/altendky/slicer-project-generators/issues/8)
+and
+[`slicer-project-generators#9`](https://github.com/altendky/slicer-project-generators/issues/9),
+not to the neutral settings validator.
 
 A successful process exit, matching self-reported hash, or parseable ZIP is not
 sufficient for publication.

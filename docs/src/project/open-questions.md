@@ -52,13 +52,16 @@
 
 - Which Onshape export or neutral geometry representation best preserves the
   geometry, units, object identity, assemblies, and metadata generators need?
-  Geometry 3MF is the strongest neutral candidate observed so far, but no MVP
-  profile was selected. Controlled differential requests showed that
+  The current source-neutral profile is one retained immutable-leaf Geometry 3MF
+  per logical object plus
+  [generator settings v2](neutral-generator-settings-v2.md) placements.
+  Controlled differential requests showed that
   comma-separated root and tail IDs did not behave as an ordered exact-leaf
   path, and a direct root-leaf payload omitted its Assembly placement. A bounded
   immutable-leaf geometry 3MF fallback preserved indexed geometry under
-  one-time absolute placement, but it still lacks a reviewed production
-  converter/output-validator contract and the complete required matrix.
+  one-time absolute placement. Production remains blocked on the complete
+  source-neutral matrix derivation and orchestration owned by #173 and #175 and
+  on generator-owned raw-input bounds and final target-aware self-validation.
 - Which additional controlled sources can prove or reject
   source-object-to-export-payload mappings left unproven by the
   [geometry input characterization](onshape-geometry-input-characterization.md),

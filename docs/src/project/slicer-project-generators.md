@@ -16,10 +16,11 @@
   [Onshape Geometry Input Characterization](onshape-geometry-input-characterization.md)
   supports an opaque grouped-payload boundary and bounded official-part/root-
   occurrence exports only. Its controlled selected-object follow-ups chose no
-  MVP profile: comma-separated root and tail IDs did not causally select one
+  direct-selector profile: comma-separated root and tail IDs did not causally select one
   ordered nested leaf, a root-leaf payload omitted Assembly placement, and the
-  immutable-leaf fallback remains incomplete. Those mappings remain
-  fail-closed.
+  immutable-leaf profile therefore uses separate neutral placements. Expected
+  matrix derivation and orchestration remain fail-closed pending their owning
+  integrations.
 
 The product and cache model must not label an Onshape geometry 3MF as a slicer project 3MF.
 User-visible output kinds and media metadata should retain this distinction.
@@ -52,7 +53,8 @@ inputs or tools.
 
 The proposed generator responsibilities are:
 
-- Accept one source-neutral geometry input and explicit project settings.
+- Accept the protocol's ordered source-neutral geometry input set and explicit
+  project settings.
 - Produce exactly one candidate project 3MF for its declared slicer dialect.
 - Report generator, protocol, dialect, capability, and provenance identities.
 - Reject unsupported requests rather than silently dropping project features.
@@ -62,7 +64,9 @@ The proposed generator responsibilities are:
 The service would be responsible for:
 
 - Preparing the geometry input and canonical request.
-- Selecting a compatible generator through declared capabilities.
+- Selecting a compatible generator exclusively through a reviewed service-owned
+  approved-generator manifest; declared capabilities are verification evidence,
+  not authorization.
 - Verifying generator package/build identity, protocol, dialect, provenance, and capability metadata against a service-owned approved-generator manifest rather than trusting self-reported identity alone.
 - Enforcing output-size and generic archive limits before publication.
 - Independently hashing the candidate output and comparing it with the generator's validation report before publication.
@@ -78,20 +82,14 @@ target-derived slicer dialect facts. The exact v1 contract is the normative
 
 The canonical target-side repository is
 [`slicer-project-generators`](https://github.com/altendky/slicer-project-generators).
-It maps three independent packages and binaries:
-
-| Slicer dialect | Package | Binary |
-| --- | --- | --- |
-| Bambu Studio | `crates/bambu-studio` | `slicer-project-generator-bambu-studio` |
-| OrcaSlicer | `crates/orca-slicer` | `slicer-project-generator-orca-slicer` |
-| PrusaSlicer | `crates/prusa-slicer` | `slicer-project-generator-prusa-slicer` |
-
-These boundaries do not claim implemented capabilities or compatibility.
 Generator-local source-informed derivative development, target-derived slicer
 schemas and fixtures, package builds, release evidence, and provenance sets
 belong in that repository under its pinned normative
 [Slicer Project Generator Provenance Policy](https://github.com/altendky/slicer-project-generators/blob/ced6585d5a8e1a47690e7eabdf92beaa7fea7fc4/docs/src/project/slicer-project-generator-provenance.md).
-Shared implementation must not blur capability, dialect, or provenance records.
+Package layout, binary names, and target-derived implementation facts remain
+owned there. The service records only reviewed immutable package and binary
+identities in its approved-generator manifest. Shared implementation must not
+blur capability, dialect, or provenance records.
 
 Each dialect produces a separate immutable artifact.
 A Bambu project, Orca project, and Prusa project must not share an artifact identity merely because their bytes or archive members happen to match.
@@ -104,13 +102,15 @@ long-running service protocol. The later runner will invoke a generator with
 paths for:
 
 - A request JSON file.
-- A geometry file or input-directory manifest.
 - A result JSON file.
-- A candidate output 3MF file.
-- A private working directory.
 
 The request identifies the protocol version, opaque expected identities, the
 ordered geometry input set and roles, settings, and one output declaration. The
+manifest, retained objects, and settings use declared safe paths under `inputs/`;
+the candidate uses its declared path under `outputs/`, all within one private
+invocation root. Request/result path arguments belong to the later trusted CLI
+interface.
+The
 result reports success or structured failure, exact reported identities,
 candidate output hash, and bounded diagnostics.
 The service would independently recompute the candidate output hash rather than trust the report.
@@ -119,7 +119,9 @@ by protocol v1. Exact process flags and runner implementation remain open.
 
 ## Capabilities And Versioning
 
-Generators should expose machine-readable capabilities before work is scheduled.
+Generators may expose machine-readable capabilities for comparison before work
+is scheduled, but only an exact reviewed approved-generator manifest entry
+authorizes selection.
 Capabilities should use granular, revisioned identities rather than one broad
 format-support flag.
 The target repository owns capability identifiers, revisions, and evidence. The
@@ -170,14 +172,14 @@ The desired determinism level is unresolved. The prototype must distinguish:
 Until the projects choose a level, generators should remove controllable nondeterminism, report unavoidable sources, and preserve enough inputs and versions to reproduce or diagnose a build.
 Normalization must not conceal a semantic change.
 
-Before publication, service-local validation should include safe archive paths,
-member count and size limits, neutral protocol and identity consistency, and no
-unexpected external references. Target-aware project structure, dialect, and
-compatibility checks must use separately approved immutable validation inputs or
-tools from the generator repository; target schemas and fixtures remain there.
-Their packaging and execution boundary are unresolved. The service must
-independently hash the candidate output and compare it with the generator's
-validation report.
+Before publication, service validation follows the normative
+[integration policy](slicer-project-generator-integration.md), including neutral
+protocol consistency and independent candidate hashing. Generator raw-input
+bounds and final target-aware self-validation are owned by
+[`slicer-project-generators#8`](https://github.com/altendky/slicer-project-generators/issues/8)
+and
+[`slicer-project-generators#9`](https://github.com/altendky/slicer-project-generators/issues/9).
+Target schemas and fixtures remain in that repository.
 A process exit code or successful ZIP parse alone is insufficient.
 
 ## Trusted CLI Execution

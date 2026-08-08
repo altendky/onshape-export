@@ -35,12 +35,11 @@ TODO: add tests that mocked slow Onshape calls do not hold SQLite write locks an
 ## Proposed Slicer Generator Runtime
 
 Slicer project generators are proposed and not implemented. A future runtime
-would discover explicitly configured generator executables or immutable packages,
-inspect their protocol and capability metadata, and select only a generator whose
-dialect, versions, provenance set, and requested capabilities are compatible.
-The service must also match package/build identity, protocol version, dialect
-revision, provenance-set version, and capability metadata to a service-owned
-approved-generator manifest; generator self-reporting is not a trust decision.
+would consider only explicitly configured generator executables or immutable
+packages already authorized by an exact reviewed service-owned
+approved-generator manifest entry. It would inspect protocol and capability
+metadata only to verify that approved binding; discovery or self-reporting never
+authorizes selection.
 Discovery must not search arbitrary writable paths or download generators during a
 job. Configuration and installation details remain open.
 
@@ -58,11 +57,10 @@ repository, source-ingress, provenance, release, distribution, and license
 responsibilities, defines a source-neutral interface, and does not provide
 runtime security isolation.
 
-Candidate output remains private until source-neutral service validation and
-every required separately approved target-aware validation check passes and the
-service independently hashes it and matches that value to the generator's
-validation report. Target schemas and fixtures remain in the generator
-repository. See [Slicer Project Generators](slicer-project-generators.md).
+Candidate output remains private until all checks in the normative
+[integration policy](slicer-project-generator-integration.md) pass. Target
+schemas and fixtures remain in the generator repository. See
+[Slicer Project Generators](slicer-project-generators.md).
 
 Initial public hostname:
 
