@@ -162,7 +162,10 @@ invocation identity, and complete output declaration. The canonical recipe hash
 is both the generator processing identity and the post-process component of the
 generated artifact-set identity. Singular request/raw-payload artifact identity
 fields are omitted because one generator recipe may contain multiple retained
-inputs.
+inputs. Generator logical `optionsHash` separately binds output format,
+requested dialect, ordered capability identities, settings identity, and
+settings-schema identity; static deployment and processing identities do not
+masquerade as logical options.
 
 Persist the exact canonical recipe JSON and its ordered logical occurrence
 records before reuse. Each occurrence retains object/content identity,
@@ -173,8 +176,11 @@ order, path, and semantic evidence never collapse.
 Exact cache reuse requires a known supported recipe, the exact derived linked
 artifact-set identity with equal generator and post-process identities, absent
 singular acquisition identities, no supersession markers, and an exact complete
-primary-file record. Generator-linked artifact sets cannot be restaged under an
-existing identity. Supersession changes selection but preserves immutable
+primary-file record. Generator staging and lookup accept a prepared recipe and
+derive artifact-set, source, configuration, options, post-process, and generator
+identities internally; the general free-form artifact staging path rejects
+generator-linked rows. Generator-linked artifact sets cannot be restaged under
+an existing identity. Supersession changes selection but preserves immutable
 recipe, occurrence, artifact-set, and file history. These
 implemented persistence and lookup rules do not perform mutable approval checks,
 runtime orchestration, runner behavior, upload verification, or target-aware

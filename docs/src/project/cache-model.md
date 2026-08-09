@@ -141,8 +141,14 @@ Include:
 - hidden-entity policy
 - selected part IDs or assembly occurrences when supported
 - option schema version
-- for proposed slicer project 3MF, requested slicer dialect, capability
-  revisions, and canonical project settings
+- for slicer project 3MF, requested slicer dialect, ordered capability
+  revisions, canonical settings identity, and settings-schema identity
+
+The implemented generator `optionsHash` uses the `generator-project-v1` options
+schema and output format with exactly those dialect, capability, and settings
+fields. Static package/build/binary, provenance, normalization, and validation
+identities stay in `processingHash`; changing them changes artifact identity
+without misclassifying deployment processing as logical export intent.
 
 Do not include:
 

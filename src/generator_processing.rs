@@ -338,43 +338,68 @@ fn json_string<T: Serialize>(value: &T) -> anyhow::Result<String> {
         .context("expected a string serialization")
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GeneratorOptionsIdentity<'a> {
+    dialect_identity: &'a str,
+    capability_identities: &'a [String],
+    settings_identity: &'a str,
+    settings_schema_identity: &'a str,
+}
+
+pub fn generator_options_hash(
+    prepared: &PreparedGeneratorProcessing,
+    format: &str,
+) -> anyhow::Result<String> {
+    cache_model::options_hash(
+        format,
+        "generator-project-v1",
+        &GeneratorOptionsIdentity {
+            dialect_identity: &prepared.recipe.compatibility.dialect_identity,
+            capability_identities: &prepared.recipe.compatibility.capability_identities,
+            settings_identity: &prepared.recipe.settings_identity,
+            settings_schema_identity: &prepared.recipe.settings_schema_identity,
+        },
+    )
+}
+
 pub fn generator_artifact_set_identity(
     prepared: &PreparedGeneratorProcessing,
-    output_kind: impl Into<String>,
-    format: impl Into<String>,
-) -> ArtifactSetIdentity {
-    ArtifactSetIdentity {
+    output_kind: &str,
+    format: &str,
+) -> anyhow::Result<ArtifactSetIdentity> {
+    Ok(ArtifactSetIdentity {
         artifact_set_schema_version: ARTIFACT_SET_SCHEMA_VERSION,
-        output_kind: output_kind.into(),
-        format: format.into(),
+        output_kind: output_kind.to_owned(),
+        format: format.to_owned(),
         source_hash: prepared.recipe.input_manifest.source_identity.clone(),
         config_hash: prepared
             .recipe
             .input_manifest
             .configuration_identity
             .clone(),
-        options_hash: prepared.recipe.settings_identity.clone(),
+        options_hash: generator_options_hash(prepared, format)?,
         request_hash: None,
         raw_payload_hash: None,
         postprocess_hash: prepared.processing_hash.clone(),
         generator_processing_hash: Some(prepared.processing_hash.clone()),
-    }
+    })
 }
 
 pub fn generator_artifact_set_hash(
     prepared: &PreparedGeneratorProcessing,
-    output_kind: impl Into<String>,
-    format: impl Into<String>,
+    output_kind: &str,
+    format: &str,
 ) -> anyhow::Result<String> {
     cache_model::artifact_set_hash(&generator_artifact_set_identity(
         prepared,
         output_kind,
         format,
-    ))
+    )?)
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
     use serde_json::json;
@@ -572,6 +597,23 @@ mod tests {
         }
     }
 
+    pub(crate) fn prepared_generator_processing(bytes: &[u8]) -> PreparedGeneratorProcessing {
+        let directory = tempfile::tempdir().unwrap();
+        let path = write_executable(directory.path(), "generator", bytes);
+        let document = generator_document(&path, bytes);
+        let manifest = manifest();
+        let settings = settings();
+        prepare_generator_processing(
+            &load_generator(&document),
+            &compatibility(&document),
+            &manifest,
+            &settings,
+            &expected(&settings),
+            &protocol_inputs(),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn recipe_is_stable_and_artifact_identity_uses_only_the_recipe_for_processing() {
         let directory = tempfile::tempdir().unwrap();
@@ -615,7 +657,8 @@ mod tests {
             first.occurrences[0].staged_path,
             first.occurrences[1].staged_path
         );
-        let artifact = generator_artifact_set_identity(&first, "slicer_project", "project_3mf");
+        let artifact =
+            generator_artifact_set_identity(&first, "slicer_project", "project_3mf").unwrap();
         assert_eq!(artifact.request_hash, None);
         assert_eq!(artifact.raw_payload_hash, None);
         assert_eq!(artifact.postprocess_hash, first.processing_hash);
@@ -688,6 +731,103 @@ mod tests {
             prepare(&first_generator, &first_document).processing_hash,
             prepare(&load_generator(&binary_changed), &binary_changed).processing_hash
         );
+    }
+
+    #[test]
+    fn generator_options_bind_logical_dialect_capabilities_and_settings_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let bytes = b"synthetic generator";
+        let path = write_executable(directory.path(), "generator", bytes);
+        let document = generator_document(&path, bytes);
+        let generator = load_generator(&document);
+        let manifest = manifest();
+        let settings = settings();
+        let prepare = |compatibility: &GeneratorCompatibilityRequest,
+                       settings: &GeneratorSettingsV2| {
+            prepare_generator_processing(
+                &generator,
+                compatibility,
+                &manifest,
+                settings,
+                &expected(settings),
+                &protocol_inputs(),
+            )
+            .unwrap()
+        };
+        let baseline = prepare(&compatibility(&document), &settings);
+        let baseline_hash = generator_options_hash(&baseline, "project_3mf").unwrap();
+        assert_eq!(
+            baseline_hash,
+            cache_model::options_hash(
+                "project_3mf",
+                "generator-project-v1",
+                &json!({
+                    "dialectIdentity": baseline.recipe.compatibility.dialect_identity,
+                    "capabilityIdentities": baseline.recipe.compatibility.capability_identities,
+                    "settingsIdentity": baseline.recipe.settings_identity,
+                    "settingsSchemaIdentity": baseline.recipe.settings_schema_identity,
+                })
+            )
+            .unwrap()
+        );
+
+        let mut dialect = compatibility(&document);
+        dialect.dialect_identity.push('x');
+        assert_ne!(
+            baseline_hash,
+            generator_options_hash(&prepare(&dialect, &settings), "project_3mf").unwrap()
+        );
+        let mut capabilities = compatibility(&document);
+        capabilities
+            .capability_identities
+            .push("capability-v2".to_owned());
+        assert_ne!(
+            baseline_hash,
+            generator_options_hash(&prepare(&capabilities, &settings), "project_3mf").unwrap()
+        );
+        let mut ordered_capabilities = compatibility(&document);
+        ordered_capabilities.capability_identities =
+            vec!["capability-a".to_owned(), "capability-b".to_owned()];
+        let ordered = prepare(&ordered_capabilities, &settings);
+        ordered_capabilities.capability_identities.reverse();
+        let reversed = prepare(&ordered_capabilities, &settings);
+        assert_ne!(
+            generator_options_hash(&ordered, "project_3mf").unwrap(),
+            generator_options_hash(&reversed, "project_3mf").unwrap()
+        );
+        let mut changed_settings = settings.clone();
+        changed_settings.placements[0].matrix[3] += 1.0;
+        assert_ne!(
+            baseline_hash,
+            generator_options_hash(
+                &prepare(&compatibility(&document), &changed_settings),
+                "project_3mf"
+            )
+            .unwrap()
+        );
+        assert_ne!(
+            baseline_hash,
+            generator_options_hash(&baseline, "different_format").unwrap()
+        );
+
+        let changed_bytes = b"different deployed generator bytes";
+        let changed_path = write_executable(directory.path(), "changed", changed_bytes);
+        let changed_document = generator_document(&changed_path, changed_bytes);
+        let changed_generator = load_generator(&changed_document);
+        let deployment_changed = prepare_generator_processing(
+            &changed_generator,
+            &compatibility(&changed_document),
+            &manifest,
+            &settings,
+            &expected(&settings),
+            &protocol_inputs(),
+        )
+        .unwrap();
+        assert_eq!(
+            baseline_hash,
+            generator_options_hash(&deployment_changed, "project_3mf").unwrap()
+        );
+        assert_ne!(baseline.recipe.settings_identity, baseline_hash);
     }
 
     #[test]
@@ -875,7 +1015,96 @@ mod tests {
             |recipe| recipe.settings_identity.push('x'),
             |recipe| recipe.settings_schema_identity.push('x'),
             |recipe| recipe.invocation.invocation_identity.push('x'),
+            |recipe| recipe.invocation.protocol_version += 1,
+            |recipe| {
+                recipe
+                    .invocation
+                    .expected_identities
+                    .package_identity
+                    .push('x')
+            },
+            |recipe| {
+                recipe
+                    .invocation
+                    .expected_identities
+                    .build_identity
+                    .push('x')
+            },
+            |recipe| {
+                recipe
+                    .invocation
+                    .expected_identities
+                    .binary_identity
+                    .push('x')
+            },
+            |recipe| {
+                recipe
+                    .invocation
+                    .expected_identities
+                    .dialect_identity
+                    .push('x')
+            },
+            |recipe| {
+                recipe
+                    .invocation
+                    .expected_identities
+                    .capability_identities
+                    .push("capability-v2".to_owned())
+            },
+            |recipe| {
+                recipe
+                    .invocation
+                    .expected_identities
+                    .input_kind_identity
+                    .push('x')
+            },
+            |recipe| {
+                recipe
+                    .invocation
+                    .expected_identities
+                    .input_schema_identity
+                    .push('x')
+            },
+            |recipe| {
+                recipe
+                    .invocation
+                    .expected_identities
+                    .settings_identity
+                    .push('x')
+            },
+            |recipe| {
+                recipe
+                    .invocation
+                    .expected_identities
+                    .settings_schema_identity
+                    .push('x')
+            },
+            |recipe| {
+                recipe
+                    .invocation
+                    .expected_identities
+                    .provenance_set_identity
+                    .push('x')
+            },
+            |recipe| {
+                recipe
+                    .invocation
+                    .expected_identities
+                    .normalization_identity
+                    .push('x')
+            },
+            |recipe| {
+                recipe
+                    .invocation
+                    .expected_identities
+                    .validation_identity
+                    .push('x')
+            },
             |recipe| recipe.invocation.input_manifest.path.push('x'),
+            |recipe| recipe.invocation.input_manifest.manifest_identity = SHA_A.to_owned(),
+            |recipe| recipe.invocation.input_manifest.input_set_identity = SHA_A.to_owned(),
+            |recipe| recipe.invocation.settings.settings_identity.push('x'),
+            |recipe| recipe.invocation.settings.schema_identity.push('x'),
             |recipe| {
                 recipe
                     .invocation
@@ -900,10 +1129,107 @@ mod tests {
             |recipe| recipe.invocation.output.path.push('x'),
             |recipe| recipe.invocation.output.media_type.push('x'),
             |recipe| recipe.invocation.output.max_byte_length += 1,
+            |recipe| recipe.input_manifest.input_set_identity = None,
+            |recipe| recipe.input_manifest.export.observation_evidence_identity = None,
+            |recipe| recipe.input_manifest.objects[0].source_object_identity = None,
+            |recipe| recipe.input_manifest.objects[0].occurrence_path = None,
+            |recipe| recipe.input_manifest.objects[0].producer_result_identity = None,
+            |recipe| recipe.input_manifest.objects[0].source_filename = None,
+            |recipe| recipe.input_manifest.objects[0].display_name = None,
         ];
         for mutate in mutations {
             assert_ne!(baseline, changed_hash(mutate));
         }
+
+        let mut first = prepared.recipe.clone();
+        first.settings.blockers = vec![
+            GeneratorSettingsBlocker {
+                object_identity: "object-b".to_owned(),
+                targets: vec!["object-a".to_owned(), "object-z".to_owned()],
+            },
+            GeneratorSettingsBlocker {
+                object_identity: "object-c".to_owned(),
+                targets: vec!["object-z".to_owned()],
+            },
+        ];
+        let mut second = first.clone();
+        second.settings.blockers.reverse();
+        assert_ne!(
+            generator_processing_hash(&first).unwrap(),
+            generator_processing_hash(&second).unwrap()
+        );
+        second = first.clone();
+        second.settings.blockers[0].targets.reverse();
+        assert_ne!(
+            generator_processing_hash(&first).unwrap(),
+            generator_processing_hash(&second).unwrap()
+        );
+        first = prepared.recipe.clone();
+        first.compatibility.capability_identities =
+            vec!["capability-a".to_owned(), "capability-b".to_owned()];
+        second = first.clone();
+        second.compatibility.capability_identities.reverse();
+        assert_ne!(
+            generator_processing_hash(&first).unwrap(),
+            generator_processing_hash(&second).unwrap()
+        );
+        first = prepared.recipe.clone();
+        first.invocation.expected_identities.capability_identities =
+            vec!["capability-a".to_owned(), "capability-b".to_owned()];
+        second = first.clone();
+        second
+            .invocation
+            .expected_identities
+            .capability_identities
+            .reverse();
+        assert_ne!(
+            generator_processing_hash(&first).unwrap(),
+            generator_processing_hash(&second).unwrap()
+        );
+        first = prepared.recipe.clone();
+        first.compatibility_decision = GeneratorCompatibilityDecision::Unsupported {
+            field: "dialectIdentity".to_owned(),
+        };
+        second = first.clone();
+        second.compatibility_decision = GeneratorCompatibilityDecision::Unsupported {
+            field: "capabilityIdentities".to_owned(),
+        };
+        assert_ne!(
+            generator_processing_hash(&first).unwrap(),
+            generator_processing_hash(&second).unwrap()
+        );
+
+        for path in [
+            ["inputManifest", "documentType"],
+            ["invocation", "documentType"],
+            ["invocation", "output"],
+        ] {
+            let mut value = serde_json::to_value(&prepared.recipe).unwrap();
+            if path[1] == "output" {
+                value[path[0]][path[1]]["role"] = json!("differentRole");
+            } else {
+                value[path[0]][path[1]] = json!("differentDocumentType");
+            }
+            assert_ne!(
+                baseline,
+                cache_key::hash_json("generator-processing-recipe-v1", &value).unwrap()
+            );
+        }
+        second = first.clone();
+        second.input_manifest.objects[0].occurrence_path =
+            Some(vec!["segment-b".to_owned(), "segment-a".to_owned()]);
+        first.input_manifest.objects[0].occurrence_path =
+            Some(vec!["segment-a".to_owned(), "segment-b".to_owned()]);
+        assert_ne!(
+            generator_processing_hash(&first).unwrap(),
+            generator_processing_hash(&second).unwrap()
+        );
+        second = first.clone();
+        second.settings.placements[0].matrix.swap(0, 1);
+        assert_ne!(
+            generator_processing_hash(&first).unwrap(),
+            generator_processing_hash(&second).unwrap()
+        );
 
         let mut unsupported = compatibility(&document);
         unsupported.dialect_identity = "unsupported-dialect".to_owned();

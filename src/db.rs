@@ -8,7 +8,10 @@ use crate::catalog::{
     Catalog, ExportConfig, Model, OnshapeSource, ParameterOverride, ParameterPolicy,
     ParameterPreset, ParameterSource, PreviewFormat,
 };
-use crate::generator_processing::PreparedGeneratorProcessing;
+use crate::generator_processing::{
+    GeneratorCompatibilityDecision, PreparedGeneratorProcessing, generator_artifact_set_hash,
+    generator_artifact_set_identity,
+};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -270,13 +273,38 @@ pub struct GeneratorProcessingRecipeInsert<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct GeneratorArtifactLookup<'a> {
-    pub processing_hash: &'a str,
-    pub artifact_set_hash: &'a str,
+    pub prepared: &'a PreparedGeneratorProcessing,
     pub output_kind: &'a str,
     pub format: &'a str,
     pub primary_role: &'a str,
     pub primary_logical_path: &'a str,
     pub primary_content_type: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct GeneratorArtifactStage<'a> {
+    pub model_slug: &'a str,
+    pub output_kind: &'a str,
+    pub format: &'a str,
+    pub object_key: &'a str,
+    pub content_type: &'a str,
+    pub byte_len: i64,
+    pub sha256: &'a str,
+    pub producing_job_key: Option<&'a str>,
+    pub parameter_schema_version: i64,
+    pub config_values_json: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct GeneratorArtifactFileInsert<'a> {
+    pub role: &'a str,
+    pub logical_path: &'a str,
+    pub original_path: Option<&'a str>,
+    pub object_key: &'a str,
+    pub content_type: &'a str,
+    pub byte_len: i64,
+    pub sha256: &'a str,
+    pub metadata_json: &'a str,
 }
 
 #[allow(dead_code)]
@@ -1216,6 +1244,12 @@ impl Database {
         &self,
         lookup: GeneratorArtifactLookup<'_>,
     ) -> sqlx::Result<Option<ArtifactRecord>> {
+        let identity =
+            generator_artifact_set_identity(lookup.prepared, lookup.output_kind, lookup.format)
+                .map_err(generator_identity_error)?;
+        let artifact_set_hash =
+            generator_artifact_set_hash(lookup.prepared, lookup.output_kind, lookup.format)
+                .map_err(generator_identity_error)?;
         sqlx::query(
             r#"
             SELECT artifact_sets.artifact_set_hash AS artifact_key,
@@ -1241,6 +1275,9 @@ impl Database {
               AND generator_processing_recipes.compatibility_status = 'supported'
               AND artifact_sets.artifact_set_hash = ?
               AND artifact_sets.postprocess_hash = generator_processing_recipes.processing_hash
+              AND artifact_sets.source_hash = ?
+              AND artifact_sets.config_hash = ?
+              AND artifact_sets.options_hash = ?
               AND artifact_sets.request_hash IS NULL
               AND artifact_sets.raw_payload_hash IS NULL
               AND artifact_sets.output_kind = ?
@@ -1261,8 +1298,11 @@ impl Database {
             LIMIT 1
             "#,
         )
-        .bind(lookup.processing_hash)
-        .bind(lookup.artifact_set_hash)
+        .bind(lookup.prepared.processing_hash())
+        .bind(artifact_set_hash)
+        .bind(identity.source_hash)
+        .bind(identity.config_hash)
+        .bind(identity.options_hash)
         .bind(lookup.output_kind)
         .bind(lookup.format)
         .bind(lookup.primary_role)
@@ -2284,6 +2324,82 @@ impl Database {
         artifact: ArtifactUpsert<'_>,
         files: &[ArtifactFileInsert<'_>],
     ) -> sqlx::Result<()> {
+        if artifact.generator_processing_hash.is_some() {
+            return Err(sqlx::Error::Protocol(
+                "generator artifacts must use prepared-recipe staging".to_owned(),
+            ));
+        }
+        self.stage_artifact_inner(artifact, files).await
+    }
+
+    #[allow(dead_code)]
+    pub async fn stage_generator_artifact(
+        &self,
+        prepared: &PreparedGeneratorProcessing,
+        artifact: GeneratorArtifactStage<'_>,
+        files: &[GeneratorArtifactFileInsert<'_>],
+    ) -> sqlx::Result<String> {
+        if !matches!(
+            prepared.recipe().compatibility_decision,
+            GeneratorCompatibilityDecision::Supported
+        ) {
+            return Err(sqlx::Error::Protocol(
+                "unsupported generator recipe cannot stage an artifact".to_owned(),
+            ));
+        }
+        self.insert_generator_processing_recipe(prepared).await?;
+        let identity =
+            generator_artifact_set_identity(prepared, artifact.output_kind, artifact.format)
+                .map_err(generator_identity_error)?;
+        let artifact_set_hash =
+            generator_artifact_set_hash(prepared, artifact.output_kind, artifact.format)
+                .map_err(generator_identity_error)?;
+        let staged_files: Vec<_> = files
+            .iter()
+            .map(|file| ArtifactFileInsert {
+                artifact_set_hash: &artifact_set_hash,
+                role: file.role,
+                logical_path: file.logical_path,
+                original_path: file.original_path,
+                object_key: file.object_key,
+                content_type: file.content_type,
+                byte_len: file.byte_len,
+                sha256: file.sha256,
+                metadata_json: file.metadata_json,
+            })
+            .collect();
+        self.stage_artifact_inner(
+            ArtifactUpsert {
+                artifact_key: &artifact_set_hash,
+                model_slug: artifact.model_slug,
+                config_hash: &identity.config_hash,
+                output_kind: &identity.output_kind,
+                format: &identity.format,
+                object_key: artifact.object_key,
+                content_type: artifact.content_type,
+                byte_len: artifact.byte_len,
+                sha256: artifact.sha256,
+                producing_job_key: artifact.producing_job_key,
+                source_hash: &identity.source_hash,
+                options_hash: &identity.options_hash,
+                request_hash: None,
+                raw_payload_hash: None,
+                postprocess_hash: Some(prepared.processing_hash()),
+                generator_processing_hash: Some(prepared.processing_hash()),
+                parameter_schema_version: artifact.parameter_schema_version,
+                config_values_json: artifact.config_values_json,
+            },
+            &staged_files,
+        )
+        .await?;
+        Ok(artifact_set_hash)
+    }
+
+    async fn stage_artifact_inner(
+        &self,
+        artifact: ArtifactUpsert<'_>,
+        files: &[ArtifactFileInsert<'_>],
+    ) -> sqlx::Result<()> {
         let metadata_json = serde_json::to_string(&ArtifactMetadata {
             model_slug: artifact.model_slug.to_owned(),
             producing_job_key: artifact.producing_job_key.map(ToOwned::to_owned),
@@ -2766,6 +2882,12 @@ fn artifact_set_record_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactSetReco
         superseded_by: row.get("superseded_by"),
         supersession_reason: row.get("supersession_reason"),
     }
+}
+
+fn generator_identity_error(error: anyhow::Error) -> sqlx::Error {
+    sqlx::Error::Protocol(format!(
+        "could not derive generator artifact identity: {error}"
+    ))
 }
 
 fn job_record_from_row(row: sqlx::sqlite::SqliteRow) -> JobRecord {
@@ -4105,117 +4227,281 @@ mod tests {
         );
     }
 
+    fn generator_stage(object_key: &str) -> GeneratorArtifactStage<'_> {
+        GeneratorArtifactStage {
+            model_slug: "synthetic",
+            output_kind: "slicer_project",
+            format: "project_3mf",
+            object_key,
+            content_type: "application/octet-stream",
+            byte_len: 100,
+            sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            producing_job_key: None,
+            parameter_schema_version: 2,
+            config_values_json: "{}",
+        }
+    }
+
+    fn generator_file(object_key: &str) -> GeneratorArtifactFileInsert<'_> {
+        GeneratorArtifactFileInsert {
+            role: "generated_project",
+            logical_path: "project.3mf",
+            original_path: None,
+            object_key,
+            content_type: "application/octet-stream",
+            byte_len: 100,
+            sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            metadata_json: "{}",
+        }
+    }
+
+    fn generator_lookup(prepared: &PreparedGeneratorProcessing) -> GeneratorArtifactLookup<'_> {
+        GeneratorArtifactLookup {
+            prepared,
+            output_kind: "slicer_project",
+            format: "project_3mf",
+            primary_role: "generated_project",
+            primary_logical_path: "project.3mf",
+            primary_content_type: "application/octet-stream",
+        }
+    }
+
+    async fn assert_generator_lookup_miss(db: &Database, prepared: &PreparedGeneratorProcessing) {
+        assert!(
+            db.latest_ready_artifact_for_generator_recipe(generator_lookup(prepared))
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
     #[tokio::test]
-    async fn generator_recipe_lookup_requires_complete_retained_ready_artifact() {
+    async fn generator_recipe_lookup_enforces_every_derived_artifact_identity() {
         let db = test_database().await;
-        let occurrences = synthetic_generator_occurrences();
-        db.insert_generator_processing_recipe_fields(synthetic_generator_recipe(&occurrences))
+        let prepared =
+            crate::generator_processing::tests::prepared_generator_processing(b"generator-one");
+        let object_key = "artifacts/generated/project.3mf";
+        let expected_hash =
+            generator_artifact_set_hash(&prepared, "slicer_project", "project_3mf").unwrap();
+        let free_form_error = db
+            .stage_artifact(
+                ArtifactUpsert {
+                    artifact_key: "arbitrary",
+                    model_slug: "synthetic",
+                    config_hash: "arbitrary",
+                    output_kind: "slicer_project",
+                    format: "project_3mf",
+                    object_key,
+                    content_type: "application/octet-stream",
+                    byte_len: 100,
+                    sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                    producing_job_key: None,
+                    source_hash: "arbitrary",
+                    options_hash: "arbitrary",
+                    request_hash: None,
+                    raw_payload_hash: None,
+                    postprocess_hash: Some(prepared.processing_hash()),
+                    generator_processing_hash: Some(prepared.processing_hash()),
+                    parameter_schema_version: 2,
+                    config_values_json: "{}",
+                },
+                &[],
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            free_form_error
+                .to_string()
+                .contains("prepared-recipe staging")
+        );
+
+        let staged_hash = db
+            .stage_generator_artifact(
+                &prepared,
+                generator_stage(object_key),
+                &[generator_file(object_key)],
+            )
             .await
             .unwrap();
-
-        let insert_set = |hash: &'static str,
-                          status: &'static str,
-                          object_key: &'static str|
-         -> ArtifactSetInsert<'static> {
-            ArtifactSetInsert {
-                artifact_set_hash: hash,
-                source_hash: "source-v1",
-                config_hash: "configuration-v1",
-                options_hash: "settings-v2",
-                request_hash: None,
-                raw_payload_hash: None,
-                postprocess_hash: Some("processing-hash"),
-                generator_processing_hash: Some("processing-hash"),
-                output_kind: "slicer_project",
-                format: "project_3mf",
-                status,
-                primary_object_key: Some(object_key),
-                metadata_json: r#"{"modelSlug":"synthetic"}"#,
-            }
-        };
-        let lookup =
-            |artifact_set_hash: &'static str, format: &'static str| GeneratorArtifactLookup {
-                processing_hash: "processing-hash",
-                artifact_set_hash,
-                output_kind: "slicer_project",
-                format,
-                primary_role: "generated_project",
-                primary_logical_path: "project.3mf",
-                primary_content_type: "application/octet-stream",
-            };
-
-        db.insert_artifact_set_if_absent(insert_set(
-            "staged-set",
-            "staged",
-            "artifacts/staged/project.3mf",
-        ))
-        .await
-        .unwrap();
-        db.replace_artifact_files(
-            "staged-set",
-            &[ArtifactFileInsert {
-                artifact_set_hash: "staged-set",
-                role: "generated_project",
-                logical_path: "project.3mf",
-                original_path: None,
-                object_key: "artifacts/staged/project.3mf",
-                content_type: "application/octet-stream",
-                byte_len: 99,
-                sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                metadata_json: "{}",
-            }],
-        )
-        .await
-        .unwrap();
+        assert_eq!(staged_hash, expected_hash);
         assert!(
-            db.latest_ready_artifact_for_generator_recipe(lookup("staged-set", "project_3mf"))
+            db.latest_ready_artifact_for_generator_recipe(generator_lookup(&prepared))
                 .await
                 .unwrap()
                 .is_none()
         );
-
-        db.mark_artifact_set_ready("staged-set", "artifacts/staged/project.3mf")
+        db.mark_artifact_set_ready(&staged_hash, object_key)
             .await
             .unwrap();
+        let identity =
+            generator_artifact_set_identity(&prepared, "slicer_project", "project_3mf").unwrap();
+        let hit = db
+            .latest_ready_artifact_for_generator_recipe(generator_lookup(&prepared))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(hit.artifact_key, expected_hash);
         assert_eq!(
-            db.latest_ready_artifact_for_generator_recipe(lookup("staged-set", "project_3mf"))
-                .await
-                .unwrap()
-                .unwrap()
-                .artifact_key,
-            "staged-set"
+            hit.options_hash.as_deref(),
+            Some(identity.options_hash.as_str())
         );
+
+        sqlx::query("UPDATE artifact_sets SET source_hash = 'wrong' WHERE artifact_set_hash = ?")
+            .bind(&staged_hash)
+            .execute(&db.pool)
+            .await
+            .unwrap();
         assert!(
-            db.latest_ready_artifact_for_generator_recipe(lookup("other-set", "project_3mf"))
+            db.latest_ready_artifact_for_generator_recipe(generator_lookup(&prepared))
                 .await
                 .unwrap()
                 .is_none()
         );
+        sqlx::query("UPDATE artifact_sets SET source_hash = ?, config_hash = 'wrong' WHERE artifact_set_hash = ?")
+            .bind(&identity.source_hash)
+            .bind(&staged_hash)
+            .execute(&db.pool)
+            .await
+            .unwrap();
         assert!(
-            db.latest_ready_artifact_for_generator_recipe(lookup("staged-set", "wrong-format"))
+            db.latest_ready_artifact_for_generator_recipe(generator_lookup(&prepared))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        sqlx::query("UPDATE artifact_sets SET config_hash = ?, options_hash = 'wrong' WHERE artifact_set_hash = ?")
+            .bind(&identity.config_hash)
+            .bind(&staged_hash)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        assert!(
+            db.latest_ready_artifact_for_generator_recipe(generator_lookup(&prepared))
                 .await
                 .unwrap()
                 .is_none()
         );
 
-        db.supersede_artifact_set("staged-set", Some("retained-set"), Some("replaced"))
+        sqlx::query("UPDATE artifact_sets SET options_hash = ? WHERE artifact_set_hash = ?")
+            .bind(&identity.options_hash)
+            .bind(&staged_hash)
+            .execute(&db.pool)
             .await
             .unwrap();
-        db.insert_artifact_set_if_absent(insert_set(
-            "retained-set",
-            "ready",
-            "artifacts/retained/project.3mf",
-        ))
+        sqlx::query(
+            "UPDATE artifact_sets SET postprocess_hash = 'wrong' WHERE artifact_set_hash = ?",
+        )
+        .bind(&staged_hash)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        assert_generator_lookup_miss(&db, &prepared).await;
+        sqlx::query("UPDATE artifact_sets SET postprocess_hash = ? WHERE artifact_set_hash = ?")
+            .bind(prepared.processing_hash())
+            .bind(&staged_hash)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE artifact_sets SET generator_processing_hash = NULL WHERE artifact_set_hash = ?",
+        )
+        .bind(&staged_hash)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        assert_generator_lookup_miss(&db, &prepared).await;
+        sqlx::query(
+            "UPDATE artifact_sets SET generator_processing_hash = ? WHERE artifact_set_hash = ?",
+        )
+        .bind(prepared.processing_hash())
+        .bind(&staged_hash)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        for (corrupt, restore) in [
+            (
+                "UPDATE artifact_sets SET request_hash = 'unexpected' WHERE artifact_set_hash = ?",
+                "UPDATE artifact_sets SET request_hash = NULL WHERE artifact_set_hash = ?",
+            ),
+            (
+                "UPDATE artifact_sets SET raw_payload_hash = 'unexpected' WHERE artifact_set_hash = ?",
+                "UPDATE artifact_sets SET raw_payload_hash = NULL WHERE artifact_set_hash = ?",
+            ),
+            (
+                "UPDATE artifact_sets SET output_kind = 'wrong' WHERE artifact_set_hash = ?",
+                "UPDATE artifact_sets SET output_kind = 'slicer_project' WHERE artifact_set_hash = ?",
+            ),
+            (
+                "UPDATE artifact_sets SET format = 'wrong' WHERE artifact_set_hash = ?",
+                "UPDATE artifact_sets SET format = 'project_3mf' WHERE artifact_set_hash = ?",
+            ),
+            (
+                "UPDATE artifact_sets SET primary_object_key = NULL WHERE artifact_set_hash = ?",
+                "UPDATE artifact_sets SET primary_object_key = 'artifacts/generated/project.3mf' WHERE artifact_set_hash = ?",
+            ),
+            (
+                "UPDATE artifact_files SET role = 'wrong' WHERE artifact_set_hash = ?",
+                "UPDATE artifact_files SET role = 'generated_project' WHERE artifact_set_hash = ?",
+            ),
+            (
+                "UPDATE artifact_files SET logical_path = 'wrong' WHERE artifact_set_hash = ?",
+                "UPDATE artifact_files SET logical_path = 'project.3mf' WHERE artifact_set_hash = ?",
+            ),
+            (
+                "UPDATE artifact_files SET content_type = 'wrong' WHERE artifact_set_hash = ?",
+                "UPDATE artifact_files SET content_type = 'application/octet-stream' WHERE artifact_set_hash = ?",
+            ),
+            (
+                "UPDATE artifact_files SET byte_len = 0 WHERE artifact_set_hash = ?",
+                "UPDATE artifact_files SET byte_len = 100 WHERE artifact_set_hash = ?",
+            ),
+            (
+                "UPDATE artifact_files SET sha256 = 'invalid' WHERE artifact_set_hash = ?",
+                "UPDATE artifact_files SET sha256 = 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' WHERE artifact_set_hash = ?",
+            ),
+        ] {
+            sqlx::query(corrupt)
+                .bind(&staged_hash)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+            assert_generator_lookup_miss(&db, &prepared).await;
+            sqlx::query(restore)
+                .bind(&staged_hash)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+
+        db.supersede_artifact_set(&staged_hash, None, Some("test arbitrary hash"))
+            .await
+            .unwrap();
+        db.insert_artifact_set_if_absent(ArtifactSetInsert {
+            artifact_set_hash: "arbitrary-generator-set",
+            source_hash: &identity.source_hash,
+            config_hash: &identity.config_hash,
+            options_hash: &identity.options_hash,
+            request_hash: None,
+            raw_payload_hash: None,
+            postprocess_hash: Some(prepared.processing_hash()),
+            generator_processing_hash: Some(prepared.processing_hash()),
+            output_kind: &identity.output_kind,
+            format: &identity.format,
+            status: "ready",
+            primary_object_key: Some("artifacts/generated/arbitrary.3mf"),
+            metadata_json: r#"{"modelSlug":"synthetic"}"#,
+        })
         .await
         .unwrap();
         db.replace_artifact_files(
-            "retained-set",
+            "arbitrary-generator-set",
             &[ArtifactFileInsert {
-                artifact_set_hash: "retained-set",
+                artifact_set_hash: "arbitrary-generator-set",
                 role: "generated_project",
                 logical_path: "project.3mf",
                 original_path: None,
-                object_key: "artifacts/retained/project.3mf",
+                object_key: "artifacts/generated/arbitrary.3mf",
                 content_type: "application/octet-stream",
                 byte_len: 100,
                 sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -4224,33 +4510,8 @@ mod tests {
         )
         .await
         .unwrap();
-
-        assert_eq!(
-            db.latest_ready_artifact_for_generator_recipe(lookup("retained-set", "project_3mf"))
-                .await
-                .unwrap()
-                .unwrap()
-                .artifact_key,
-            "retained-set"
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT count(*) FROM generator_processing_occurrences WHERE processing_hash = 'processing-hash'",
-            )
-            .fetch_one(&db.pool)
-            .await
-            .unwrap(),
-            2
-        );
-
-        sqlx::query(
-            "UPDATE artifact_files SET sha256 = 'invalid' WHERE artifact_set_hash = 'retained-set'",
-        )
-        .execute(&db.pool)
-        .await
-        .unwrap();
         assert!(
-            db.latest_ready_artifact_for_generator_recipe(lookup("retained-set", "project_3mf"))
+            db.latest_ready_artifact_for_generator_recipe(generator_lookup(&prepared))
                 .await
                 .unwrap()
                 .is_none()
@@ -4258,71 +4519,86 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generator_artifact_staging_cannot_rewrite_immutable_history() {
+    async fn generator_supersession_preserves_derived_immutable_history() {
         let db = test_database().await;
-        let occurrences = synthetic_generator_occurrences();
-        db.insert_generator_processing_recipe_fields(synthetic_generator_recipe(&occurrences))
+        let first =
+            crate::generator_processing::tests::prepared_generator_processing(b"generator-one");
+        let second =
+            crate::generator_processing::tests::prepared_generator_processing(b"generator-two");
+        let first_key = "artifacts/generated/first.3mf";
+        let second_key = "artifacts/generated/second.3mf";
+        let first_hash = db
+            .stage_generator_artifact(
+                &first,
+                generator_stage(first_key),
+                &[generator_file(first_key)],
+            )
             .await
             .unwrap();
-        let artifact = ArtifactUpsert {
-            artifact_key: "generator-set",
-            model_slug: "synthetic",
-            config_hash: "configuration-v1",
-            output_kind: "slicer_project",
-            format: "project_3mf",
-            object_key: "artifacts/generator-set/project.3mf",
-            content_type: "application/octet-stream",
-            byte_len: 100,
-            sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-            producing_job_key: None,
-            source_hash: "source-v1",
-            options_hash: "settings-v2",
-            request_hash: None,
-            raw_payload_hash: None,
-            postprocess_hash: Some("processing-hash"),
-            generator_processing_hash: Some("processing-hash"),
-            parameter_schema_version: 2,
-            config_values_json: "{}",
-        };
-        let file = ArtifactFileInsert {
-            artifact_set_hash: "generator-set",
-            role: "generated_project",
-            logical_path: "project.3mf",
-            original_path: None,
-            object_key: "artifacts/generator-set/project.3mf",
-            content_type: "application/octet-stream",
-            byte_len: 100,
-            sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-            metadata_json: "{}",
-        };
-
-        db.stage_artifact(artifact, &[file]).await.unwrap();
-        db.supersede_artifact_set("generator-set", None, Some("synthetic replacement"))
+        let second_hash = db
+            .stage_generator_artifact(
+                &second,
+                generator_stage(second_key),
+                &[generator_file(second_key)],
+            )
             .await
             .unwrap();
-        let error = db.stage_artifact(artifact, &[file]).await.unwrap_err();
+        db.mark_artifact_set_ready(&first_hash, first_key)
+            .await
+            .unwrap();
+        db.mark_artifact_set_ready(&second_hash, second_key)
+            .await
+            .unwrap();
+        let identity =
+            generator_artifact_set_identity(&second, "slicer_project", "project_3mf").unwrap();
+        assert_eq!(
+            db.supersede_ready_artifacts_for_output(
+                &identity.source_hash,
+                &identity.config_hash,
+                &identity.options_hash,
+                &identity.output_kind,
+                &second_hash,
+                Some("replaced"),
+            )
+            .await
+            .unwrap(),
+            1
+        );
 
+        assert!(
+            db.latest_ready_artifact_for_generator_recipe(generator_lookup(&first))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            db.latest_ready_artifact_for_generator_recipe(generator_lookup(&second))
+                .await
+                .unwrap()
+                .unwrap()
+                .artifact_key,
+            second_hash
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM generator_processing_recipes")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap(),
+            2
+        );
+
+        let error = db
+            .stage_generator_artifact(
+                &first,
+                generator_stage(first_key),
+                &[generator_file(first_key)],
+            )
+            .await
+            .unwrap_err();
         assert!(
             error
                 .to_string()
                 .contains("immutable generator artifact conflict")
-        );
-        assert_eq!(
-            db.artifact_set("generator-set")
-                .await
-                .unwrap()
-                .unwrap()
-                .status,
-            "superseded"
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT count(*) FROM artifact_files WHERE artifact_set_hash = 'generator-set'",
-            )
-            .fetch_one(&db.pool)
-            .await
-            .unwrap(),
-            1
         );
     }
 
