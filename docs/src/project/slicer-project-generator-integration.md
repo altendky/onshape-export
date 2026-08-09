@@ -12,9 +12,10 @@ for licensing conclusions.
 ## Authority And Ownership
 
 This MIT OR Apache-2.0 repository owns the source-neutral generator protocol and
-schemas, approved-generator manifest, trusted external CLI invocation,
-independent output validation and hashing, cache, generated-artifact publication
-and revocation, and interface, distribution, and deployment review.
+schemas, one static deployed-generator configuration, trusted external CLI
+invocation, source-neutral result and candidate-byte verification, cache,
+generated-artifact publication and revocation, and interface, distribution, and
+deployment review.
 
 The canonical target-side project is
 [`slicer-project-generators`](https://github.com/altendky/slicer-project-generators).
@@ -51,32 +52,36 @@ The normative
 [Neutral Generator Settings V2](neutral-generator-settings-v2.md) defines only
 its closed document, normalization, identity, and pure validation contracts.
 
-## Approved-Generator Manifest
+## Static Deployed Generator
 
-The service must select generators only through a reviewed, service-owned
-approved-generator manifest. Each entry must bind at least:
+The service uses exactly one reviewed, service-owned
+[deployed-generator configuration](deployed-generator.md). The closed document
+binds:
 
 - Exact immutable generator package bytes and cryptographic hash.
-- Generator repository and immutable release identity.
 - Protocol version and generator binary identity.
-- Slicer dialect and dialect revision.
+- Opaque slicer dialect identity.
 - Immutable provenance-set identity.
 - Approved capability identifiers and revisions.
 - Approved geometry-input kinds and schema versions.
-- Validation, normalization, and compatibility policy identities, including
-  exact approved target-side validation inputs or tools when required.
-- Service approval record, date, and review status.
+- Generator-owned final validation and normalization identities.
 
-Invocation-specific candidate output hashes do not belong in this manifest.
+Invocation-specific settings identity and candidate output hashes do not belong
+in this document.
 Self-reported generator metadata is evidence to compare, not authorization.
-Mutable tags, channels, package names, or filesystem paths are insufficient
-identities.
+The executable path is operational and excluded from immutable identity. Mutable
+tags, channels, package names, or filesystem paths are insufficient identities.
+
+An absent configuration makes generator output unavailable. A specified invalid
+document or executable is a configured-process startup failure. There is no
+registry, ranking, fallback, discovery, acquisition, approval history,
+revocation state, or rollback state in this document.
 
 ## Service Approval Gates
 
 Approval applies to exact released package bytes. Rebuilding, repackaging, or
-changing any byte requires a new package identity and service review. Before an
-entry becomes selectable, the service review must verify:
+changing any byte requires a new package identity and service review. Before the
+static binding is deployed, the service review must verify:
 
 - The exact package and release identities and their cryptographic hashes.
 - The immutable provenance-set identity and generator release record.
@@ -85,37 +90,37 @@ entry becomes selectable, the service review must verify:
 - The source-neutral interface and absence of target-derived facts in service
   code and schemas.
 - Trusted CLI and deployment configuration for the exact package.
-- Independent validation, hashing, compatibility, and output-limit results.
-- Cache, publication, rollback, and revocation behavior.
+- Generator-owned final self-validation, source-neutral candidate hashing,
+  compatibility, and output-limit behavior.
+- Cache and publication behavior.
 
 Unknown, disputed, provisional, incomplete, or inconsistent records block
-service approval, selectability, deployment, capability advertisement, and
+service approval, deployment, capability advertisement, and
 publication. Do not invent an identity, release, hash, record, result, or review
 to satisfy a gate.
 
 ## Runtime And Validation
 
-Invoke the exact approved generator CLI directly at its fixed configured path,
+Invoke the exact configured generator CLI directly at its fixed path,
 without a shell, using the declared file-backed request, input, result, and
 output protocol. Handle success, structured failure, process crash, unexpected
 exit, and missing or malformed results as ordinary runner outcomes.
 
-The approved generator CLI is trusted to the same degree as the service's own
+The configured generator CLI is trusted to the same degree as the service's own
 code. The external-process boundary preserves repository ownership,
 source-ingress restrictions, provenance, release, distribution, and license
 responsibilities and defines a source-neutral interface; it is not a runtime
 security boundary. The service does not require sandboxing, containment,
 hostile-code defenses, credential stripping, network or filesystem isolation,
-or process resource limits for an approved generator CLI.
+or process resource limits for a configured trusted generator CLI.
 
-CLI trust does not make a result sufficient for publication. The service must
-independently:
+CLI trust does not make a result sufficient for publication. The service must:
 
 - Recompute the exact candidate artifact hash.
-- Match reported package, protocol, dialect, provenance, and capability
-  identities to the approved-generator manifest.
-- Enforce safe archive paths, member and expanded-size limits, and publication
-  policy.
+- Match reported package, protocol, dialect, provenance, capability,
+  normalization, and validation identities to the configured expected bindings.
+- Verify declared candidate existence, measured length and SHA-256, upload,
+  storage, and publication policy.
 - Reject missing, extra, malformed, incompatible, or unsupported output rather
   than silently substituting another dialect or raw Onshape geometry.
 
@@ -123,16 +128,12 @@ The CLI produces candidate files only. The service, not the CLI, owns private
 staging and publication and publishes only independently accepted bytes rather
 than forwarding a generator-created path.
 
-The service owns the validation policy, orchestration, and publication decision,
-not target-derived validation facts. Local code may perform source-neutral
-protocol, identity, archive-safety, output-limit, and hash validation. Any
-target-aware structure, dialect, or compatibility check must consume an exact,
-separately approved target-side validation input or tool released from
-`slicer-project-generators`; its identity belongs in the approved-generator
-manifest and processing recipe. Do not copy its target schemas or fixtures into
-this repository. The packaging and execution boundary for such validation are
-unsettled. Until an independent target-aware check required by publication
-policy exists, publication remains blocked.
+The service owns source-neutral protocol, identity, candidate-byte,
+orchestration, and publication checks, not target-derived validation facts. The
+generator owns final target-aware self-validation and reports its exact immutable
+`validationIdentity`. Do not copy target schemas, validators, fixtures, or
+evidence into this repository, and do not add a second service-side target
+validator.
 
 Expected neutral placement derivation and source/path proof are owned by
 [#173](https://github.com/altendky/onshape-export/issues/173). Manifest-order
@@ -155,16 +156,18 @@ the processing and artifact recipe described by the
 [Forward-Looking Cache Model](cache-model.md). Published artifact bytes are
 immutable in normal operation.
 
-Approval is mutable service policy, not artifact identity. Recheck manifest
-authorization before cached reuse or publication. Revoking an entry must stop
-new selection and publication, identify affected generated artifacts, and
-supersede or withdraw them according to the recorded reason and applicable
-legal, safety, or operational requirements. An unchanged exact binding may keep
-its existing artifact identity when unrelated manifest entries change.
+The static deployed-generator identity is immutable processing input, while the
+decision to deploy or remove its configuration is operational policy. Changing
+any immutable configured field creates a different static identity. Removing
+configuration stops new generator work. The v1 document itself defines no
+lifecycle, revocation, or rollback state.
 
-Rollback selects previously retained, still-approved exact generator and
-artifact bytes. It must not rebuild a release or mutate published objects in
-place.
+Service approval and publication policy remain mutable outside that document.
+Before cached reuse or publication, confirm that the exact static binding remains
+approved. Revoking approval must stop new work and publication, identify affected
+artifacts, and explicitly supersede or withdraw them according to the recorded
+reason and applicable legal, safety, or operational requirements. Revocation
+does not mutate an artifact's immutable identity or bytes.
 
 ## Approval And Publication Sequence
 
@@ -173,14 +176,14 @@ place.
 2. The service acquires and hashes those exact bytes without rebuilding them.
 3. The service completes interface, distribution, trusted CLI, validation,
    cache, deployment, and publication review for that exact package identity.
-4. The service records the approved immutable identities in the
-   approved-generator manifest and may make the generator selectable.
+4. Deployment installs those exact bytes and writes the one closed static
+   deployed-generator document.
 5. A trusted external CLI invocation produces a private candidate project
    artifact.
 6. The service independently validates and hashes the candidate, records its
    complete recipe, and only then publishes the exact validated artifact bytes.
-7. Revocation or changed approval prevents further selection or publication and
-   triggers cache and artifact re-evaluation.
+7. Removing or replacing deployment configuration affects future work without
+   mutating existing immutable artifact bytes.
 
-Generator package release, service approval/selectability, and generated
+Generator package release, service deployment approval, and generated
 artifact publication are three separate decisions.

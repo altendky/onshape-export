@@ -1,8 +1,8 @@
 # Slicer Project Generators
 
-> **Status: Proposed integration, not implemented.** The neutral protocol is a
-> settled v1 contract; invocation flags, compatibility windows, and installation
-> details remain unsettled.
+> **Status: Proposed integration, partially implemented.** The neutral protocol,
+> settings v2, and one static deployed-generator configuration are settled;
+> invocation, processing, publication, and real deployment remain incomplete.
 
 ## Terminology
 
@@ -42,14 +42,14 @@ Onshape API -> retained raw geometry -> neutral generator input
                             artifact publication
 ```
 
-The approved generator CLI is trusted to the same degree as the service's own
+The configured generator CLI is trusted to the same degree as the service's own
 code. The process boundary preserves repository ownership, source-ingress
 restrictions, provenance, release, distribution, and license responsibilities;
 it also defines a source-neutral interface and is not a runtime security
 boundary. A generator result does not authorize publication until the service
-validates source-neutral archive and identity requirements and completes any
-required target-aware check through separately approved target-side validation
-inputs or tools.
+verifies source-neutral protocol identities and independently measures the
+declared candidate bytes. Final target-aware self-validation belongs to the
+generator.
 
 The proposed generator responsibilities are:
 
@@ -64,11 +64,14 @@ The proposed generator responsibilities are:
 The service would be responsible for:
 
 - Preparing the geometry input and canonical request.
-- Selecting a compatible generator exclusively through a reviewed service-owned
-  approved-generator manifest; declared capabilities are verification evidence,
-  not authorization.
-- Verifying generator package/build identity, protocol, dialect, provenance, and capability metadata against a service-owned approved-generator manifest rather than trusting self-reported identity alone.
-- Enforcing output-size and generic archive limits before publication.
+- Loading exactly one reviewed static
+  [deployed-generator configuration](deployed-generator.md); declared
+  capabilities are verification evidence, not authorization.
+- Verifying generator package/build/binary identity, protocol, dialect,
+  provenance, and capability metadata against that static binding rather than
+  trusting self-reported identity alone.
+- Enforcing source-neutral protocol and declared output limits before
+  publication.
 - Independently hashing the candidate output and comparing it with the generator's validation report before publication.
 - Recording the complete recipe in cache and artifact metadata.
 
@@ -88,7 +91,7 @@ belong in that repository under its pinned normative
 [Slicer Project Generator Provenance Policy](https://github.com/altendky/slicer-project-generators/blob/ced6585d5a8e1a47690e7eabdf92beaa7fea7fc4/docs/src/project/slicer-project-generator-provenance.md).
 Package layout, binary names, and target-derived implementation facts remain
 owned there. The service records only reviewed immutable package and binary
-identities in its approved-generator manifest. Shared implementation must not
+identities and digests in its static deployed-generator document. Shared implementation must not
 blur capability, dialect, or provenance records.
 
 Each dialect produces a separate immutable artifact.
@@ -119,9 +122,9 @@ by protocol v1. Exact process flags and runner implementation remain open.
 
 ## Capabilities And Versioning
 
-Generators may expose machine-readable capabilities for comparison before work
-is scheduled, but only an exact reviewed approved-generator manifest entry
-authorizes selection.
+Generators may expose machine-readable capabilities as release evidence, but
+runtime compatibility uses only the exact reviewed static deployed-generator
+binding.
 Capabilities should use granular, revisioned identities rather than one broad
 format-support flag.
 The target repository owns capability identifiers, revisions, and evidence. The
@@ -154,8 +157,10 @@ the characterization rules may populate that ordered input set. As of the
 controlled selected-object follow-ups, no profile satisfies the required Part
 Studio and complete Assembly occurrence-path contract, so production multi-object
 dispatch remains unavailable.
-A service-owned approved-generator manifest must bind the allowed package/build identity to its approved protocol, dialect, provenance set, and capabilities.
-Candidate output hashes are independently computed per invocation and do not belong in the approved-generator manifest.
+The service-owned static deployed-generator identity binds package and binary
+digests plus approved protocol, dialect, provenance, capabilities, input/schema,
+normalization, and validation identities. Invocation settings and candidate
+output hashes remain separate.
 
 Changing any output-affecting identity creates a new candidate artifact and may supersede the active artifact.
 It must not overwrite a published object.
@@ -184,7 +189,7 @@ A process exit code or successful ZIP parse alone is insufficient.
 
 ## Trusted CLI Execution
 
-The service directly invokes only exact approved generator CLI package bytes at
+The service directly invokes only exact statically configured trusted generator CLI bytes at
 a fixed configured path and does not use a shell. The CLI exchanges declared
 request, input, result, and output files through the neutral protocol. Ordinary
 runner behavior handles success, structured failure, process crash, unexpected
@@ -206,13 +211,15 @@ Generator release and service publication are separate gates:
 2. The service acquires and hashes those exact bytes without rebuilding them.
 3. The service reviews the interface, distribution, trusted CLI, validation,
    deployment, cache, and publication behavior for the exact package identity.
-4. The service adds an approved immutable binding to its approved-generator
-   manifest and may make that package selectable.
+4. Deployment installs those exact bytes and writes the one closed static
+   deployed-generator document.
 5. A trusted external CLI invocation produces a private candidate project 3MF.
 6. The service independently validates and hashes the candidate and publishes
    only those exact validated artifact bytes.
 
-Rollback should select a previously retained, still-approved generator and artifact set, not mutate already published bytes.
+Replacing or removing the static deployment affects future work and does not
+mutate already published bytes. The v1 configuration defines no rollback or
+revocation lifecycle.
 
 ## Related Policy And Questions
 
