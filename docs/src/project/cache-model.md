@@ -141,8 +141,14 @@ Include:
 - hidden-entity policy
 - selected part IDs or assembly occurrences when supported
 - option schema version
-- for proposed slicer project 3MF, requested slicer dialect, capability
-  revisions, and canonical project settings
+- for slicer project 3MF, requested slicer dialect, ordered capability
+  revisions, canonical settings identity, and settings-schema identity
+
+The implemented generator `optionsHash` uses the `generator-project-v1` options
+schema and output format with exactly those dialect, capability, and settings
+fields. Static package/build/binary, provenance, normalization, and validation
+identities stay in `processingHash`; changing them changes artifact identity
+without misclassifying deployment processing as logical export intent.
 
 Do not include:
 
@@ -201,18 +207,27 @@ Include:
 - image/buffer transformation policy
 - safe-path policy for extracted entries
 
-For slicer project 3MF generation, include the static deployed-generator
-identity defined by the [deployed-generator configuration](deployed-generator.md),
-the invocation-specific settings identity, the complete ordered protocol-v1
-manifest and input-set identities, and all other processing inputs. The static
-identity includes package and binary digests plus every static protocol,
-dialect, capability, input/schema, settings-schema, provenance, normalization,
-and validation identity while excluding `executablePath`.
+For slicer project 3MF generation, `generator-processing-recipe-v1` is the
+implemented post-processing recipe. It contains the recipe version, static
+deployed-generator identity defined by the
+[deployed-generator configuration](deployed-generator.md), exact requested
+compatibility tuple and supported/unsupported decision identity, complete
+validated protocol-v1 input manifest, normalized settings-v2 document,
+invocation-specific settings identity, and settings-schema identity. Its
+validated protocol-v1 invocation also binds manifest and settings staged paths,
+canonical settings content identity/SHA-256/length/type, invocation identity,
+and the output identity, role, path, media type, and maximum length. Its
+`processingHash` is RFC 8785/JCS JSON hashed under the
+`generator-processing-recipe-v1` domain. The static identity transitively binds
+package and binary digests plus every static protocol, dialect, capability,
+input/schema, settings-schema, provenance, normalization, and validation
+identity while excluding `executablePath`.
 
 Equal retained raw bytes may be reused, but distinct logical occurrences retain
-distinct manifest object identities, staged paths, placement, names, roles,
-order, and provenance. These are proposed requirements for the later processing
-identity integration, not current database schema fields.
+distinct occurrence identities, manifest object identities, staged paths,
+placement, names, roles, order, mapping, and provenance. The database persists
+these ordered occurrence records separately from content identity, so repeated
+SHA-256 and length values do not collapse logical occurrences.
 
 When this hash changes, derived viewer artifacts should be regenerated from retained raw payloads. Onshape should not be called unless the raw payload is missing.
 
@@ -226,12 +241,18 @@ Hash:
 - `sourceHash`
 - `configHash`
 - `optionsHash`
-- `requestHash`
-- `rawPayloadHash`
+- singular `requestHash` and `rawPayloadHash` when the artifact has one such
+  acquisition identity
 - `postprocessHash`
+- `generatorProcessingHash` for generator output
 - artifact-set schema version
 
-The artifact set, not the individual primary file, is the unit of readiness and supersession.
+Generator output omits singular request/raw-payload fields, uses its exact
+`processingHash` as both `postprocessHash` and `generatorProcessingHash`, and
+therefore binds the complete multi-input recipe into the artifact-set identity.
+Existing preview and download identities retain their prior serialized shape
+and hashes. The artifact set, not the individual primary file, is the unit of
+readiness and supersession.
 
 ## Onshape Defaults
 
@@ -398,8 +419,8 @@ Suggested artifact-set shape:
 }
 ```
 
-For single-file STEP, STL, raw Onshape geometry 3MF, or future
-dialect-qualified slicer project 3MF outputs, the artifact set still has one
+For single-file STEP, STL, raw Onshape geometry 3MF, or dialect-qualified slicer
+project 3MF outputs, the artifact set still has one
 primary file. Keeping the same shape avoids special cases and allows future
 sidecars such as validation reports.
 
@@ -506,6 +527,27 @@ Recovery rules:
 
 Initial tables can be added alongside the current `jobs` and `artifacts` tables.
 
+The implemented generator integration adds immutable
+`generator_processing_recipes` rows keyed by `processing_hash` and exact
+canonical `recipe_json`. `generator_processing_occurrences` stores one row per
+ordered logical occurrence with a unique occurrence identity, order, object and
+content identities, byte SHA-256/length, staged path, role, display name,
+mapping/provenance JSON, and placement JSON. Repeated content hashes are
+permitted. `artifact_sets.generator_processing_hash` links generated artifacts
+to the recipe and is indexed with `postprocess_hash`, output kind, format, and
+status.
+
+Recipe and occurrence insertion is one transaction. Repeating an exact insert
+is idempotent; reusing a processing or occurrence identity with different
+immutable evidence is an integrity error. Exact cache lookup joins a known
+supported recipe to an artifact set and its primary file. A hit requires equal
+derived artifact-set, generator, and post-process hashes; absent singular
+request/raw-payload identities; requested output kind and format; `ready`
+status; no supersession markers; a nonempty primary object key; and exact
+primary role/path/type with positive length and lowercase SHA-256 metadata.
+Generator-linked artifact rows and file evidence cannot be restaged under an
+existing artifact-set identity.
+
 ```sql
 CREATE TABLE export_requests (
     request_hash TEXT PRIMARY KEY,
@@ -574,9 +616,10 @@ CREATE TABLE artifact_sets (
     source_hash TEXT NOT NULL,
     config_hash TEXT NOT NULL,
     options_hash TEXT NOT NULL,
-    request_hash TEXT NOT NULL,
+    request_hash TEXT,
     raw_payload_hash TEXT,
     postprocess_hash TEXT,
+    generator_processing_hash TEXT,
     status TEXT NOT NULL,
     primary_file_id INTEGER,
     created_at TEXT NOT NULL,

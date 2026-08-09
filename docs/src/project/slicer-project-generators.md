@@ -1,8 +1,11 @@
 # Slicer Project Generators
 
-> **Status: Proposed integration, partially implemented.** The neutral protocol,
-> settings v2, and one static deployed-generator configuration are settled;
-> invocation, processing, publication, and real deployment remain incomplete.
+> **Status: Partially implemented.** The neutral protocol, settings v2, static
+> deployed-generator identity, pure processing recipe, ordered-occurrence
+> persistence, and exact cache-lookup contracts are implemented. Production
+> geometry dispatch and orchestration, CLI runner execution, candidate
+> upload/readiness verification, publication, and real deployment remain
+> unavailable.
 
 ## Terminology
 
@@ -147,16 +150,27 @@ A service may be able to invoke a generator while refusing a requested capabilit
 
 ## Cache Identity
 
-Project-3MF post-processing identity must include the generator build or immutable package identity, protocol version, dialect revision, provenance-set version, exercised capability revisions, geometry-input media type and kind, neutral-IR or input-schema version, relevant parser identity/version, parser-normalization identity/version, and validation policy/tool versions.
-Requested dialect, requested capabilities, and canonical project settings are logical export-option identity.
-The current single retained geometry input remains bound through the existing raw-payload/content identity, not a duplicate content hash inside processing-recipe or policy identity.
-If a future invocation accepts multiple input blobs, it must use a separate explicit input-set or invocation identity rather than placing their hashes in processing policy.
-A multi-blob invocation must not infer source-object identity from archive order,
-filenames, display names, or result-array position. Only mappings proven under
-the characterization rules may populate that ordered input set. As of the
-controlled selected-object follow-ups, no profile satisfies the required Part
-Studio and complete Assembly occurrence-path contract, so production multi-object
-dispatch remains unavailable.
+`generator-processing-recipe-v1` canonically binds the static deployed-generator
+identity, requested compatibility and decision, complete validated ordered
+protocol manifest, normalized settings, settings identities, and validated
+invocation/output declaration. Retained bytes are represented through ordered
+logical occurrences and their explicit input-set identity; content hashes are
+not duplicated as separate policy fields.
+
+Generator `optionsHash` identifies logical project-export intent from the output
+format, requested dialect, ordered capability revisions, canonical settings
+identity, and settings-schema identity. Package/build/binary, provenance,
+normalization, and validation identities remain processing identity rather than
+logical options.
+
+The recipe contract can represent multiple retained inputs, but production
+construction and dispatch of such manifests remain unavailable. They must not
+infer source-object identity from archive order, filenames, display names, or
+result-array position. Only mappings proven under the characterization rules may
+populate that ordered input set. As of the controlled selected-object
+follow-ups, no profile satisfies the required Part Studio and complete Assembly
+occurrence-path contract, so production multi-object dispatch remains
+unavailable.
 The service-owned static deployed-generator identity binds package and binary
 digests plus approved protocol, dialect, provenance, capabilities, input/schema,
 normalization, and validation identities. Invocation settings and candidate
@@ -177,9 +191,11 @@ The desired determinism level is unresolved. The prototype must distinguish:
 Until the projects choose a level, generators should remove controllable nondeterminism, report unavoidable sources, and preserve enough inputs and versions to reproduce or diagnose a build.
 Normalization must not conceal a semantic change.
 
-Before publication, service validation follows the normative
-[integration policy](slicer-project-generator-integration.md), including neutral
-protocol consistency and independent candidate hashing. Generator raw-input
+Before any future generator-artifact publication, service validation must follow
+the normative [integration policy](slicer-project-generator-integration.md),
+including neutral protocol consistency and independent candidate hashing.
+Runtime candidate staging, validation, upload/readiness verification, and
+publication are not implemented here. Generator raw-input
 bounds and final target-aware self-validation are owned by
 [`slicer-project-generators#8`](https://github.com/altendky/slicer-project-generators/issues/8)
 and
@@ -189,17 +205,18 @@ A process exit code or successful ZIP parse alone is insufficient.
 
 ## Trusted CLI Execution
 
-The service directly invokes only exact statically configured trusted generator CLI bytes at
-a fixed configured path and does not use a shell. The CLI exchanges declared
-request, input, result, and output files through the neutral protocol. Ordinary
-runner behavior handles success, structured failure, process crash, unexpected
+A production trusted-CLI runner is not implemented. When added, it must invoke
+only exact statically configured trusted generator CLI bytes at a fixed
+configured path and must not use a shell. The CLI will exchange declared request,
+input, result, and output files through the neutral protocol. Ordinary runner
+behavior must handle success, structured failure, process crash, unexpected
 exit, and missing or malformed results.
 
 No runtime sandbox or containment mechanism is required. The approved CLI may
 run with the same ambient runtime access as the service because it is trusted to
 the same degree as service code. Independent result validation remains a
-publication-integrity gate, not a hostile-code boundary. The service stages and
-publishes independently accepted bytes rather than forwarding a
+publication-integrity gate, not a hostile-code boundary. The future runtime must
+stage and publish independently accepted bytes rather than forwarding a
 generator-created path.
 
 ## Upgrade Overview
