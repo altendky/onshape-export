@@ -2,8 +2,10 @@
 
 > **Status: Normative.** This is the service-side policy for integrating,
 > approving, running, and publishing output from slicer project generators.
-> The neutral protocol is defined, but generator execution and the remaining
-> integration architecture are not implemented here.
+> The neutral protocol, static deployment identity, pure processing recipe,
+> immutable recipe/occurrence persistence, and exact ready-cache lookup are
+> implemented. Runtime orchestration, CLI execution, and upload/readiness
+> verification remain separate work.
 
 This policy does not provide legal advice. Repository or process separation does
 not itself decide whether licenses are compatible; qualified review is required
@@ -150,11 +152,34 @@ sufficient for publication.
 
 ## Cache, Publication, And Revocation
 
-Keep exact generator package identity, protocol, dialect, provenance set,
-exercised capabilities, input identity, normalization, and validation policy in
-the processing and artifact recipe described by the
-[Forward-Looking Cache Model](cache-model.md). Published artifact bytes are
-immutable in normal operation.
+The service computes the source-neutral `generator-processing-recipe-v1` from
+the exact static deployed-generator identity, requested compatibility and
+unsupported-case decision, complete validated ordered protocol-v1 manifest,
+normalized settings-v2 document, settings identity, and settings-schema
+identity. The recipe also contains the validated protocol invocation, including
+manifest/settings staging declarations, canonical settings content metadata,
+invocation identity, and complete output declaration. The canonical recipe hash
+is both the generator processing identity and the post-process component of the
+generated artifact-set identity. Singular request/raw-payload artifact identity
+fields are omitted because one generator recipe may contain multiple retained
+inputs.
+
+Persist the exact canonical recipe JSON and its ordered logical occurrence
+records before reuse. Each occurrence retains object/content identity,
+SHA-256/length, staged path, transport role, display name, mapping/provenance,
+and placement. Equal bytes may share retained content, but occurrence identity,
+order, path, and semantic evidence never collapse.
+
+Exact cache reuse requires a known supported recipe, the exact derived linked
+artifact-set identity with equal generator and post-process identities, absent
+singular acquisition identities, no supersession markers, and an exact complete
+primary-file record. Generator-linked artifact sets cannot be restaged under an
+existing identity. Supersession changes selection but preserves immutable
+recipe, occurrence, artifact-set, and file history. These
+implemented persistence and lookup rules do not perform mutable approval checks,
+runtime orchestration, runner behavior, upload verification, or target-aware
+validation; those remain their separately owned gates. Published artifact bytes
+are immutable in normal operation.
 
 The static deployed-generator identity is immutable processing input, while the
 decision to deploy or remove its configuration is operational policy. Changing

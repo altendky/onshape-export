@@ -4,6 +4,7 @@ mod catalog;
 mod config;
 mod db;
 pub mod deployed_generator;
+pub mod generator_processing;
 pub mod generator_protocol;
 mod onshape;
 pub mod onshape_annotation;
@@ -3684,6 +3685,7 @@ async fn refresh_preview(
                 request_hash: Some(&prepared.request_hash),
                 raw_payload_hash: Some(&raw_payload.raw_payload_hash),
                 postprocess_hash: Some(&preview_artifact.postprocess_hash),
+                generator_processing_hash: None,
                 parameter_schema_version: SCHEMA_VERSION.into(),
                 config_values_json: &config_values_json,
             },
@@ -4174,6 +4176,7 @@ async fn refresh_download(
                 request_hash: Some(&prepared.request_hash),
                 raw_payload_hash: Some(&raw_payload.raw_payload_hash),
                 postprocess_hash: Some(&download_artifact.postprocess_hash),
+                generator_processing_hash: None,
                 parameter_schema_version: SCHEMA_VERSION.into(),
                 config_values_json: &config_values_json,
             },
@@ -4830,9 +4833,10 @@ fn preview_artifact_key(
         source_hash: source_hash.to_owned(),
         config_hash: config_hash.to_owned(),
         options_hash: options_hash.to_owned(),
-        request_hash: request_hash.to_owned(),
-        raw_payload_hash: raw_payload_hash.to_owned(),
+        request_hash: Some(request_hash.to_owned()),
+        raw_payload_hash: Some(raw_payload_hash.to_owned()),
         postprocess_hash: postprocess_hash.to_owned(),
+        generator_processing_hash: None,
     })
 }
 
@@ -4861,9 +4865,10 @@ fn download_artifact_key(
         source_hash: source_hash.to_owned(),
         config_hash: config_hash.to_owned(),
         options_hash: options_hash.to_owned(),
-        request_hash: request_hash.to_owned(),
-        raw_payload_hash: raw_payload_hash.to_owned(),
+        request_hash: Some(request_hash.to_owned()),
+        raw_payload_hash: Some(raw_payload_hash.to_owned()),
         postprocess_hash: postprocess_hash.to_owned(),
+        generator_processing_hash: None,
     })
 }
 
@@ -6103,6 +6108,7 @@ mod tests {
                 request_hash: Some("requesthash".to_owned()),
                 raw_payload_hash: Some("rawhash".to_owned()),
                 postprocess_hash: Some("posthash".to_owned()),
+                generator_processing_hash: None,
                 output_kind: "preview_glb".to_owned(),
                 format: "glb".to_owned(),
                 status: "upload_failed".to_owned(),
@@ -6358,6 +6364,7 @@ mod tests {
                 request_hash: Some("old-requesthash"),
                 raw_payload_hash: Some("rawhash-old"),
                 postprocess_hash: Some("posthash-old"),
+                generator_processing_hash: None,
                 parameter_schema_version: SCHEMA_VERSION.into(),
                 config_values_json: "{}",
             })
@@ -6449,6 +6456,7 @@ mod tests {
                 request_hash: Some("requesthash"),
                 raw_payload_hash: Some("rawhash"),
                 postprocess_hash: Some("posthash"),
+                generator_processing_hash: None,
                 parameter_schema_version: SCHEMA_VERSION.into(),
                 config_values_json: "{}",
             })
