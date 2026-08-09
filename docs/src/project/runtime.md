@@ -32,25 +32,24 @@ Rationale:
 
 TODO: add tests that mocked slow Onshape calls do not hold SQLite write locks and that duplicate requests still deduplicate through short job-row transactions.
 
-## Proposed Slicer Generator Runtime
+## Slicer Generator Runtime
 
-Slicer project generators are proposed and not implemented. A future runtime
-would consider only explicitly configured generator executables or immutable
-packages already authorized by an exact reviewed service-owned
-approved-generator manifest entry. It would inspect protocol and capability
-metadata only to verify that approved binding; discovery or self-reporting never
-authorizes selection.
-Discovery must not search arbitrary writable paths or download generators during a
-job. Configuration and installation details remain open.
+The [deployed-generator configuration](deployed-generator.md) defines exactly
+one statically deployed trusted executable. `serve` and `worker` load only the
+file named by `TRUSTED_GENERATOR_CONFIG_PATH` and validate its closed document,
+executable file, Linux mode, and startup digest. They do not use defaults,
+search, discovery, substitution, or job-time downloads. Maintenance commands
+may run without generator configuration.
 
-If a generator is absent, incompatible, unreviewed, or missing a requested
-capability, the job should fail with a stable unsupported/unavailable result. It
+If the configuration is absent, generator output is unavailable without making
+service startup fail. A specified invalid configuration is a startup failure.
+An incompatible request receives a stable unsupported result. It
 must not silently substitute another slicer dialect, omit settings, or fall back
 to an Onshape geometry 3MF while labeling it as a slicer project.
 
-Execution should directly invoke the exact approved CLI at a fixed configured
-path without a shell and exchange declared request, input, result, and output
-files through the neutral protocol. The approved CLI is trusted like service
+The later runner directly invokes the exact trusted CLI at its fixed configured
+path without a shell and exchanges declared request, input, result, and output
+files through the neutral protocol. The configured CLI is trusted like service
 code; no runtime sandbox, credential stripping, network or filesystem isolation,
 or process resource limits are required. The process boundary preserves
 repository, source-ingress, provenance, release, distribution, and license

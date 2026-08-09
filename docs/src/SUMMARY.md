@@ -16,6 +16,7 @@
 - [Onshape Annotation And Generator Settings Convention](project/onshape-annotation-convention.md)
 - [Neutral Generator Settings V2](project/neutral-generator-settings-v2.md)
 - [Neutral Generator Protocol](project/neutral-generator-protocol.md)
+- [Deployed Generator Configuration](project/deployed-generator.md)
 - [Slicer Project Generators](project/slicer-project-generators.md)
 - [Slicer Project Generator Integration Policy](project/slicer-project-generator-integration.md)
 - [Frontend and Preview](project/frontend-preview.md)

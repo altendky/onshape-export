@@ -201,20 +201,18 @@ Include:
 - image/buffer transformation policy
 - safe-path policy for extracted entries
 
-For proposed slicer project 3MF generation, also include the immutable generator
-build or package identity, CLI protocol version, slicer dialect and dialect
-revision, provenance-set version, exercised capability revisions,
-declared and detected geometry-input media type/kind, neutral-IR or input-schema
-version, relevant parser implementation/build/version, parser-normalization
-policy and implementation version, and validation policy/tool versions.
-Requested dialect, capabilities, and canonical project settings belong in
-`optionsHash`; `postprocessHash` records the exercised capabilities. The current
-single retained input remains bound through the existing `rawPayloadHash` field
-of post-processing identity and must not be duplicated inside processing policy.
-If a future invocation accepts multiple input blobs, define a separate explicit
-input-set or invocation identity rather than adding their content hashes to
-processing policy. These are proposed design requirements for future identity,
-not implemented schema fields.
+For slicer project 3MF generation, include the static deployed-generator
+identity defined by the [deployed-generator configuration](deployed-generator.md),
+the invocation-specific settings identity, the complete ordered protocol-v1
+manifest and input-set identities, and all other processing inputs. The static
+identity includes package and binary digests plus every static protocol,
+dialect, capability, input/schema, settings-schema, provenance, normalization,
+and validation identity while excluding `executablePath`.
+
+Equal retained raw bytes may be reused, but distinct logical occurrences retain
+distinct manifest object identities, staged paths, placement, names, roles,
+order, and provenance. These are proposed requirements for the later processing
+identity integration, not current database schema fields.
 
 When this hash changes, derived viewer artifacts should be regenerated from retained raw payloads. Onshape should not be called unless the raw payload is missing.
 
@@ -462,17 +460,16 @@ Supersede a ready artifact set when:
 - an operator invalidates or prunes the output
 - a slicer generator build, protocol, dialect revision, provenance set,
   capability revision, normalization policy, or validation policy changes
-- the service-owned approved-generator manifest no longer authorizes the exact
-  package/build, protocol, dialect revision, provenance set, or exercised
-  capabilities recorded for a slicer artifact, including after approval
-  revocation or when required provenance or licensing evidence becomes
-  non-releasable
+- an operator invalidates an artifact after deployment approval, provenance, or
+  licensing evidence changes
 
-Approved-generator manifest status is mutable publication policy, not processing
-or artifact identity. Re-evaluate affected artifact sets when approval changes
-and before cached reuse or publication. Supersede a set whose exact binding is
-no longer approved. Manifest changes that leave the binding approved do not
-change `postprocessHash` or `artifactSetHash`.
+The static deployed-generator identity is processing and artifact input, while
+deployment approval remains operational policy. Replacing or removing the one
+static configuration affects future work but does not itself mutate existing
+immutable artifacts. Recheck approval before cached reuse or publication.
+Revocation stops reuse and publication and requires operators to identify and
+explicitly invalidate affected artifact sets when publication policy requires
+withdrawal.
 
 Record:
 

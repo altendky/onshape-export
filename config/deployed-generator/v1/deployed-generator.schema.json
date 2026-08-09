@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/altendky/onshape-export/config/deployed-generator/v1/deployed-generator.schema.json",
+  "title": "Onshape Export Deployed Generator v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "executablePath",
+    "packageIdentity",
+    "packageSha256",
+    "buildIdentity",
+    "binaryIdentity",
+    "binarySha256",
+    "protocolVersion",
+    "dialectIdentity",
+    "capabilityIdentities",
+    "inputKindIdentity",
+    "inputSchemaIdentity",
+    "settingsSchemaIdentity",
+    "provenanceSetIdentity",
+    "normalizationIdentity",
+    "validationIdentity"
+  ],
+  "properties": {
+    "executablePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^/"
+    },
+    "packageIdentity": { "$ref": "#/$defs/opaqueIdentity" },
+    "packageSha256": { "$ref": "#/$defs/sha256" },
+    "buildIdentity": { "$ref": "#/$defs/opaqueIdentity" },
+    "binaryIdentity": { "$ref": "#/$defs/opaqueIdentity" },
+    "binarySha256": { "$ref": "#/$defs/sha256" },
+    "protocolVersion": { "const": 1 },
+    "dialectIdentity": { "$ref": "#/$defs/opaqueIdentity" },
+    "capabilityIdentities": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/opaqueIdentity" }
+    },
+    "inputKindIdentity": { "$ref": "#/$defs/opaqueIdentity" },
+    "inputSchemaIdentity": { "$ref": "#/$defs/opaqueIdentity" },
+    "settingsSchemaIdentity": { "$ref": "#/$defs/opaqueIdentity" },
+    "provenanceSetIdentity": { "$ref": "#/$defs/opaqueIdentity" },
+    "normalizationIdentity": { "$ref": "#/$defs/opaqueIdentity" },
+    "validationIdentity": { "$ref": "#/$defs/opaqueIdentity" }
+  },
+  "$defs": {
+    "opaqueIdentity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[!-~]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
