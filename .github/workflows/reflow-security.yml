@@ -62,6 +62,9 @@ jobs:
         with:
           install: false
 
+      - name: Install cargo-audit dependency
+        run: mise install --locked cargo-binstall
+
       - name: Check Rust advisories
         run: |
           mkdir -p "${REPORT_DIR}"
@@ -182,6 +185,9 @@ jobs:
       - uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4
         with:
           install: false
+
+      - name: Install Semgrep dependency
+        run: mise install --locked python
 
       - name: Check CI security rules
         run: |
