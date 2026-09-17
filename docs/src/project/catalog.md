@@ -56,7 +56,10 @@ No web catalog editing routes exist. Browser-based admin is intentionally deferr
 
 ## Model Entry Shape
 
-The JSON import fixture uses the same Rust model shape that is reconstructed from SQL:
+The JSON import fixture uses the same Rust model shape that is reconstructed from
+SQL. The implemented `3mf` format and option keys identify raw Onshape geometry
+3MF; preserve those identifiers and do not reuse them for future slicer project
+artifacts.
 
 ```json
 {
@@ -149,7 +152,7 @@ Current behavior:
 - STEP `downloadOptions.stepVersionString` is currently required and limited to `AP242`.
 - STL `downloadOptions.stl.resolution` accepts `coarse`, `medium`, or `fine`. Generic async STL resolution did not change tested outputs, so this records requested intent rather than proven tessellation behavior.
 - STL `downloadOptions.stl.stlMode` accepts `BINARY` or `TEXT`.
-- 3MF `downloadOptions.3mf.resolution` accepts `coarse`, `medium`, or `fine`.
+- Raw Onshape geometry 3MF `downloadOptions.3mf.resolution` accepts `coarse`, `medium`, or `fine`.
 - Export requests always send grouped output (`grouping: true`) for currently supported formats; individual per-part packages are deferred until a catalog option is explicitly needed.
 - Export quality controls are catalog/admin-only. Public users choose parameters and download format, not mesh quality.
 - Preview and download options participate in cache identity.

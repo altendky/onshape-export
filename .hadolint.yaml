@@ -2,3 +2,6 @@
 # https://github.com/altendky/onshape-export/issues/53.
 ignored:
   - DL3008
+  # The named runtime user is created in-image; numeric IDs require separate
+  # Fly persistent-volume ownership compatibility work.
+  - DL3066

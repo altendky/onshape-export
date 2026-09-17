@@ -32,31 +32,34 @@ Rationale:
 
 TODO: add tests that mocked slow Onshape calls do not hold SQLite write locks and that duplicate requests still deduplicate through short job-row transactions.
 
-## Proposed Slicer Adapter Runtime
+## Slicer Generator Runtime
 
-Slicer project 3MF adapters are proposed and not implemented. A future runtime
-would discover explicitly configured adapter executables or immutable packages,
-inspect their protocol and capability metadata, and select only an adapter whose
-dialect, versions, provenance set, and requested capabilities are compatible.
-The service must also match package/build identity, protocol version, dialect
-revision, provenance-set version, and capability metadata to a service-owned
-approved-adapter manifest; adapter self-reporting is not a trust decision.
-Discovery must not search arbitrary writable paths or download adapters during a
-job. Configuration and installation details remain open.
+The [deployed-generator configuration](deployed-generator.md) defines exactly
+one statically deployed trusted executable. `serve` and `worker` load only the
+file named by `TRUSTED_GENERATOR_CONFIG_PATH` and validate its closed document,
+executable file, Linux mode, and startup digest. They do not use defaults,
+search, discovery, substitution, or job-time downloads. Maintenance commands
+may run without generator configuration.
 
-If an adapter is absent, incompatible, unreviewed, or missing a requested
-capability, the job should fail with a stable unsupported/unavailable result. It
+If the configuration is absent, generator output is unavailable without making
+service startup fail. A specified invalid configuration is a startup failure.
+An incompatible request receives a stable unsupported result. It
 must not silently substitute another slicer dialect, omit settings, or fall back
 to an Onshape geometry 3MF while labeling it as a slicer project.
 
-Execution should use a fresh restricted work directory, declared read-only
-inputs, no service credentials, no network access, bounded diagnostics, and
-limits for elapsed time, CPU, memory, disk, file/member count, output size, and
-subprocesses. Candidate output remains private until service-side archive,
-schema, dialect, and compatibility validation passes and the service independently
-hashes it and matches that value to the adapter's validation report. The
-containment mechanism is intentionally unresolved pending a prototype; see
-[Slicer Project 3MF Adapters](slicer-3mf-adapters.md).
+The later runner directly invokes the exact trusted CLI at its fixed configured
+path without a shell and exchanges declared request, input, result, and output
+files through the neutral protocol. The configured CLI is trusted like service
+code; no runtime sandbox, credential stripping, network or filesystem isolation,
+or process resource limits are required. The process boundary preserves
+repository, source-ingress, provenance, release, distribution, and license
+responsibilities, defines a source-neutral interface, and does not provide
+runtime security isolation.
+
+Candidate output remains private until all checks in the normative
+[integration policy](slicer-project-generator-integration.md) pass. Target
+schemas and fixtures remain in the generator repository. See
+[Slicer Project Generators](slicer-project-generators.md).
 
 Initial public hostname:
 

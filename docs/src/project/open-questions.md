@@ -14,11 +14,14 @@
 
 ## Onshape Export Details
 
-- Which exact `formatName` values should be used for STL, 3MF, and GLB on generic translation endpoints?
+- Which exact `formatName` values should be used for STL, Onshape geometry 3MF, and GLB on generic translation endpoints?
 - Are format-specific endpoints better than generic translation endpoints for STEP and GLB in practice?
 - Does synchronous Part Studio glTF/GLB export produce suitable single-file GLB previews faster than async export?
 - Do Assemblies and Part Studios need different default export options?
-- Which exports return multiple `resultExternalDataIds` in practice, and which should initial v2 reject as unsupported multi-result shapes?
+- Which exports return multiple `resultExternalDataIds` in practice? The
+  [geometry input characterization](onshape-geometry-input-characterization.md)
+  observed exactly one in its controlled matrix; zero, multiple, and duplicate
+  result shapes remain unproven and fail closed.
 - Does Onshape expose a reliable version-to-microversion resolution path for every versioned Part Studio and Assembly source we need?
 - Which download response headers are reliable enough for diagnostics or conditional requests, such as `ETag`, `Last-Modified`, `Content-Disposition`, and content length?
 
@@ -45,23 +48,57 @@
 - Reconsider v2 repair and overwrite semantics before production use: raw payload repair, public artifact repair, DB/object drift, corrupt-but-public objects, missing sidecars, partial uploads, concurrent repair races, CDN behavior, and supersede-versus-repair boundaries.
 - What live experiments must pass before locking v2 request defaults, result cardinality, raw payload retention, and post-processing behavior?
 
-## Slicer Project 3MF Adapters
+## Service-Owned Generator Integration
 
 - Which Onshape export or neutral geometry representation best preserves the
-  geometry, units, object identity, assemblies, and metadata adapters need?
-- What exact CLI invocation, file transport, JSON schema, error model, and
-  atomic-write contract should the prototype use?
-- Which adapter, protocol, dialect, and slicer-version compatibility windows are
-  supportable, and how should incompatibility be reported?
-- Must outputs be byte-deterministic, canonically equivalent after normalization,
-  or only semantically equivalent in pinned slicer versions?
-- What evidence is sufficient to classify each feature as clean-room,
-  independently derived, or derivative, and who performs qualified review?
-- How are separately licensed adapters discovered, installed, verified,
-  upgraded, retained for rollback, and distributed?
+  geometry, units, object identity, assemblies, and metadata generators need?
+  The current source-neutral profile is one retained immutable-leaf Geometry 3MF
+  per logical object plus
+  [generator settings v2](neutral-generator-settings-v2.md) placements.
+  Controlled differential requests showed that
+  comma-separated root and tail IDs did not behave as an ordered exact-leaf
+  path, and a direct root-leaf payload omitted its Assembly placement. A bounded
+  immutable-leaf geometry 3MF fallback preserved indexed geometry under
+  one-time absolute placement. Production remains blocked on the complete
+  source-neutral matrix derivation and orchestration owned by #173 and #175 and
+  on generator-owned raw-input bounds and final target-aware self-validation.
+- Which additional controlled sources can prove or reject
+  source-object-to-export-payload mappings left unproven by the
+  [geometry input characterization](onshape-geometry-input-characterization.md),
+  including exact duplicate display names, linked and configured immutable-leaf
+  resolution, pattern/flexible occurrences, non-solids, composite solids, and
+  any future supported complete nested occurrence-path request encoding? The
+  separate
+  [annotation carrier and selector characterization](onshape-annotation-carrier-characterization.md)
+  now covers configured Part Studio IDs, duplicate names, repeated references,
+  nested/suppressed occurrences, and source metadata, but it does not prove an
+  export-payload mapping.
+- What exact CLI arguments and runner implementation should carry the defined
+  [file-backed neutral protocol](neutral-generator-protocol.md)?
+- Which future generator, protocol, dialect, and slicer-version combinations are
+  supportable beyond the one exact static deployed binding?
+- Which source-neutral publication checks should supplement generator-owned
+  final target-aware self-validation?
+- How should future exact generator releases be acquired, approved, installed,
+  verified, distributed, and deployed beyond the initial static integration?
+
+These questions are governed by the local
+[Slicer Project Generator Integration Policy](slicer-project-generator-integration.md).
+
+## Generator-Project-Owned Questions
+
+- Must each generator's output be byte-deterministic, canonically equivalent
+  after normalization, or semantically equivalent in supported slicer versions?
 - Which Bambu Studio, OrcaSlicer, and PrusaSlicer features form a genuinely
   shared subset, and which require separate schema, implementation, provenance,
   and validation?
+- Which target-derived schemas, fixtures, evidence, and release checks support
+  each capability and slicer-version claim?
+
+These questions belong in
+[`slicer-project-generators`](https://github.com/altendky/slicer-project-generators)
+and are governed by its pinned
+[Slicer Project Generator Provenance Policy](https://github.com/altendky/slicer-project-generators/blob/ced6585d5a8e1a47690e7eabdf92beaa7fea7fc4/docs/src/project/slicer-project-generator-provenance.md).
 
 ## Plan Gaps
 

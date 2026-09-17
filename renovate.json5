@@ -27,18 +27,18 @@
     {
       "customType": "regex",
       "managerFilePatterns": ["/^rust-toolchain\\.toml$/"],
-      "matchStrings": ["channel\\s*=\\s*\"(?<currentValue>\\d+\\.\\d+)\""],
+      "matchStrings": ["channel\\s*=\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
       "depNameTemplate": "rust-lang/rust",
       "datasourceTemplate": "github-releases",
-      "extractVersionTemplate": "^(?<version>\\d+\\.\\d+)\\.\\d+$"
+      "extractVersionTemplate": "^(?<version>\\d+\\.\\d+\\.\\d+)$"
     },
     {
       "customType": "regex",
       "managerFilePatterns": ["/^Cargo\\.toml$/"],
-      "matchStrings": ["rust-version\\s*=\\s*\"(?<currentValue>\\d+\\.\\d+)\""],
+      "matchStrings": ["rust-version\\s*=\\s*\"(?<currentValue>\\d+\\.\\d+\\.\\d+)\""],
       "depNameTemplate": "rust-lang/rust",
       "datasourceTemplate": "github-releases",
-      "extractVersionTemplate": "^(?<version>\\d+\\.\\d+)\\.\\d+$"
+      "extractVersionTemplate": "^(?<version>\\d+\\.\\d+\\.\\d+)$"
     }
   ],
 

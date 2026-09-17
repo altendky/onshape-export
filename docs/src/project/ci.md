@@ -35,6 +35,7 @@ Configured tools include:
 - `cargo:lychee` for Markdown link checking.
 - `github:nextest-rs/nextest` for Rust test execution.
 - `aqua:EmbarkStudios/cargo-deny` for Rust dependency policy checks.
+- `aqua:hadolint/hadolint` for Dockerfile linting.
 - `aqua:superfly/flyctl` for Fly operations.
 
 Rust itself is pinned separately in `rust-toolchain.toml`.
@@ -148,26 +149,29 @@ This repository intentionally uses a smaller Rust workflow than `onshape-mcp`: a
 
 ## Deferred Workflows
 
-Restricted slicer-adapter development workflows with provisional provenance
-records may run only in the isolated adapter development project established by
-the source-access record and must mark their outputs non-distributable.
-Incomplete or provisional records must block packaging for distribution,
-capability advertisement, publication of fixtures, packages, or project
-artifacts, release, and production deployment, but not the restricted builds
-and tests needed to produce implementation evidence.
+Target-derived generator development, provenance, fixture, build, and package
+release workflows belong only in
+[`slicer-project-generators`](https://github.com/altendky/slicer-project-generators)
+and are governed by its pinned
+[Slicer Project Generator Provenance Policy](https://github.com/altendky/slicer-project-generators/blob/ced6585d5a8e1a47690e7eabdf92beaa7fea7fc4/docs/src/project/slicer-project-generator-provenance.md).
+They must not be reproduced in this repository.
 
 Integration workflows should test the versioned CLI protocol and error fixtures,
 deterministic or normalized output at the selected guarantee level,
-sandbox/resource-limit behavior, and compatibility against pinned slicer
-versions.
-Before publication, the service must validate adapter package/build identity,
-protocol version, dialect and dialect revision, provenance-set version, and
-capability metadata against a service-owned approved-adapter manifest.
+ordinary process and protocol failure handling, and compatibility against pinned
+slicer versions. They do not test a runtime sandbox or containment boundary for
+trusted generator CLIs.
+Before service approval or publication, the service must validate exact package
+and binary digests plus protocol, dialect, provenance-set, and capability
+metadata in the one closed
+[deployed-generator configuration](deployed-generator.md).
 It must independently hash the candidate output and compare that value with the
-adapter's validation report; the candidate output hash is not an
-approved-manifest value.
-See the normative
-[Slicer Adapter Provenance And Licensing Policy](slicer-adapter-provenance.md).
+generator's validation report; the candidate output hash is not a static
+configuration value.
+A released generator package remains unusable until the service approves and
+statically configures its exact bytes; generated artifacts remain private until
+separate service validation and publication gates pass. See the normative
+[Slicer Project Generator Integration Policy](slicer-project-generator-integration.md).
 
 Defer until the Rust checks are stable or the project needs broader platform guarantees:
 

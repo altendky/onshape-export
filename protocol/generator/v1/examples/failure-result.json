@@ -1,0 +1,20 @@
+{
+  "documentType": "generatorResult",
+  "protocolVersion": 1,
+  "status": "failure",
+  "diagnostics": [],
+  "errors": [
+    {
+      "category": "malformedRequest",
+      "code": "synthetic_malformed_request",
+      "message": "The synthetic request could not be parsed.",
+      "instancePath": "",
+      "context": [
+        {
+          "key": "fixture",
+          "value": "synthetic"
+        }
+      ]
+    }
+  ]
+}

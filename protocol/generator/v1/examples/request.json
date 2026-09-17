@@ -1,0 +1,45 @@
+{
+  "documentType": "generatorRequest",
+  "protocolVersion": 1,
+  "invocationIdentity": "b8a0be97cc27b7b3b9a6caa866ddc3fc1258b263469bcd7f06a5f09e34c50a72",
+  "expectedIdentities": {
+    "packageIdentity": "package-synthetic-001",
+    "buildIdentity": "build-synthetic-001",
+    "binaryIdentity": "binary-synthetic-001",
+    "dialectIdentity": "dialect-synthetic-alpha-v1",
+    "capabilityIdentities": [
+      "capability-synthetic-alpha-v1"
+    ],
+    "inputKindIdentity": "input-kind-synthetic-geometry-v1",
+    "inputSchemaIdentity": "input-schema-synthetic-v1",
+    "settingsIdentity": "settings-synthetic-001",
+    "settingsSchemaIdentity": "settings-schema-synthetic-v1",
+    "provenanceSetIdentity": "provenance-synthetic-001",
+    "normalizationIdentity": "normalization-synthetic-v1",
+    "validationIdentity": "validation-synthetic-v1"
+  },
+  "inputManifest": {
+    "path": "inputs/manifest.json",
+    "manifestIdentity": "4836a394acc4823af83bb9a897235e2c18e1ae4e7a1e1a6c0366851aaf726287",
+    "inputSetIdentity": "e747d1001f0973fb2bb7847fd54d89ce87e7626a51a1ef995a3e431e22d9bb72"
+  },
+  "settings": {
+    "settingsIdentity": "settings-synthetic-001",
+    "schemaIdentity": "settings-schema-synthetic-v1",
+    "content": {
+      "contentIdentity": "content-synthetic-settings-001",
+      "path": "inputs/settings.json",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "byteLength": 128,
+      "mediaType": "application/json",
+      "detectedKindIdentity": "detected-kind-synthetic-json-v1"
+    }
+  },
+  "output": {
+    "outputIdentity": "output-synthetic-project-001",
+    "role": "generatedProject",
+    "path": "outputs/project.bin",
+    "mediaType": "application/x.synthetic-project",
+    "maxByteLength": 1000000
+  }
+}

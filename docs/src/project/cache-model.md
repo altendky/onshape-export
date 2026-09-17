@@ -28,6 +28,11 @@ The main design goal is to keep every cache boundary explicit: selected source, 
 - A future slicer project 3MF is a local derived artifact, distinct from an
   Onshape geometry 3MF raw payload and from every other slicer dialect.
 
+Existing and downloadable 3MF output in the application means raw Onshape
+geometry 3MF. Its implemented machine identifier remains `3mf`. Future slicer
+project artifacts require explicit dialect-qualified output kinds and must not
+reuse that identifier ambiguously.
+
 ## Initial v2 Slice
 
 The full model below remains the forward-looking cache contract. The first v2 implementation should be a clean cut from the current v1 cache: existing v1 SQLite records, object keys, public URLs, and manifests are disposable during the migration.
@@ -128,7 +133,7 @@ The encoding response does not replace `configHash`. It is an Onshape representa
 
 Include:
 
-- output family: preview, STEP, STL, 3MF
+- output family: preview, STEP, STL, or raw Onshape geometry 3MF
 - format-specific logical options, such as STEP version
 - preview quality, mesh resolution or explicit tolerances
 - orientation and scale choices
@@ -136,8 +141,14 @@ Include:
 - hidden-entity policy
 - selected part IDs or assembly occurrences when supported
 - option schema version
-- for proposed slicer project 3MF, requested slicer dialect, capability
-  revisions, and canonical project settings
+- for slicer project 3MF, requested slicer dialect, ordered capability
+  revisions, canonical settings identity, and settings-schema identity
+
+The implemented generator `optionsHash` uses the `generator-project-v1` options
+schema and output format with exactly those dialect, capability, and settings
+fields. Static package/build/binary, provenance, normalization, and validation
+identities stay in `processingHash`; changing them changes artifact identity
+without misclassifying deployment processing as logical export intent.
 
 Do not include:
 
@@ -196,20 +207,27 @@ Include:
 - image/buffer transformation policy
 - safe-path policy for extracted entries
 
-For proposed slicer project 3MF generation, also include the immutable adapter
-build or package identity, CLI protocol version, slicer dialect and dialect
-revision, provenance-set version, exercised capability revisions,
-declared and detected geometry-input media type/kind, neutral-IR or input-schema
-version, relevant parser implementation/build/version, parser-normalization
-policy and implementation version, and validation policy/tool versions.
-Requested dialect, capabilities, and canonical project settings belong in
-`optionsHash`; `postprocessHash` records the exercised capabilities. The current
-single retained input remains bound through the existing `rawPayloadHash` field
-of post-processing identity and must not be duplicated inside processing policy.
-If a future invocation accepts multiple input blobs, define a separate explicit
-input-set or invocation identity rather than adding their content hashes to
-processing policy. These are proposed design requirements for future identity,
-not implemented schema fields.
+For slicer project 3MF generation, `generator-processing-recipe-v1` is the
+implemented post-processing recipe. It contains the recipe version, static
+deployed-generator identity defined by the
+[deployed-generator configuration](deployed-generator.md), exact requested
+compatibility tuple and supported/unsupported decision identity, complete
+validated protocol-v1 input manifest, normalized settings-v2 document,
+invocation-specific settings identity, and settings-schema identity. Its
+validated protocol-v1 invocation also binds manifest and settings staged paths,
+canonical settings content identity/SHA-256/length/type, invocation identity,
+and the output identity, role, path, media type, and maximum length. Its
+`processingHash` is RFC 8785/JCS JSON hashed under the
+`generator-processing-recipe-v1` domain. The static identity transitively binds
+package and binary digests plus every static protocol, dialect, capability,
+input/schema, settings-schema, provenance, normalization, and validation
+identity while excluding `executablePath`.
+
+Equal retained raw bytes may be reused, but distinct logical occurrences retain
+distinct occurrence identities, manifest object identities, staged paths,
+placement, names, roles, order, mapping, and provenance. The database persists
+these ordered occurrence records separately from content identity, so repeated
+SHA-256 and length values do not collapse logical occurrences.
 
 When this hash changes, derived viewer artifacts should be regenerated from retained raw payloads. Onshape should not be called unless the raw payload is missing.
 
@@ -223,12 +241,18 @@ Hash:
 - `sourceHash`
 - `configHash`
 - `optionsHash`
-- `requestHash`
-- `rawPayloadHash`
+- singular `requestHash` and `rawPayloadHash` when the artifact has one such
+  acquisition identity
 - `postprocessHash`
+- `generatorProcessingHash` for generator output
 - artifact-set schema version
 
-The artifact set, not the individual primary file, is the unit of readiness and supersession.
+Generator output omits singular request/raw-payload fields, uses its exact
+`processingHash` as both `postprocessHash` and `generatorProcessingHash`, and
+therefore binds the complete multi-input recipe into the artifact-set identity.
+Existing preview and download identities retain their prior serialized shape
+and hashes. The artifact set, not the individual primary file, is the unit of
+readiness and supersession.
 
 ## Onshape Defaults
 
@@ -395,7 +419,10 @@ Suggested artifact-set shape:
 }
 ```
 
-For single-file STEP/STL/3MF outputs, the artifact set still has one primary file. Keeping the same shape avoids special cases and allows future sidecars such as validation reports.
+For single-file STEP, STL, raw Onshape geometry 3MF, or dialect-qualified slicer
+project 3MF outputs, the artifact set still has one
+primary file. Keeping the same shape avoids special cases and allows future
+sidecars such as validation reports.
 
 ## Manifest Model
 
@@ -452,19 +479,18 @@ Supersede a ready artifact set when:
 - validation policy changes
 - a primary or required sidecar object is missing or corrupt
 - an operator invalidates or prunes the output
-- a slicer adapter build, protocol, dialect revision, provenance set,
+- a slicer generator build, protocol, dialect revision, provenance set,
   capability revision, normalization policy, or validation policy changes
-- the service-owned approved-adapter manifest no longer authorizes the exact
-  package/build, protocol, dialect revision, provenance set, or exercised
-  capabilities recorded for a slicer artifact, including after approval
-  revocation or when required provenance or licensing evidence becomes
-  non-releasable
+- an operator invalidates an artifact after deployment approval, provenance, or
+  licensing evidence changes
 
-Approved-adapter manifest status is mutable publication policy, not processing
-or artifact identity. Re-evaluate affected artifact sets when approval changes
-and before cached reuse or publication. Supersede a set whose exact binding is
-no longer approved. Manifest changes that leave the binding approved do not
-change `postprocessHash` or `artifactSetHash`.
+The static deployed-generator identity is processing and artifact input, while
+deployment approval remains operational policy. Replacing or removing the one
+static configuration affects future work but does not itself mutate existing
+immutable artifacts. Recheck approval before cached reuse or publication.
+Revocation stops reuse and publication and requires operators to identify and
+explicitly invalidate affected artifact sets when publication policy requires
+withdrawal.
 
 Record:
 
@@ -500,6 +526,27 @@ Recovery rules:
 ## Schema Suggestions
 
 Initial tables can be added alongside the current `jobs` and `artifacts` tables.
+
+The implemented generator integration adds immutable
+`generator_processing_recipes` rows keyed by `processing_hash` and exact
+canonical `recipe_json`. `generator_processing_occurrences` stores one row per
+ordered logical occurrence with a unique occurrence identity, order, object and
+content identities, byte SHA-256/length, staged path, role, display name,
+mapping/provenance JSON, and placement JSON. Repeated content hashes are
+permitted. `artifact_sets.generator_processing_hash` links generated artifacts
+to the recipe and is indexed with `postprocess_hash`, output kind, format, and
+status.
+
+Recipe and occurrence insertion is one transaction. Repeating an exact insert
+is idempotent; reusing a processing or occurrence identity with different
+immutable evidence is an integrity error. Exact cache lookup joins a known
+supported recipe to an artifact set and its primary file. A hit requires equal
+derived artifact-set, generator, and post-process hashes; absent singular
+request/raw-payload identities; requested output kind and format; `ready`
+status; no supersession markers; a nonempty primary object key; and exact
+primary role/path/type with positive length and lowercase SHA-256 metadata.
+Generator-linked artifact rows and file evidence cannot be restaged under an
+existing artifact-set identity.
 
 ```sql
 CREATE TABLE export_requests (
@@ -569,9 +616,10 @@ CREATE TABLE artifact_sets (
     source_hash TEXT NOT NULL,
     config_hash TEXT NOT NULL,
     options_hash TEXT NOT NULL,
-    request_hash TEXT NOT NULL,
+    request_hash TEXT,
     raw_payload_hash TEXT,
     postprocess_hash TEXT,
+    generator_processing_hash TEXT,
     status TEXT NOT NULL,
     primary_file_id INTEGER,
     created_at TEXT NOT NULL,
@@ -628,15 +676,37 @@ For initial v2, prefer the neutral content-addressed raw key shape ending in `pa
 
 Run these against a real multi-part Part Studio and a real Assembly before locking v2 cache semantics.
 
+The source-neutral identity and export-shape subset has been run and documented
+in the
+[Onshape Geometry Input Characterization](onshape-geometry-input-characterization.md).
+That report records sanitized observations and keeps unsupported mappings
+fail-closed. Items below that require additional sources or broader cache
+behavior remain open.
+
+Configured part IDs, complete ordered Assembly occurrence paths, built-in part
+metadata, and the bounded absence of an occurrence-level metadata bag are
+documented separately in the
+[Onshape Annotation Carrier And Selector Characterization](onshape-annotation-carrier-characterization.md).
+That report does not define cache keys, an annotation convention, or a schema.
+
 1. Fetch `/configuration` and record `currentConfiguration`, defaults, `sourceMicroversion`, `serializationVersion`, and `libraryVersion`.
 2. Encode empty config, explicit default config, and non-default config. Decode each and compare explicit/default flags when available.
 3. Export glTF with omitted defaults and explicit defaults. Compare translation responses, external data headers, raw byte hashes, and derived artifacts.
 4. Repeat identical glTF requests several times. Compare `translationId`, `externalDataId`, raw headers, ZIP entry order, ZIP timestamps, raw byte hash, and processed artifact hash.
 5. Test Part Studio and Assembly glTF with `grouping=true` and `grouping=false`. Record direct GLB, direct glTF, ZIP with GLB, ZIP with one glTF, and ZIP with multiple glTF behavior.
 6. Compare GLB `meshParams.resolution=FINE` versus explicit mesh tolerances and unit.
-7. Verify hidden parts, `partIds`, `partsExportFilter`, and assembly `occurrencesToExport`.
+7. Verify hidden parts, `partIds`, `partsExportFilter`, and assembly
+   `occurrencesToExport`. The selected-object follow-up proved official part IDs
+   and root occurrence IDs for bounded sources. A later controlled differential
+   test found that comma-separated root and tail IDs did not establish an ordered
+   exact-leaf path: reordering and substituting a suppressed tail still exported
+   the available subtree selected by the root ID. A direct root-leaf geometry
+   3MF also omitted the Assembly placement. No production selected-occurrence
+   cache identity is therefore available.
+   See the
+   [Onshape Geometry Input Characterization](onshape-geometry-input-characterization.md#production-geometry-profile-follow-up).
 8. Confirm STEP with omitted versus explicit `stepVersionString=AP242`.
-9. Validate generic STL and 3MF translations with lowercase explicit resolution, tolerances, and unit.
+9. Validate generic STL and Onshape geometry 3MF translations with lowercase explicit resolution, tolerances, and unit.
 10. Capture external data response headers and retry with `If-None-Match` if an `ETag` is returned.
 11. Test `storeInDocument=true` and inspect `resultElementIds`, document element metadata, `foreignDataId`, and `microversionId`.
 12. List `/translations/d/{did}` after exports to see whether completed translations can support crash recovery.

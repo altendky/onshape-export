@@ -15,6 +15,8 @@ This page is retained as historical v1 cache background. The authoritative curre
 The repository now uses a hard-cut v2 cache model. Existing v1 SQLite records, object keys, public URLs, and manifests are not preserved for compatibility.
 
 Where this page describes v1 layouts or behaviors, treat them as historical context rather than the current branch state.
+Historical and implemented `3mf` format keys on this page mean raw Onshape
+geometry 3MF, not a slicer project artifact.
 
 Implemented now:
 
@@ -47,7 +49,7 @@ Remaining deviations from the updated plan:
 | Normalized parameter schema | Source identity and schema version | UI-ready form model. |
 | Configuration encoding | Source identity and config hash | Cached output of Onshape configuration encoding, if used. |
 | Preview artifact | Source identity, config hash, preview options hash | Browser 3D preview, usually GLB but sometimes direct glTF or a single glTF asset set. |
-| Download artifact | Source identity, config hash, format, export options hash | STEP, STL, and 3MF downloads. |
+| Download artifact | Source identity, config hash, format, export options hash | STEP, STL, and raw Onshape geometry 3MF downloads. |
 | Manifest | Artifact group id | Application state for completed, missing, and superseded outputs. |
 | Job record | Deterministic work key | Status polling and strict deduplication in SQLite. |
 | Failure record | Job id or work key plus timestamp | Debugging and retry cooldown. Current branch stores only `jobs.error_summary`. |
@@ -122,11 +124,11 @@ artifacts/v1/{source_hash}/{config_hash}/3mf/{options_hash}/{artifact_id}.3mf
 manifests/v1/{group_id}.json
 ```
 
-The `groupId` represents one selected source/configuration. In v1 it links a preview artifact and any generated STEP, STL, or 3MF outputs for that configuration.
+The `groupId` represents one selected source/configuration. In v1 it links a preview artifact and any generated STEP, STL, or raw Onshape geometry 3MF outputs for that configuration.
 
 Completed public artifacts under `previews/` and `artifacts/` are served directly through stable Tigris URLs. Internal operational objects should stay out of public prefixes, and object listing should not be exposed. Job and failure state lives primarily in SQLite; detailed failure payloads may also be stored in private Tigris prefixes if they are too large for SQLite summaries.
 
-Public artifacts are immutable in normal operation. Cache invalidation means writing a new object key and updating manifests or SQLite index state to mark older artifacts as superseded. Do not overwrite public GLB, STEP, STL, or 3MF objects in place. Delete public artifacts only for explicit operator cleanup, legal or IP concerns, or storage-cost management.
+Public artifacts are immutable in normal operation. Cache invalidation means writing a new object key and updating manifests or SQLite index state to mark older artifacts as superseded. Do not overwrite public GLB, STEP, STL, or raw Onshape geometry 3MF objects in place. Delete public artifacts only for explicit operator cleanup, legal or IP concerns, or storage-cost management.
 
 ## Data Contracts
 

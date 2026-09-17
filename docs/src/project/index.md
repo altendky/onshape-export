@@ -13,7 +13,7 @@ Initial scope:
 - Part Studios and Assemblies.
 - Anonymous end users.
 - Server-owned Onshape API access.
-- STEP, STL, and 3MF downloads.
+- STEP, STL, and raw Onshape geometry 3MF downloads.
 - GLB browser preview per selected configuration.
 - Fly.io Rust app at `https://onshape-export.fly.dev` if the app name is available.
 - Tigris artifact cache with stable public artifact URLs.
@@ -23,6 +23,11 @@ Initial scope:
 Current implementation note: the branch already contains the cache v2 hard cut plus its follow-up correctness fixes: resolved-microversion source identity, typed canonical configuration hashing, canonical Onshape configuration encodings, request-hash export deduplication/readiness, retained raw payload verification, strict zipped glTF sidecar validation, legacy export-job retirement, upload verification, retry backoff, and ready artifact metadata. Remaining gaps are mostly live Onshape verification, richer public-safe error taxonomy, and future reconciliation or repair tooling.
 
 The cache design is the central project risk. The current implementation snapshot is documented in [Caching](caching.md), while the target layered model is documented in [Forward-Looking Cache Model](cache-model.md).
+
+Future slicer project artifacts are a separate proposed output family generated
+through the external
+[`slicer-project-generators`](https://github.com/altendky/slicer-project-generators)
+project. They are not the existing downloadable Onshape geometry 3MF.
 
 Out of initial scope:
 
