@@ -5,15 +5,15 @@ locked = true
 
 [tools]
 node = "24"
-python = "3.14.5"
+python = "3.14.7"
 "pipx:pre-commit" = "4.6.2"
 "aqua:EmbarkStudios/cargo-deny" = "0.19.9"
 "aqua:hadolint/hadolint" = "2.15.1"
-"github:nextest-rs/nextest" = { version = "0.9.140", version_prefix = "cargo-nextest-" }
+"github:nextest-rs/nextest" = { version = "0.9.145", version_prefix = "cargo-nextest-" }
 cargo-binstall = "1.21.1"
 "cargo:lychee" = "0.24.0"
 "cargo:mdbook" = "0.5.3"
-"aqua:superfly/flyctl" = "0.4.75"
+"aqua:superfly/flyctl" = "0.4.104"
 
 [vars]
 all_platforms = "linux-x64,linux-x64-musl,linux-arm64,linux-arm64-musl,macos-x64,macos-arm64,windows-x64"
