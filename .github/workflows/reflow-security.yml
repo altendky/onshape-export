@@ -177,6 +177,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
 
       - name: Check CI security rules
