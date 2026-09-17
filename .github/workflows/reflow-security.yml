@@ -59,8 +59,6 @@ jobs:
         uses: ./.github/actions/setup-rust
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
-        with:
-          install_args: cargo-binstall
 
       - name: Check Rust advisories
         run: |
@@ -180,8 +178,6 @@ jobs:
           persist-credentials: false
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4
-        with:
-          install_args: python
 
       - name: Check CI security rules
         run: |
