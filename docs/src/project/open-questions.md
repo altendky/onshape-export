@@ -52,13 +52,16 @@
 
 - Which Onshape export or neutral geometry representation best preserves the
   geometry, units, object identity, assemblies, and metadata generators need?
-  Geometry 3MF is the strongest neutral candidate observed so far, but no MVP
-  profile was selected. Controlled differential requests showed that
+  The current source-neutral profile is one retained immutable-leaf Geometry 3MF
+  per logical object plus
+  [generator settings v2](neutral-generator-settings-v2.md) placements.
+  Controlled differential requests showed that
   comma-separated root and tail IDs did not behave as an ordered exact-leaf
   path, and a direct root-leaf payload omitted its Assembly placement. A bounded
   immutable-leaf geometry 3MF fallback preserved indexed geometry under
-  one-time absolute placement, but it still lacks a reviewed production
-  converter/output-validator contract and the complete required matrix.
+  one-time absolute placement. Production remains blocked on the complete
+  source-neutral matrix derivation and orchestration owned by #173 and #175 and
+  on generator-owned raw-input bounds and final target-aware self-validation.
 - Which additional controlled sources can prove or reject
   source-object-to-export-payload mappings left unproven by the
   [geometry input characterization](onshape-geometry-input-characterization.md),
@@ -72,14 +75,12 @@
   export-payload mapping.
 - What exact CLI arguments and runner implementation should carry the defined
   [file-backed neutral protocol](neutral-generator-protocol.md)?
-- Which generator, protocol, dialect, and slicer-version compatibility windows are
-  supportable, and how should incompatibility be reported?
-- Which independent service validation and normalization guarantees are required
-  before exact candidate artifact bytes may be published?
-- How should exact target-side validation inputs or tools be packaged, approved,
-  and invoked without moving target schemas or fixtures here?
-- How are released generator packages discovered, acquired, approved, installed,
-  verified, retained for rollback, revoked, distributed, and deployed?
+- Which future generator, protocol, dialect, and slicer-version combinations are
+  supportable beyond the one exact static deployed binding?
+- Which source-neutral publication checks should supplement generator-owned
+  final target-aware self-validation?
+- How should future exact generator releases be acquired, approved, installed,
+  verified, distributed, and deployed beyond the initial static integration?
 
 These questions are governed by the local
 [Slicer Project Generator Integration Policy](slicer-project-generator-integration.md).

@@ -85,9 +85,13 @@ pub struct ArtifactSetIdentity {
     pub source_hash: String,
     pub config_hash: String,
     pub options_hash: String,
-    pub request_hash: String,
-    pub raw_payload_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_payload_hash: Option<String>,
     pub postprocess_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generator_processing_hash: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -432,12 +436,13 @@ mod tests {
             source_hash: "source".to_owned(),
             config_hash: "config".to_owned(),
             options_hash: "options".to_owned(),
-            request_hash: "request-1".to_owned(),
-            raw_payload_hash: "raw".to_owned(),
+            request_hash: Some("request-1".to_owned()),
+            raw_payload_hash: Some("raw".to_owned()),
             postprocess_hash: "postprocess".to_owned(),
+            generator_processing_hash: None,
         };
         let second = ArtifactSetIdentity {
-            request_hash: "request-2".to_owned(),
+            request_hash: Some("request-2".to_owned()),
             ..first.clone()
         };
 
@@ -445,5 +450,44 @@ mod tests {
             artifact_set_hash(&first).unwrap(),
             artifact_set_hash(&second).unwrap()
         );
+        assert_eq!(
+            artifact_set_hash(&first).unwrap(),
+            cache_key::hash_json(
+                "artifact-set-v2",
+                &json!({
+                    "artifactSetSchemaVersion": ARTIFACT_SET_SCHEMA_VERSION,
+                    "outputKind": "preview",
+                    "format": "glb",
+                    "sourceHash": "source",
+                    "configHash": "config",
+                    "optionsHash": "options",
+                    "requestHash": "request-1",
+                    "rawPayloadHash": "raw",
+                    "postprocessHash": "postprocess"
+                })
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn multi_input_artifact_identity_omits_singular_request_and_payload_fields() {
+        let identity = ArtifactSetIdentity {
+            artifact_set_schema_version: ARTIFACT_SET_SCHEMA_VERSION,
+            output_kind: "slicer_project".to_owned(),
+            format: "project_3mf".to_owned(),
+            source_hash: "source".to_owned(),
+            config_hash: "config".to_owned(),
+            options_hash: "settings".to_owned(),
+            request_hash: None,
+            raw_payload_hash: None,
+            postprocess_hash: "recipe".to_owned(),
+            generator_processing_hash: Some("recipe".to_owned()),
+        };
+        let serialized = serde_json::to_value(&identity).unwrap();
+
+        assert!(serialized.get("requestHash").is_none());
+        assert!(serialized.get("rawPayloadHash").is_none());
+        assert_eq!(serialized["generatorProcessingHash"], "recipe");
     }
 }

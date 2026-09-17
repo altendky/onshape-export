@@ -1254,6 +1254,36 @@ mod tests {
     }
 
     #[test]
+    fn retained_paths_distinguish_logical_occurrences_with_equal_content() {
+        let mut manifest: InputManifest = serde_json::from_str(MANIFEST).unwrap();
+        let mut second = manifest.objects[0].clone();
+        second.object_identity = "object-synthetic-002".to_owned();
+        second.retained_content.path = "inputs/geometry-002.bin".to_owned();
+        assert_eq!(
+            second.retained_content.content_identity,
+            manifest.objects[0].retained_content.content_identity
+        );
+        assert_eq!(
+            second.retained_content.sha256,
+            manifest.objects[0].retained_content.sha256
+        );
+        assert_eq!(
+            second.retained_content.byte_length,
+            manifest.objects[0].retained_content.byte_length
+        );
+        manifest.objects.push(second);
+        manifest.input_set_identity = manifest.computed_input_set_identity().unwrap();
+        manifest.manifest_identity = manifest.computed_manifest_identity().unwrap();
+        manifest.validate().unwrap();
+
+        manifest.objects[1].retained_content.path =
+            manifest.objects[0].retained_content.path.clone();
+        manifest.input_set_identity = manifest.computed_input_set_identity().unwrap();
+        manifest.manifest_identity = manifest.computed_manifest_identity().unwrap();
+        assert!(manifest.validate().is_err());
+    }
+
+    #[test]
     fn unavailable_or_unproven_manifest_cannot_be_invoked() {
         let request: GeneratorRequest = serde_json::from_str(REQUEST).unwrap();
         let mut manifest: InputManifest = serde_json::from_str(MANIFEST).unwrap();
