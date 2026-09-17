@@ -53,6 +53,11 @@ Protocol validation does not prove that declared files exist or that their
 bytes match their declared length and SHA-256. The service-side runner must
 perform those checks when execution is implemented.
 
+Protocol v1 transports settings and settings-schema identities opaquely, so the
+normative [generator settings v2](neutral-generator-settings-v2.md) can be bound
+without changing protocol v1. Settings-v2 placement validation remains a
+separate required validation step before dispatch.
+
 ## Identities And Ordering
 
 Package, build, binary, dialect, capability, input kind, input schema, settings,
@@ -84,6 +89,10 @@ to produce one deterministic request representation.
 `contentIdentity` identifies retained content according to service policy,
 while `sha256` identifies the exact declared bytes. Display names and source
 filenames are optional metadata and never substitute for an immutable identity.
+Equal content identity, SHA-256, and byte length may occur at two distinct safe
+retained paths and represent distinct logical occurrences. Sharing one retained
+path between objects is rejected. Protocol v1 defines no path allocation or
+naming algorithm.
 
 ## File Layout And Atomicity
 

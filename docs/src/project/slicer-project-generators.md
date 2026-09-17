@@ -1,8 +1,11 @@
 # Slicer Project Generators
 
-> **Status: Proposed integration, not implemented.** The neutral protocol is a
-> settled v1 contract; invocation flags, compatibility windows, and installation
-> details remain unsettled.
+> **Status: Partially implemented.** The neutral protocol, settings v2, static
+> deployed-generator identity, pure processing recipe, ordered-occurrence
+> persistence, and exact cache-lookup contracts are implemented. Production
+> geometry dispatch and orchestration, CLI runner execution, candidate
+> upload/readiness verification, publication, and real deployment remain
+> unavailable.
 
 ## Terminology
 
@@ -11,13 +14,16 @@
 - **Slicer project 3MF** is a slicer-specific project archive containing geometry plus the metadata, configuration, and archive conventions expected by a slicer family.
   Bambu Studio, OrcaSlicer, and PrusaSlicer project files are separate dialect artifacts even where their formats overlap.
 - **Geometry input** is the source-neutral input passed to a generator.
-  It might eventually be STEP, STL, geometry-only 3MF, or a manifest plus several files.
-  Onshape geometry 3MF is one candidate, not the required architecture. The
+   It might eventually be STEP, STL, geometry-only 3MF, or a manifest plus several files.
+   Onshape geometry 3MF is one candidate, not the required architecture. The
   [Onshape Geometry Input Characterization](onshape-geometry-input-characterization.md)
   supports an opaque grouped-payload boundary and bounded official-part/root-
-  occurrence exports only. Its selected-object follow-up chose no MVP profile
-  because complete nested Assembly paths and one tested generated repeated
-  occurrence could not be selected causally; those mappings remain fail-closed.
+  occurrence exports only. Its controlled selected-object follow-ups chose no
+  direct-selector profile: comma-separated root and tail IDs did not causally select one
+  ordered nested leaf, a root-leaf payload omitted Assembly placement, and the
+  immutable-leaf profile therefore uses separate neutral placements. Expected
+  matrix derivation and orchestration remain fail-closed pending their owning
+  integrations.
 
 The product and cache model must not label an Onshape geometry 3MF as a slicer project 3MF.
 User-visible output kinds and media metadata should retain this distinction.
@@ -39,18 +45,19 @@ Onshape API -> retained raw geometry -> neutral generator input
                             artifact publication
 ```
 
-The approved generator CLI is trusted to the same degree as the service's own
+The configured generator CLI is trusted to the same degree as the service's own
 code. The process boundary preserves repository ownership, source-ingress
 restrictions, provenance, release, distribution, and license responsibilities;
 it also defines a source-neutral interface and is not a runtime security
 boundary. A generator result does not authorize publication until the service
-validates source-neutral archive and identity requirements and completes any
-required target-aware check through separately approved target-side validation
-inputs or tools.
+verifies source-neutral protocol identities and independently measures the
+declared candidate bytes. Final target-aware self-validation belongs to the
+generator.
 
 The proposed generator responsibilities are:
 
-- Accept one source-neutral geometry input and explicit project settings.
+- Accept the protocol's ordered source-neutral geometry input set and explicit
+  project settings.
 - Produce exactly one candidate project 3MF for its declared slicer dialect.
 - Report generator, protocol, dialect, capability, and provenance identities.
 - Reject unsupported requests rather than silently dropping project features.
@@ -60,9 +67,14 @@ The proposed generator responsibilities are:
 The service would be responsible for:
 
 - Preparing the geometry input and canonical request.
-- Selecting a compatible generator through declared capabilities.
-- Verifying generator package/build identity, protocol, dialect, provenance, and capability metadata against a service-owned approved-generator manifest rather than trusting self-reported identity alone.
-- Enforcing output-size and generic archive limits before publication.
+- Loading exactly one reviewed static
+  [deployed-generator configuration](deployed-generator.md); declared
+  capabilities are verification evidence, not authorization.
+- Verifying generator package/build/binary identity, protocol, dialect,
+  provenance, and capability metadata against that static binding rather than
+  trusting self-reported identity alone.
+- Enforcing source-neutral protocol and declared output limits before
+  publication.
 - Independently hashing the candidate output and comparing it with the generator's validation report before publication.
 - Recording the complete recipe in cache and artifact metadata.
 
@@ -76,20 +88,14 @@ target-derived slicer dialect facts. The exact v1 contract is the normative
 
 The canonical target-side repository is
 [`slicer-project-generators`](https://github.com/altendky/slicer-project-generators).
-It maps three independent packages and binaries:
-
-| Slicer dialect | Package | Binary |
-| --- | --- | --- |
-| Bambu Studio | `crates/bambu-studio` | `slicer-project-generator-bambu-studio` |
-| OrcaSlicer | `crates/orca-slicer` | `slicer-project-generator-orca-slicer` |
-| PrusaSlicer | `crates/prusa-slicer` | `slicer-project-generator-prusa-slicer` |
-
-These boundaries do not claim implemented capabilities or compatibility.
 Generator-local source-informed derivative development, target-derived slicer
 schemas and fixtures, package builds, release evidence, and provenance sets
 belong in that repository under its pinned normative
 [Slicer Project Generator Provenance Policy](https://github.com/altendky/slicer-project-generators/blob/ced6585d5a8e1a47690e7eabdf92beaa7fea7fc4/docs/src/project/slicer-project-generator-provenance.md).
-Shared implementation must not blur capability, dialect, or provenance records.
+Package layout, binary names, and target-derived implementation facts remain
+owned there. The service records only reviewed immutable package and binary
+identities and digests in its static deployed-generator document. Shared implementation must not
+blur capability, dialect, or provenance records.
 
 Each dialect produces a separate immutable artifact.
 A Bambu project, Orca project, and Prusa project must not share an artifact identity merely because their bytes or archive members happen to match.
@@ -102,13 +108,15 @@ long-running service protocol. The later runner will invoke a generator with
 paths for:
 
 - A request JSON file.
-- A geometry file or input-directory manifest.
 - A result JSON file.
-- A candidate output 3MF file.
-- A private working directory.
 
 The request identifies the protocol version, opaque expected identities, the
 ordered geometry input set and roles, settings, and one output declaration. The
+manifest, retained objects, and settings use declared safe paths under `inputs/`;
+the candidate uses its declared path under `outputs/`, all within one private
+invocation root. Request/result path arguments belong to the later trusted CLI
+interface.
+The
 result reports success or structured failure, exact reported identities,
 candidate output hash, and bounded diagnostics.
 The service would independently recompute the candidate output hash rather than trust the report.
@@ -117,7 +125,9 @@ by protocol v1. Exact process flags and runner implementation remain open.
 
 ## Capabilities And Versioning
 
-Generators should expose machine-readable capabilities before work is scheduled.
+Generators may expose machine-readable capabilities as release evidence, but
+runtime compatibility uses only the exact reviewed static deployed-generator
+binding.
 Capabilities should use granular, revisioned identities rather than one broad
 format-support flag.
 The target repository owns capability identifiers, revisions, and evidence. The
@@ -140,18 +150,31 @@ A service may be able to invoke a generator while refusing a requested capabilit
 
 ## Cache Identity
 
-Project-3MF post-processing identity must include the generator build or immutable package identity, protocol version, dialect revision, provenance-set version, exercised capability revisions, geometry-input media type and kind, neutral-IR or input-schema version, relevant parser identity/version, parser-normalization identity/version, and validation policy/tool versions.
-Requested dialect, requested capabilities, and canonical project settings are logical export-option identity.
-The current single retained geometry input remains bound through the existing raw-payload/content identity, not a duplicate content hash inside processing-recipe or policy identity.
-If a future invocation accepts multiple input blobs, it must use a separate explicit input-set or invocation identity rather than placing their hashes in processing policy.
-A multi-blob invocation must not infer source-object identity from archive order,
-filenames, display names, or result-array position. Only mappings proven under
-the characterization rules may populate that ordered input set. As of the
-selected-object follow-up, no profile satisfies the required Part Studio and
-complete Assembly occurrence-path contract, so production multi-object dispatch
-remains unavailable.
-A service-owned approved-generator manifest must bind the allowed package/build identity to its approved protocol, dialect, provenance set, and capabilities.
-Candidate output hashes are independently computed per invocation and do not belong in the approved-generator manifest.
+`generator-processing-recipe-v1` canonically binds the static deployed-generator
+identity, requested compatibility and decision, complete validated ordered
+protocol manifest, normalized settings, settings identities, and validated
+invocation/output declaration. Retained bytes are represented through ordered
+logical occurrences and their explicit input-set identity; content hashes are
+not duplicated as separate policy fields.
+
+Generator `optionsHash` identifies logical project-export intent from the output
+format, requested dialect, ordered capability revisions, canonical settings
+identity, and settings-schema identity. Package/build/binary, provenance,
+normalization, and validation identities remain processing identity rather than
+logical options.
+
+The recipe contract can represent multiple retained inputs, but production
+construction and dispatch of such manifests remain unavailable. They must not
+infer source-object identity from archive order, filenames, display names, or
+result-array position. Only mappings proven under the characterization rules may
+populate that ordered input set. As of the controlled selected-object
+follow-ups, no profile satisfies the required Part Studio and complete Assembly
+occurrence-path contract, so production multi-object dispatch remains
+unavailable.
+The service-owned static deployed-generator identity binds package and binary
+digests plus approved protocol, dialect, provenance, capabilities, input/schema,
+normalization, and validation identities. Invocation settings and candidate
+output hashes remain separate.
 
 Changing any output-affecting identity creates a new candidate artifact and may supersede the active artifact.
 It must not overwrite a published object.
@@ -168,29 +191,32 @@ The desired determinism level is unresolved. The prototype must distinguish:
 Until the projects choose a level, generators should remove controllable nondeterminism, report unavoidable sources, and preserve enough inputs and versions to reproduce or diagnose a build.
 Normalization must not conceal a semantic change.
 
-Before publication, service-local validation should include safe archive paths,
-member count and size limits, neutral protocol and identity consistency, and no
-unexpected external references. Target-aware project structure, dialect, and
-compatibility checks must use separately approved immutable validation inputs or
-tools from the generator repository; target schemas and fixtures remain there.
-Their packaging and execution boundary are unresolved. The service must
-independently hash the candidate output and compare it with the generator's
-validation report.
+Before any future generator-artifact publication, service validation must follow
+the normative [integration policy](slicer-project-generator-integration.md),
+including neutral protocol consistency and independent candidate hashing.
+Runtime candidate staging, validation, upload/readiness verification, and
+publication are not implemented here. Generator raw-input
+bounds and final target-aware self-validation are owned by
+[`slicer-project-generators#8`](https://github.com/altendky/slicer-project-generators/issues/8)
+and
+[`slicer-project-generators#9`](https://github.com/altendky/slicer-project-generators/issues/9).
+Target schemas and fixtures remain in that repository.
 A process exit code or successful ZIP parse alone is insufficient.
 
 ## Trusted CLI Execution
 
-The service directly invokes only exact approved generator CLI package bytes at
-a fixed configured path and does not use a shell. The CLI exchanges declared
-request, input, result, and output files through the neutral protocol. Ordinary
-runner behavior handles success, structured failure, process crash, unexpected
+A production trusted-CLI runner is not implemented. When added, it must invoke
+only exact statically configured trusted generator CLI bytes at a fixed
+configured path and must not use a shell. The CLI will exchange declared request,
+input, result, and output files through the neutral protocol. Ordinary runner
+behavior must handle success, structured failure, process crash, unexpected
 exit, and missing or malformed results.
 
 No runtime sandbox or containment mechanism is required. The approved CLI may
 run with the same ambient runtime access as the service because it is trusted to
 the same degree as service code. Independent result validation remains a
-publication-integrity gate, not a hostile-code boundary. The service stages and
-publishes independently accepted bytes rather than forwarding a
+publication-integrity gate, not a hostile-code boundary. The future runtime must
+stage and publish independently accepted bytes rather than forwarding a
 generator-created path.
 
 ## Upgrade Overview
@@ -202,13 +228,15 @@ Generator release and service publication are separate gates:
 2. The service acquires and hashes those exact bytes without rebuilding them.
 3. The service reviews the interface, distribution, trusted CLI, validation,
    deployment, cache, and publication behavior for the exact package identity.
-4. The service adds an approved immutable binding to its approved-generator
-   manifest and may make that package selectable.
+4. Deployment installs those exact bytes and writes the one closed static
+   deployed-generator document.
 5. A trusted external CLI invocation produces a private candidate project 3MF.
 6. The service independently validates and hashes the candidate and publishes
    only those exact validated artifact bytes.
 
-Rollback should select a previously retained, still-approved generator and artifact set, not mutate already published bytes.
+Replacing or removing the static deployment affects future work and does not
+mutate already published bytes. The v1 configuration defines no rollback or
+revocation lifecycle.
 
 ## Related Policy And Questions
 

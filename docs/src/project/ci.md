@@ -160,16 +160,17 @@ Integration workflows should test the versioned CLI protocol and error fixtures,
 deterministic or normalized output at the selected guarantee level,
 ordinary process and protocol failure handling, and compatibility against pinned
 slicer versions. They do not test a runtime sandbox or containment boundary for
-approved generator CLIs.
-Before service approval or publication, the service must validate generator package/build identity,
-protocol version, dialect and dialect revision, provenance-set version, and
-capability metadata against a service-owned approved-generator manifest.
+trusted generator CLIs.
+Before service approval or publication, the service must validate exact package
+and binary digests plus protocol, dialect, provenance-set, and capability
+metadata in the one closed
+[deployed-generator configuration](deployed-generator.md).
 It must independently hash the candidate output and compare that value with the
-generator's validation report; the candidate output hash is not an
-approved-manifest value.
-A released generator package remains unselectable until the service approves its
-exact bytes; generated artifacts remain private until separate service
-validation and publication gates pass. See the normative
+generator's validation report; the candidate output hash is not a static
+configuration value.
+A released generator package remains unusable until the service approves and
+statically configures its exact bytes; generated artifacts remain private until
+separate service validation and publication gates pass. See the normative
 [Slicer Project Generator Integration Policy](slicer-project-generator-integration.md).
 
 Defer until the Rust checks are stable or the project needs broader platform guarantees:

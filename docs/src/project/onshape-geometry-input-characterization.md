@@ -1,9 +1,9 @@
 # Onshape Geometry Input Characterization
 
 > **Status: source-neutral characterization, not a production protocol.** This
-> report records sanitized observations made on 2026-07-30 and 2026-08-02. It
-> defines
-> fail-closed requirements consumed by the neutral protocol, but it does not
+> report records sanitized observations made on 2026-07-30, 2026-08-02, and
+> 2026-08-04. It defines fail-closed requirements consumed by the neutral
+> protocol, but it does not
 > itself define a production schema, migration, or generator interface.
 
 ## Scope And Boundary
@@ -416,3 +416,184 @@ Later authenticated work separately characterized configured Part Studio part
 IDs, complete ordered Assembly occurrence paths, and built-in metadata carriers
 without changing this report's export-mapping conclusion. See the
 [Onshape Annotation Carrier And Selector Characterization](onshape-annotation-carrier-characterization.md).
+
+## Production Geometry Profile Follow-Up
+
+On 2026-08-04, a second authenticated follow-up tested direct nested selection
+and the minimum immutable-leaf fallback on a new controlled source. It did not
+select a production profile. The direct selector remained non-causal for a
+complete nested leaf, while the fallback remained short of the required reviewed
+converter, output-validator, and conformance contract.
+
+### Preflight And Evidence Boundary
+
+Authentication validation succeeded before any empirical request. The session
+reported the Free plan and the required read/write OAuth scope. Before source
+creation, the designated sandbox folder was verified as private, user-owned, and
+administrable. The controlled document was created directly beneath it and a
+read-after-write check confirmed the parent, user ownership, Free account tier,
+public access class, and owner permissions including write, version, and export.
+Version creation, translation, and external-result download each succeeded.
+
+The checked-in evidence remains limited to aliases, request shapes, counts,
+booleans, structural envelopes, and bounded conclusions. The document,
+workspace, version, microversion, element, part, instance, occurrence,
+translation, external-data, payload, header, private evidence, and content-hash
+identities are not included.
+
+The controlled source uses these report-local aliases:
+
+- `DOC-PROFILE`: one persistent synthetic primary document.
+- `PS-LEAF`: one Part Studio with one asymmetric off-origin solid.
+- `ASM-NESTED`: one Assembly containing one available and one suppressed
+  instance of the same leaf.
+- `ASM-ROOT`: one Assembly containing one direct leaf and two repeated instances
+  of `ASM-NESTED` under distinct proper rigid transforms.
+
+The repeated nested occurrences included one nontrivial rotation and translation
+and one large translation. No companion document was created because the direct
+branch failed before linked-reference coverage and the fallback was already
+ineligible without a reviewed converter/output profile. The fixture is retained
+as reproducibility evidence.
+
+The official Assembly-transform contract was pinned to the
+[official documentation repository](https://github.com/onshape-public/onshape-public.github.io/blob/c9cc2e8e86e2c304a638e670bbd56c64ae79b1db/docs/api-adv/assemblies/index.html)
+at commit `c9cc2e8e86e2c304a638e670bbd56c64ae79b1db`. It defines
+occurrence matrices as absolute object-to-world transforms in the top-level
+Assembly frame. The 3MF baseline was pinned to
+[3MF Core 1.4.0](https://github.com/3MFConsortium/spec_core/tree/997b385e06f3181cf9aae0c578e0b45ccd48ccb2)
+at commit `997b385e06f3181cf9aae0c578e0b45ccd48ccb2`, and the GLB
+baseline to
+[glTF 2.0](https://github.com/KhronosGroup/glTF/tree/2b29723d025a995971726f2989697cdc49b1222a)
+at commit `2b29723d025a995971726f2989697cdc49b1222a`. The current
+generated Onshape API v16 schema was recorded privately. Onshape exposes no
+translator version for this contract.
+
+### Acquisition And Realization Taxonomy
+
+Acquisition identity and final geometry realization are independent:
+
+- **Direct acquisition** means Onshape causally exports the exact selected
+  occurrence. A pass-through result is eligible only if the realized payload is
+  already fully placed and satisfies the final indexed-triangle contract.
+- **Fallback acquisition** resolves the exact complete path to an immutable
+  leaf export and applies the one path-matched absolute transform exactly once.
+- The observed STEP AP242 result contained manifold solid B-rep rather than an
+  indexed-triangle payload. That candidate would require a pinned parser,
+  tessellator, and neutral output validator even with direct acquisition.
+- Binary STL is triangle soup without embedded units or indices. Even with
+  direct acquisition it requires a pinned unit/basis/frame contract and
+  normalization into a named indexed output.
+
+Consequently, calling STEP or STL a direct selected-occurrence source would not
+make its raw bytes a valid final neutral payload. Geometry 3MF and GLB likewise
+remain pass-through candidates only when their complete realized structure and
+frame validate.
+
+### Immutable Source Contract
+
+The root document was versioned after source construction. Resolving that
+version returned the same microversion recorded by the version response and by
+the immutable root Assembly definition. Every tested available nested leaf
+resolved to exactly one referenced document, Part Studio element, default full
+configuration, official part ID, captured `documentMicroversion`, and complete
+two-segment path. Each path matched exactly one 16-value finite affine transform
+with final row `0,0,0,1`, an orthonormal rotation block, and determinant `+1`
+under the private harness's `1e-12` absolute tolerance.
+
+Because the leaf and root were in the same controlled immutable document
+snapshot, the root version also supplied an immutable leaf version whose
+resolved microversion equaled the leaf `documentMicroversion`. This proves the
+minimum same-document version-to-microversion equality shape for the tested
+default configuration only. It does not prove linked documents, non-default
+configurations, or general version discovery.
+
+### Direct Selector Results
+
+The generated generic Assembly translation schema describes
+`occurrencesToExport` as one string containing comma-separated occurrence IDs.
+It does not define those entries as an ordered nested path. The format-specific
+Assembly GLB and STEP export schemas expose no occurrence selector. The bounded
+tests therefore used only atomic IDs and comma-separated IDs already admitted
+by the generic schema; no delimiter or alternate path syntax was invented.
+
+All successful rows completed with one unique nonempty external-data ID, no
+result-element IDs, one nonempty download, and generic
+`application/octet-stream`. The reordered and suppressed-tail differential was
+repeated independently for geometry 3MF, GLB, STEP AP242, and binary STL.
+
+| Selector case | Bounded result | Causal conclusion |
+| --- | --- | --- |
+| Direct root leaf ID | One mesh payload in the Part Studio frame | The occurrence's nonidentity Assembly transform was absent, so the result was not fully placed. |
+| Nested leaf tail ID only | Request failed before translation creation | A tail is not a complete nested selector. |
+| Root subassembly ID only | One subassembly payload containing its available descendant | This selects a non-leaf subtree, not one exact leaf. |
+| Root subassembly ID plus available leaf tail ID | One root/subassembly/leaf hierarchy with the selected root occurrence's placement | The result was path-shaped but did not establish ordered-path semantics. |
+| The same available tail under the other repeated root ID | The same leaf source with the other root occurrence's distinct placement | The root ID controls the selected subtree and placement. |
+| Available tail followed by root ID | The same result shape and root placement as root followed by tail | Reordering did not fail, so comma order is not path identity. |
+| Root ID plus suppressed leaf tail ID | The available descendant was still exported with the root placement | The tail did not causally constrain the leaf and suppression was not honored as exact selection. |
+
+These differential cases reject a complete-path interpretation. The
+comma-separated field behaved as a set of requested IDs broad enough for the
+root subassembly selection to determine the exported available subtree. A
+successful payload containing the desired leaf is therefore insufficient: the
+request also succeeds after reordering or substituting a suppressed tail. Names,
+hierarchy members, and payload content cannot repair that missing causal
+relation.
+
+The three differential payloads for each format had the same bounded geometry
+structure after removing only attempt metadata where necessary:
+
+- Geometry 3MF contained one mesh leaf under the same selected root subtree and
+  placement.
+- GLB contained four nodes, one mesh, one matrix-bearing node, and one scene;
+  the three downloaded payloads were equal.
+- STEP AP242 contained 216 exchange entities and one manifold solid B-rep; the
+  payloads were equal after normalizing the attempt filename and timestamp.
+- Binary STL contained twelve triangles with the same placed bounds; the three
+  downloaded payloads were equal.
+
+Equal payloads are not identity evidence. Here they are only a structural check
+that each malformed or suppressed-tail request returned nonempty geometry rather
+than a fail-closed negative result. Every ranked candidate therefore fails the
+required exact nested selector contract. The format-specific GLB and STEP schemas
+also expose no alternate occurrence selector.
+
+### Bounded Fallback Result
+
+An exact official Part Studio part ID was exported through the immutable version
+whose resolved microversion equaled the captured leaf `documentMicroversion`.
+The translation completed with one unique nonempty external-data ID, no
+result-element IDs, and one payload. The source package had exactly the required
+OPC content-types part, root relationships part, and primary model part. Its
+model declared `meter`, despite the millimeter request intent, and contained one
+build item, one mesh, eight finite vertices, and twelve indexed triangles.
+
+A private source-neutral reference harness under CPython 3.12.12 validated the
+package bounds, indices, finite values, matrix shape, affine final row,
+orthonormality, and proper determinant under a fixed `1e-12` absolute tolerance.
+Applying each of the two exact path-matched absolute transforms once produced
+distinct placed bounds for the repeated occurrences and preserved signed volume
+and winding. No ancestor transform was composed.
+
+This is bounded evidence that the fallback geometry operation is feasible. It
+is not a production conversion profile. The private reference harness is not a
+reviewed production converter or validator, and no final package reconstruction
+and validation contract was selected. Required coverage also remains incomplete
+for linked documents, default versus non-default root and leaf configurations,
+pattern-created and flexible subassemblies, composite solids, wire/surface/point
+negative cases, duplicate names, unsupported transforms, and malformed result
+cardinalities. Those omissions make the fallback ineligible rather than
+implicitly supported.
+
+### 2026-08-04 Decision
+
+No production geometry profile is selected. Direct nested occurrence export is
+not causal for one complete ordered leaf path, and the fallback does not yet
+have the complete reviewed converter, output container, validator, identity,
+failure, and conformance contract required for production.
+
+Production selected-object planning, acquisition, conversion, manifest
+construction, and generator dispatch remain unavailable. This issue must remain
+open. Future work may continue the bounded fallback matrix, but it must not
+describe the private reference harness as production, infer a selector from the
+successful subtree payloads, or claim untested cases.

@@ -3,8 +3,11 @@ mod cache_model;
 mod catalog;
 mod config;
 mod db;
+pub mod deployed_generator;
+pub mod generator_processing;
 pub mod generator_protocol;
 mod onshape;
+pub mod onshape_annotation;
 mod parameters;
 mod storage;
 
@@ -255,6 +258,7 @@ struct AppState {
     db: Database,
     onshape: OnshapeClient,
     storage: StorageClient,
+    _deployed_generator: Option<deployed_generator::DeployedGeneratorAvailability>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -441,20 +445,34 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     let config = Config::from_env()?;
+    let deployed_generator = if command_requires_deployed_generator(&cli.command) {
+        let availability = deployed_generator::DeployedGeneratorAvailability::load_from_env()?;
+        log_deployed_generator_availability(&availability);
+        Some(availability)
+    } else {
+        None
+    };
 
     match cli.command {
-        None | Some(CliCommand::Serve) => serve(config).await,
-        Some(CliCommand::Worker) => run_worker(config).await,
+        None | Some(CliCommand::Serve) => serve(config, deployed_generator.unwrap()).await,
+        Some(CliCommand::Worker) => run_worker(config, deployed_generator.unwrap()).await,
         Some(command) => run_cli(config, command).await,
     }
 }
 
-async fn serve(config: Config) -> anyhow::Result<()> {
+fn command_requires_deployed_generator(command: &Option<CliCommand>) -> bool {
+    matches!(command, None | Some(CliCommand::Serve | CliCommand::Worker))
+}
+
+async fn serve(
+    config: Config,
+    deployed_generator: deployed_generator::DeployedGeneratorAvailability,
+) -> anyhow::Result<()> {
     let worker_enabled = config.worker_enabled;
     let worker_concurrency = config.worker_concurrency;
     let bind_addr = config.bind_addr;
     let rebuild_interval = config.rebuild_interval;
-    let state = build_state(config).await?;
+    let state = build_state(config, Some(deployed_generator)).await?;
 
     if worker_enabled {
         tokio::spawn(background_runtime(
@@ -477,10 +495,13 @@ async fn serve(config: Config) -> anyhow::Result<()> {
         .context("serving app")
 }
 
-async fn run_worker(config: Config) -> anyhow::Result<()> {
+async fn run_worker(
+    config: Config,
+    deployed_generator: deployed_generator::DeployedGeneratorAvailability,
+) -> anyhow::Result<()> {
     let rebuild_interval = config.rebuild_interval;
     let worker_concurrency = config.worker_concurrency;
-    let state = build_state(config).await?;
+    let state = build_state(config, Some(deployed_generator)).await?;
     tracing::info!(worker_concurrency, "starting worker-only runtime");
 
     tokio::select! {
@@ -1174,7 +1195,7 @@ async fn ensure_database_ready_for_serve(db: &Database) -> anyhow::Result<()> {
 }
 
 async fn cli_state(config: Config) -> anyhow::Result<AppState> {
-    build_state(config).await
+    build_state(config, None).await
 }
 
 async fn cli_db(config: &Config) -> anyhow::Result<Database> {
@@ -1183,7 +1204,10 @@ async fn cli_db(config: &Config) -> anyhow::Result<Database> {
         .context("connecting to database")
 }
 
-async fn build_state(config: Config) -> anyhow::Result<AppState> {
+async fn build_state(
+    config: Config,
+    deployed_generator: Option<deployed_generator::DeployedGeneratorAvailability>,
+) -> anyhow::Result<AppState> {
     let db = Database::connect(&config.database_url)
         .await
         .context("connecting to database")?;
@@ -1197,7 +1221,21 @@ async fn build_state(config: Config) -> anyhow::Result<AppState> {
         db,
         onshape,
         storage,
+        _deployed_generator: deployed_generator,
     })
+}
+
+fn log_deployed_generator_availability(
+    availability: &deployed_generator::DeployedGeneratorAvailability,
+) {
+    if let Some(identity) = availability.static_identity() {
+        tracing::info!(
+            deployed_generator_identity = identity,
+            "trusted generator configured"
+        );
+    } else {
+        tracing::info!("trusted generator not configured; generator output is unavailable");
+    }
 }
 
 fn selected_models<'a>(
@@ -3647,6 +3685,7 @@ async fn refresh_preview(
                 request_hash: Some(&prepared.request_hash),
                 raw_payload_hash: Some(&raw_payload.raw_payload_hash),
                 postprocess_hash: Some(&preview_artifact.postprocess_hash),
+                generator_processing_hash: None,
                 parameter_schema_version: SCHEMA_VERSION.into(),
                 config_values_json: &config_values_json,
             },
@@ -4137,6 +4176,7 @@ async fn refresh_download(
                 request_hash: Some(&prepared.request_hash),
                 raw_payload_hash: Some(&raw_payload.raw_payload_hash),
                 postprocess_hash: Some(&download_artifact.postprocess_hash),
+                generator_processing_hash: None,
                 parameter_schema_version: SCHEMA_VERSION.into(),
                 config_values_json: &config_values_json,
             },
@@ -4793,9 +4833,10 @@ fn preview_artifact_key(
         source_hash: source_hash.to_owned(),
         config_hash: config_hash.to_owned(),
         options_hash: options_hash.to_owned(),
-        request_hash: request_hash.to_owned(),
-        raw_payload_hash: raw_payload_hash.to_owned(),
+        request_hash: Some(request_hash.to_owned()),
+        raw_payload_hash: Some(raw_payload_hash.to_owned()),
         postprocess_hash: postprocess_hash.to_owned(),
+        generator_processing_hash: None,
     })
 }
 
@@ -4824,9 +4865,10 @@ fn download_artifact_key(
         source_hash: source_hash.to_owned(),
         config_hash: config_hash.to_owned(),
         options_hash: options_hash.to_owned(),
-        request_hash: request_hash.to_owned(),
-        raw_payload_hash: raw_payload_hash.to_owned(),
+        request_hash: Some(request_hash.to_owned()),
+        raw_payload_hash: Some(raw_payload_hash.to_owned()),
         postprocess_hash: postprocess_hash.to_owned(),
+        generator_processing_hash: None,
     })
 }
 
@@ -6066,6 +6108,7 @@ mod tests {
                 request_hash: Some("requesthash".to_owned()),
                 raw_payload_hash: Some("rawhash".to_owned()),
                 postprocess_hash: Some("posthash".to_owned()),
+                generator_processing_hash: None,
                 output_kind: "preview_glb".to_owned(),
                 format: "glb".to_owned(),
                 status: "upload_failed".to_owned(),
@@ -6321,6 +6364,7 @@ mod tests {
                 request_hash: Some("old-requesthash"),
                 raw_payload_hash: Some("rawhash-old"),
                 postprocess_hash: Some("posthash-old"),
+                generator_processing_hash: None,
                 parameter_schema_version: SCHEMA_VERSION.into(),
                 config_values_json: "{}",
             })
@@ -6412,6 +6456,7 @@ mod tests {
                 request_hash: Some("requesthash"),
                 raw_payload_hash: Some("rawhash"),
                 postprocess_hash: Some("posthash"),
+                generator_processing_hash: None,
                 parameter_schema_version: SCHEMA_VERSION.into(),
                 config_values_json: "{}",
             })
@@ -6769,6 +6814,21 @@ mod tests {
     }
 
     #[test]
+    fn only_serve_and_worker_require_deployed_generator_configuration() {
+        for arguments in [
+            vec!["onshape-export"],
+            vec!["onshape-export", "serve"],
+            vec!["onshape-export", "worker"],
+        ] {
+            let cli = Cli::try_parse_from(arguments).unwrap();
+            assert!(command_requires_deployed_generator(&cli.command));
+        }
+
+        let maintenance = Cli::try_parse_from(["onshape-export", "catalog", "validate"]).unwrap();
+        assert!(!command_requires_deployed_generator(&maintenance.command));
+    }
+
+    #[test]
     fn parses_catalog_list_json_command() {
         let cli = Cli::try_parse_from(["onshape-export", "catalog", "list", "--json"]).unwrap();
 
@@ -7005,6 +7065,7 @@ mod tests {
             db,
             onshape,
             storage,
+            _deployed_generator: None,
         }
     }
 
