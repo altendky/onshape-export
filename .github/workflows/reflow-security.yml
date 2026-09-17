@@ -183,6 +183,9 @@ jobs:
         with:
           install: false
 
+      - name: Install Python for Semgrep
+        run: mise install --locked python
+
       - name: Check CI security rules
         run: |
           mkdir -p "${REPORT_DIR}"
