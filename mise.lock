@@ -240,7 +240,7 @@ checksum = "sha256:edaca9bd58ec8e92037dac4e877d52f6b8f430b81c18b57e264b4e2fb111c
 url = "https://nodejs.org/dist/v24.16.0/node-v24.16.0-win-x64.zip"
 
 [[tools."pipx:pre-commit"]]
-version = "4.6.0"
+version = "4.6.2"
 backend = "pipx:pre-commit"
 
 [[tools.python]]
