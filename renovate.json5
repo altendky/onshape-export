@@ -14,7 +14,7 @@
   },
 
   "constraints": {
-    "mise": "v2026.9.10"
+    "mise": "v2026.9.11"
   },
 
   // Use custom Rust managers so rust-toolchain.toml and Cargo.toml
