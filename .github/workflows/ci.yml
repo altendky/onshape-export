@@ -16,23 +16,23 @@ permissions:
 jobs:
   mise:
     name: Mise
-    uses: ./.github/workflows/reflow-mise.yml
+    uses: $/.github/workflows/reflow-mise.yml
 
   pre-commit:
     name: Pre-commit
-    uses: ./.github/workflows/reflow-pre-commit.yml
+    uses: $/.github/workflows/reflow-pre-commit.yml
 
   docs:
     name: Docs
-    uses: ./.github/workflows/reflow-docs.yml
+    uses: $/.github/workflows/reflow-docs.yml
 
   rust:
     name: Rust
-    uses: ./.github/workflows/reflow-rust.yml
+    uses: $/.github/workflows/reflow-rust.yml
 
   security:
     name: Security
-    uses: ./.github/workflows/reflow-security.yml
+    uses: $/.github/workflows/reflow-security.yml
 
   all:
     name: all

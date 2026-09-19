@@ -4,5 +4,10 @@ self-hosted-runner:
 config-variables: null
 
 paths:
-#  .github/workflows/**/*.yml:
-#    ignore: []
+  .github/workflows/*.yml:
+    ignore:
+      # actionlint v1.7.12 rejects self-repository references supported by GitHub.
+      # Remove these exceptions when actionlint supports them:
+      # https://github.com/rhysd/actionlint/issues/711
+      - 'specifying action "\$/\.github/actions/[^" ]+" in invalid format because ref is missing'
+      - 'reusable workflow call "\$/\.github/workflows/[^" ]+\.ya?ml" at "uses" is not following the format'
