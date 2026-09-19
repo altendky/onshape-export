@@ -171,7 +171,7 @@ url_api = "https://api.github.com/repos/cargo-bins/cargo-binstall/releases/asset
 provenance = "github-attestations"
 
 [[tools."cargo:lychee"]]
-version = "0.24.0"
+version = "0.24.2"
 backend = "cargo:lychee"
 
 [[tools."cargo:mdbook"]]
