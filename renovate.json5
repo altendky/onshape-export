@@ -43,6 +43,13 @@
   ],
 
   "packageRules": [
+    // Keep 0.4 patch updates until num-rational and jsonschema/fraction support 0.5.
+    // Remove when https://github.com/altendky/onshape-export/issues/251 is resolved.
+    {
+      "matchManagers": ["cargo"],
+      "matchDepNames": ["num-bigint"],
+      "allowedVersions": "<0.5"
+    },
     {
       "matchDepNames": ["rust-lang/rust"],
       "groupName": "Rust toolchain"
