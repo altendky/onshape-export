@@ -1,12 +1,14 @@
 # Configured-Leaf Geometry 3MF Acquisition
 
-> **Status: bounded characterization completed; Part Studio direct binding
-> rejected, Assembly-leaf direct binding demonstrated.**
-> This source-neutral contract belongs to
-> [#308](https://github.com/altendky/onshape-export/issues/308). It specifies the
-> evidence required before
-> [#174](https://github.com/altendky/onshape-export/issues/174) can acquire
-> configured leaves. It does not implement production acquisition.
+> **Status: #174 phase 1 provenance contract submitted for review; production
+> acquisition remains unimplemented.**
+> Bounded characterization in
+> [#308](https://github.com/altendky/onshape-export/issues/308) rejected Part
+> Studio direct binding and demonstrated the tested Assembly-leaf binding and
+> original Part Studio encoding handoff. The contract below defines trusted
+> recording and consumption of that handoff. Review and merge of the phase 1
+> contract PR must precede phase 2 implementation; this PR does not close #174
+> or enable production support.
 
 ## Scope And Ownership
 
@@ -112,16 +114,269 @@ The controlled trials below reject direct Part Studio `configurationId` use:
 non-default identities returned default geometry. Exact Assembly-leaf
 `fullConfiguration` use discriminated the tested configurations. These are
 separate conclusions; no equality among configuration spaces is inferred.
-The complete #174 implementation remains blocked on a reviewed Part Studio
-request-provenance handoff.
+The Part Studio alternative uses only the original encoding handoff under the
+trusted provenance contract below. Phase 2 remains gated on review and merge of
+that contract.
 
 Unsupported or unproven bindings are unavailable before create. If direct use
 is rejected or remains unproven, any alternative must separately retain trusted
 leaf acquisition-request provenance bound to the exact source snapshot and leaf.
 It must preserve the existing plan, leaf, source, and configuration hash scopes.
 Do not derive an encoding by parsing a response identity or silently add an
-encoding to a plan identity. An alternative requires its own reviewed handoff and
-evidence; this characterization does not authorize it.
+encoding to a plan identity. The original coordinator handoff already has the
+bounded differential evidence recorded below. A different unproven request
+representation requires evidence before support is enabled; merely selecting
+this provenance mechanism requires no repeat characterization.
+
+## Trusted Acquisition Provenance Contract
+
+### Producer And Successful Invocation Boundary
+
+Issue #174 owns a trusted service wrapper around the existing coordinator and
+`plan_selection` flow. It obtains the coordinator's validated four-field
+handoff, freezes the complete `SelectionRequest` that contains that exact
+handoff and caller-ordered selectors, and invokes the unchanged planner with
+that immutable request. The wrapper retains the original handoff and its exact
+validated encoding context throughout that invocation. Capture occurs before
+planning, not from a caller-attached value after the plan returns.
+
+Only a complete successful return from that same invocation can become a
+provenance record. The producer retains the complete returned
+`ResolvedSelectionPlan`, including its required `planIdentity`, authoring
+identity, root, every object, annotation, display name, selector, and placement.
+It verifies exact request/root document, version, element, and kind equality;
+ordered equality of each request selector's `partId` or `occurrencePath` with
+the corresponding full planned authoring selector's same field, plus exact
+authoring-selector/root/leaf consistency; and the original handoff/context against the
+successful snapshot and existing read-only encoding validation. It does not
+resolve the version again, encode, or read new metadata to construct provenance.
+Planner snapshot or provenance failure produces no association.
+
+The wrapper's return is atomic: publish a successful trusted plan/provenance
+handle only after the entire record has been validated and durably committed.
+No caller-accessible constructor, deserialization path, record-insertion API,
+or administrative import accepts an independently supplied plan/handoff pair
+as proof of invocation. A caller who attaches another independently valid
+encoding, even one in the trusted encoding cache, has not supplied the original
+handoff consumed by this invocation.
+
+### Closed Record And Canonical Identity
+
+The exact camelCase record contains the following fields and no others:
+
+```json
+{
+  "provenanceSchemaVersion": 1,
+  "requestContract": "onshape-export-configured-leaf-geometry-request-v1",
+  "configurationEncoding": "<original four-field EncodingHandoff object>",
+  "encodingContext": "<complete closed encoding-context-v1 object>",
+  "plan": "<complete four-field ResolvedSelectionPlan object>",
+  "bindings": [
+    {
+      "position": 0,
+      "planLocalObjectIdentity": "<exact object identity>",
+      "selector": "<complete planned authoring selector object>",
+      "configuredLeaf": "<complete closed planned configured-leaf object>",
+      "representation": "part_studio_original_encoding_v1",
+      "configurationRequestValue": "<exact original encodedId>"
+    }
+  ],
+  "provenanceIdentity": "<lowercase SHA-256>"
+}
+```
+
+Angle-bracket placeholders denote the referenced objects, not serialized JSON
+strings. `configurationEncoding` and `encodingContext` have exactly the closed
+schemas and identity rules in [selection plans](onshape-selection-plans.md).
+`plan` is the unmodified complete returned plan. Require 1-256 bindings, exactly
+one per object in plan order, with contiguous zero-based integer positions and
+exact selector, object identity, and configured-leaf equality. There is no
+subset, permutation, duplicate position, or extra binding.
+
+For a Part Studio root, every binding has representation
+`part_studio_original_encoding_v1`; its request value equals the retained
+original handoff's `encodedId`. Every leaf has the root document, microversion,
+element, and selected response-derived configuration identity, and its `partId`
+equals that object's exact Part selector. The encoding context pins that same
+document, caller version, resolved microversion, root element, and kind.
+
+For an Assembly root, every binding instead has representation
+`assembly_leaf_full_configuration_v1`; its request value equals that exact
+planned leaf's `configurationIdentity`, which the planner obtained from the
+joined `fullConfiguration`. Retain the original root handoff/context as
+planning provenance only. Its `encodedId` is never an Assembly leaf translation
+value. The leaf document/microversion equal the root; leaf element and part
+come only from the complete successful plan, never from the root element or
+occurrence-path tail. Mixed representations and unknown contract/version values
+are rejected. Recording a plan does not itself approve an unproven binding.
+
+`provenanceIdentity` is lowercase SHA-256 over RFC 8785/JCS UTF-8 bytes of
+`{"domain":"onshape-export-acquisition-provenance-v1","payload":<payload>}`.
+The closed payload contains exactly the first six fields above, excluding
+`provenanceIdentity`. Use the planner's normalized matrices unchanged. Recompute
+the existing complete-plan and object identities under their existing domains;
+never add provenance to those preimages. Recompute the encoding context and
+source/configuration bindings through existing read-only evidence validation.
+
+The complete canonical record has a 16,777,216-byte ceiling, independently of
+the unchanged 8,388,608-byte plan-hash envelope ceiling. Count while serializing
+and reject before retaining byte limit plus one. Persisted/serialized records
+require complete UTF-8 JSON, duplicate-member rejection, closed typed schemas,
+at most 32 nested containers, 4,096 entries per array, 256 members per object,
+and 262,144 total object members. Apply existing string/hash, selector,
+annotation, matrix, and plan bounds. Validate already normalized matrices;
+do not repair input or normalize it into a different successful record.
+
+This identity detects unequal content; it does not authenticate the producer
+or prove that planning consumed an encoding. All records and identities remain
+outside existing #173 source, configuration, leaf, object, and plan hash scopes.
+
+### Persistence, Concurrency, And Lifecycle
+
+Phase 2 adds one service-owned table `acquisition_plan_provenance` through the
+normal transactional migration runner. Its required columns are
+`provenance_schema_version` (integer fixed to 1), `plan_identity` (text),
+`provenance_identity` (text), and `record_json` (the complete canonical record).
+The primary key is `(provenance_schema_version, plan_identity)`. Require the
+row's keys and identity to equal the validated record. No legacy rows are
+copied, no existing plan/cache schema is changed, and no provenance is inferred
+for a historical plan.
+
+Only the trusted producer writes this table. The database and the service
+code/storage administration that can write it are trusted like existing
+encoding evidence; a digest is not a defense against a malicious database
+writer. No public or serialized-input path may insert or update provenance.
+Internal producer/consumer APIs keep insertion authority separate from
+read-only lookup, and the trusted handle cannot be constructed from JSON.
+
+After complete planning success, validate the entire candidate before opening
+a short recording transaction. Insert the complete record once, never a pending
+row or individual per-object records. On a key conflict, reread the committed
+winner and apply full record/evidence validation. Exact canonical equality of
+the entire candidate and winner is an idempotent success. Unequal content,
+even with an equal recomputed plan identity and independently valid encoding,
+is an operational invariant conflict. Never overwrite, merge, select a newer
+encoding, or repair the winner. A corrupted winner fails rather than becoming
+a cache miss. Concurrent identical producers share one association; conflicting
+producers cannot both obtain a successful association for that key.
+
+The complete plan and sidecar are stored together in `record_json`; insertion
+and commit failure publish no successful handle. Cancellation or process failure
+before commit leaves no association. A crash after commit but before returning
+may leave one complete valid association: restart/retry uses trusted lookup and
+full validation, never reconstruction from a supplied pair. Failed or partial
+planning attempts create no association; an earlier committed success is not
+deleted by a later failed attempt. An outer retry is a separate execution under
+the unchanged coordinator/planner policies, not an internal acquisition retry.
+
+Retain successful associations with their exact encoding/typed-value evidence
+for as long as they may be consumed or audited. There is no automatic expiry,
+overwrite, upgrade, or provenance backfill. If evidence is missing or malformed
+after restart, fail operationally without encoding or provenance repair. Future
+schema changes, migration/retention policy, or external authenticated import
+need separate review; version 1 provides no such import. Treat source values,
+configuration encodings, plans, records, and storage handles as private service
+data under existing access and sanitized-diagnostic policy.
+
+### Consumer Validation And Zero-Create Ordering
+
+The acquisition entry point accepts a trusted successful-plan handle. A
+serialized lookup request is a closed camelCase object with required
+`provenanceSchemaVersion: 1`, `planIdentity`, and `provenanceIdentity`, and only
+optional `plan` and `record` fields. Both identities are lowercase SHA-256
+strings. Decode under the record's complete JSON/byte bounds with duplicate and
+unknown-field rejection; if present, `plan` and `record` must be complete closed
+objects equal to the retrieved record's plan and entire record respectively.
+Null, omitted required fields, wrong types, and unsupported schema versions
+are malformed input. No serialized handoff pair or insertion operation exists.
+Deserialization, matching a digest, or finding a valid encoding row cannot
+create a trusted handle. Missing associations, unequal lookup identities, and
+caller-forged records fail without fallback.
+
+Before any geometry create, complete these barriers for the entire plan:
+
+1. Validate input shape and bounds, then read the one committed association.
+   Strictly validate its entire closed record, canonical identity, keys,
+   complete-plan/object identities, root/source/selector consistency, and every
+   ordered binding. Trusted internal values still require invariant validation;
+   serialization never establishes invocation provenance.
+2. From the retained planned snapshot and static trusted origin, validate the
+   original handoff, context, and all existing encoding/typed-value evidence
+   through the read-only validator. No encoding call, fresh metadata, alternate
+   context, record creation, or provenance repair is permitted. A different
+   independently valid encoding cannot replace the recorded original.
+3. Check every leaf's representation against the separately reviewed
+   demonstrated request contract and supported source profile. Explicit direct
+   Part metadata `configurationId` acquisition remains rejected/unavailable;
+   missing provenance for the original-handoff contract is operational, not an
+   unsupported-binding fallback. Assembly root encoding is never substituted.
+4. Start the 900-second plan-acquisition deadline immediately before the sole
+   independent root-version barrier specified above. Validate returned exact
+   document/version identity and well-formed microversion before comparing the
+   resolved snapshot with the root and every consumed leaf. Do not use that
+   fresh result to reinterpret or repair the recorded snapshot.
+5. Only after every barrier succeeds, acquire distinct exact leaves sequentially
+   in first-occurrence order under the pinned create/poll/download contract.
+   Validate and retain the complete payload/evidence for each before reuse;
+   publish the complete ordered occurrence handoff only after all succeed.
+
+Malformed serialized input is an invalid acquisition handoff using the existing
+`InvalidSelection` caller-input classification, with zero creates.
+Missing, forged, corrupted, unequal, or contradictory provenance, storage
+failure, and trusted-input invariant failure are
+`OperationalApiContractFailure` with zero creates. Wrong/malformed independently
+returned version identity is also operational. Reserve unavailable for a
+well-formed independently resolved snapshot/source mismatch and rejected or
+unproven source bindings. Authentication, transport, HTTP, and timeout failures
+retain their existing typed classifications; free text never changes them.
+
+### Complete Ordered Occurrence-To-Payload Handoff
+
+A successful handoff contains exactly `plan`, `provenanceIdentity`, and
+`bindings`. `plan` is the complete unchanged successful plan. Each binding
+contains exactly `position`, `planLocalObjectIdentity`, `configuredLeaf`,
+`retainedPayload`, and `acquisitionEvidence`. Positions and object/leaf values
+must match the provenance record and plan one-for-one in caller order. The full
+plan preserves each selector, display name, annotation, and placement; no
+metadata is recaptured or moved into leaf identity.
+
+`retainedPayload` contains exactly `storageReference`, `byteLength`, and
+`sha256`. The reference names service-owned immutable opaque bytes, never an
+upstream URL or a protocol path. Its internal storage locator is private and has
+no logical identity role. Length is the actual positive integer byte count
+within the download ceiling; hash is the lowercase service-computed SHA-256.
+
+`acquisitionEvidence` contains exactly `requestContract`, `representation`,
+`configurationRequestValue`, `documentId`, `versionId`, `configuredLeaf`,
+`createRequestPath`, `createRequestQuery`, `createRequestBody`,
+`createTranslationId`, `terminalTranslationId`, `externalDataId`,
+`downloadDocumentId`, `transportMedia`, `byteLength`, and `sha256`.
+The path, empty query object, and closed body are the exact pinned create
+request below; store its decoded JSON object without interpreting configuration
+strings. The evidence's representation/value and selectors equal the validated
+binding/root. Create and terminal IDs are equal; the result and download
+document follow the causal chain below. Length/hash equal the retained bytes.
+`transportMedia` retains the actual accepted declaration. Request provenance
+and transport media remain distinct from plan/source/configuration identities
+and protocol-facing media. Poll/download paths and query sets follow uniquely
+from these exact IDs under the pinned contract; no response URL is followed.
+
+One distinct binding remains for every logical occurrence, including shared
+leaves, equal bytes, different placements, and different annotations. Within
+one invocation reuse only a fully successful acquisition for exactly equal
+closed leaf keys under the same exact request contract, representation, request
+value, and reused document/version. Content hashes do not authorize reuse.
+Cross-invocation acquisition caching is not enabled by this contract: retained
+evidence permits audit, not an implicit cache policy or broader support claim.
+
+The handoff is all-or-nothing. If any acquisition, retention, or final binding
+validation fails, return only the typed failure, release uncommitted payload
+references, and publish no successful or partially reusable acquisition result.
+The previously committed successful planning association may remain valid; it
+is not evidence of a successful acquisition. #175 alone allocates deterministic
+protocol retained paths and builds manifests/settings from this complete
+handoff. #168 stages every occurrence at its declared unique path, even when
+bindings share bytes. Acquisition filenames never determine either path.
 
 ## Causal Translation And Download Chain
 
@@ -253,6 +508,51 @@ authentication precedence, transport interruption, HTTP failures, and every
 deadline boundary. Require atomic failure, ordered distinct occurrence bindings,
 reuse only for exact equal leaves, and no content-based occurrence collapse.
 
+### Phase 2 Provenance Verification Matrix
+
+Use only source-neutral synthetic requests, encoding-cache evidence, plans,
+storage, and fake transport. The phase 1 PR specifies these obligations; phase 2
+must implement them before production support. Existing controlled evidence is
+sufficient for the original Part Studio handoff mechanism; no new fixture or
+upstream slicer source is needed for this verification.
+
+| Synthetic case | Required outcome |
+| --- | --- |
+| Successful original Part Studio invocation | Exact original handoff/context and complete returned plan recorded; one exact binding per object |
+| Successful ordinary flat Assembly invocation | Root handoff retained only for planning provenance; each leaf request uses its exact joined identity |
+| Another valid cached encoding attached after planning, with all hashes recomputed | No producer/insert authority; operational rejection and zero creates |
+| Missing association or referenced encoding/typed-value evidence | Operational failure; zero creates, zero encode calls, no repair |
+| Forged record with a correct self-computed provenance digest | Trusted lookup/equality required; operational rejection and zero creates |
+| Different document/version/microversion/element/kind/origin/API/context/config/encoded ID | Full binding validation fails operationally before creates |
+| Alter display, annotation, authoring identity, placement, selector, object, leaf, or order | Complete-plan/record equality or identity fails; zero creates |
+| Omit, duplicate, reorder, append, or change any binding/position | Complete ordered binding validation fails; zero creates |
+| Unknown field/version/contract/representation, duplicate JSON member, malformed scalar, or exceeded bound | Invalid serialized input or operational stored-record failure; zero creates |
+| Non-normalized matrix supplied with a recomputed hash | Reject; do not repair it into a valid record |
+| Hash preimage includes provenance in an existing identity | Existing #173 golden identity fails; all original preimages stay unchanged |
+| Identical successful invocations racing to insert | One complete row; reread/full validation gives the same association |
+| Same plan identity with different independently valid original handoffs | Unequal association conflict; no overwrite or second successful association |
+| Corrupted concurrent winner or row/key/identity mismatch | Operational failure; not a miss, no replacement |
+| Planner fails, is cancelled, or produces only partial objects | No new association or successful handle |
+| Validation/insert/commit fails, or crash occurs before commit | No published successful handle; no partial committed association |
+| Crash after commit before return, then restart lookup | One complete row reusable only after full read-only validation |
+| Failed later attempt with an earlier successful association | Earlier row preserved; failed invocation publishes no success |
+| Explicit rejected Part Studio direct binding or unproven representation | Unavailable before creates; original encoding is not an implicit fallback |
+| Malformed independent version document/version/microversion | Operational failure, zero creates |
+| Well-formed independent snapshot differs from any planned root/leaf | Unavailable, zero creates |
+| Every provenance/binding validated before barrier and any create | Fake transport records exact order; no metadata or encoding call |
+| Repeated equal leaves at distinct occurrences | One acquisition per exact eligible leaf; separate bindings, matrices, annotations, and order |
+| Different leaf identities yielding equal bytes/SHA-256 | Separate causal acquisitions and occurrence bindings; no content collapse |
+| Failure on a later acquisition, retention, or final handoff check | No complete or partial reusable handoff; uncommitted payload references released |
+| Successful handoff consumed by #175/#168 | No acquisition-allocated protocol path; every declared occurrence path staged separately |
+
+Fault injection must include transaction failure, cancellation around commit,
+reopened persistent storage, concurrent identical and conflicting producers,
+and a conflicting winner that has independently valid encoding evidence. Count
+all calls: every provenance rejection makes zero creates and zero encoding or
+metadata calls. Run unchanged #173 identity goldens and planner tests alongside
+the full transport/translation matrix above. Acquisition failure may follow
+earlier creates, but never returns their partial payloads as reusable success.
+
 ## Controlled Evidence And Binding Conclusions
 
 ### Fixture, Plans, And Observation Boundary
@@ -349,37 +649,27 @@ matched despite different byte hashes.
 
 The exact encoding handoff returned by the unchanged coordinator for each
 successful Part Studio plan was separately tested: default, A, and B all
-exported their expected geometry. This supports the proposed provenance
-alternative below; it does not add that handoff to the plan or implement its
+exported their expected geometry. This supports the provenance contract
+above; it does not add that handoff to the plan or implement its
 required validation. Distinct occurrence bindings remain mandatory even when
 repeated exact leaves reuse one acquisition or produce equal geometry.
 
-### Required Part Studio Alternative
+### Part Studio Alternative And Delivery Gate
 
-Issue #174 remains blocked for the complete source profile. Direct Part Studio
-metadata identities must return unavailable before geometry calls. The
-demonstrated Assembly binding does not authorize a fallback for Part Studios.
+The trusted acquisition-provenance contract above replaces the earlier proposed
+alternative with a reviewable recording, persistence, validation, and handoff
+boundary owned by #174. Only the original coordinator `encodedId` consumed by
+the same successful invocation is eligible for Part Studio acquisition. Direct
+metadata `configurationId` remains rejected and unavailable; an arbitrary valid
+encoding is not a substitute. Independently configured Assembly leaves retain
+their separate demonstrated `fullConfiguration` representation.
 
-The proposed alternative is a separately validated acquisition-provenance
-sidecar retaining the exact trusted `encodedId` used to obtain the successful
-Part Studio plan. Bind it to the originating encoding context, exact source
-document/version/microversion/element, complete plan identity, and each exact
-leaf/part. Validate that relationship atomically before acquisition; a sidecar
-for another plan or snapshot is an operational provenance/invariant failure.
-A well-formed independently resolved source snapshot mismatch is unavailable.
-Store request provenance outside
-the existing plan, leaf, source, and configuration hash scopes. Do not parse
-`configurationId`, re-encode an identity, rediscover metadata, or change #173
-identities. This is a proposed reviewed handoff, not implicit permission to use
-an arbitrary root encoding. Independently configured Assembly leaves continue
-to require their own demonstrated leaf representation.
-
-After a separate sidecar contract is reviewed, synthetic verification must
-cover its complete binding, forged/missing/mismatched provenance, zero creates
-on rejection, atomic failures, and unchanged plan/hash identities.
-
-Closing #308 records the rejected and demonstrated bindings; it does not clear
-the remaining #174 handoff blocker or authorize production acquisition.
+Review and merge of #174's focused phase 1 contract PR satisfies the separate
+handoff review required by the merged #308 document. Phase 2 then implements
+and verifies this contract and the pinned acquisition/transport flow. Closing
+issue #308 established bounded evidence; it did not approve provenance recording or
+enable production acquisition. The phase 1 PR must not close #174, and #174 is
+complete only after both phases are delivered and verified.
 
 Record only sanitized aliases, request shapes, counts, booleans,
 classifications, and bounded conclusions. Keep controlled document, version,

@@ -150,7 +150,18 @@ or change order.
 
 Its [configured-leaf acquisition contract](onshape-geometry-acquisition.md)
 keeps translation-body request provenance distinct from planned response-derived
-configuration identities. #174 retains opaque bytes and ordered
+configuration identities. #174 owns the two-phase trusted sidecar contract and
+implementation: the same planning invocation retains the original handoff/context
+and complete successful plan, commits their immutable association atomically,
+and exposes trusted lookup and complete read-only validation. Caller-attached
+pairs and self-computed digests cannot establish that relationship. Sidecar
+records remain outside existing source/configuration/leaf/plan identities;
+missing, forged, conflicting, or mismatched provenance is operational with zero
+creates. A well-formed independently resolved snapshot mismatch is unavailable.
+Review and merge of the phase 1 contract PR gates phase 2 implementation; phase 1
+neither enables production acquisition nor closes #174.
+
+Issue #174 retains opaque bytes and complete ordered
 occurrence-to-payload bindings; it allocates no protocol paths and does not
 parse internal 3MF grouping, units, geometry, or placement. Unsupported bindings
 are unavailable, while authentication, transport, and upstream-contract failures
