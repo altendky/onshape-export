@@ -168,11 +168,11 @@ if mode == 'success-one':
     sys.exit(1)
 "#;
 
-struct RunnerFixture {
+pub(crate) struct RunnerFixture {
     directory: tempfile::TempDir,
-    generator: DeployedGenerator,
+    pub(crate) generator: DeployedGenerator,
     inputs: Option<ConstructedGeneratorInputs>,
-    prepared: PreparedGeneratorProcessing,
+    pub(crate) prepared: PreparedGeneratorProcessing,
     options: GeneratorRunnerOptions,
 }
 
@@ -184,7 +184,7 @@ fn scratch() -> tempfile::TempDir {
 }
 
 impl RunnerFixture {
-    async fn new(mode: &str) -> Self {
+    pub(crate) async fn new(mode: &str) -> Self {
         let directory = scratch();
         let marker = directory.path().join("started.json");
         let source = FIXTURE
@@ -257,7 +257,7 @@ impl RunnerFixture {
         }
     }
 
-    async fn run(&mut self) -> Result<VerifiedGeneratorOutput, GeneratorRunnerError> {
+    pub(crate) async fn run(&mut self) -> Result<VerifiedGeneratorOutput, GeneratorRunnerError> {
         run_generator(
             &self.generator,
             self.inputs.take().unwrap(),
@@ -271,7 +271,7 @@ impl RunnerFixture {
         self.directory.path().join("started.json").exists()
     }
 
-    fn assert_clean(&self) {
+    pub(crate) fn assert_clean(&self) {
         assert_eq!(
             fs::read_dir(&self.options.scratch_parent).unwrap().count(),
             0

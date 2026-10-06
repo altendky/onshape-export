@@ -5,6 +5,7 @@ use aws_sdk_s3::{
     types::{Delete, ObjectIdentifier},
 };
 use serde::{Serialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
 
 use crate::config::StorageConfig;
 
@@ -114,16 +115,65 @@ impl StorageClient {
         path: &std::path::Path,
         content_type: &str,
     ) -> anyhow::Result<()> {
+        self.put_file_with_headers(key, path, content_type, None, None)
+            .await
+    }
+
+    pub async fn put_file_with_headers(
+        &self,
+        key: &str,
+        path: &std::path::Path,
+        content_type: &str,
+        content_disposition: Option<&str>,
+        cache_control: Option<&str>,
+    ) -> anyhow::Result<()> {
         let body = ByteStream::from_path(path).await?;
-        self.client
+        let mut request = self
+            .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
             .content_type(content_type)
-            .body(body)
+            .body(body);
+        if let Some(content_disposition) = content_disposition {
+            request = request.content_disposition(content_disposition);
+        }
+        if let Some(cache_control) = cache_control {
+            request = request.cache_control(cache_control);
+        }
+        request.send().await?;
+        Ok(())
+    }
+
+    /// Verify metadata and the stored bytes without retaining the object in memory.
+    pub async fn verify_exact_object(
+        &self,
+        key: &str,
+        expected_content_type: &str,
+        expected_len: u64,
+        expected_sha256: &str,
+    ) -> anyhow::Result<()> {
+        let head = self.head_object(key).await?;
+        verify_object_metadata(
+            Some(head.content_length),
+            head.content_type.as_deref(),
+            expected_content_type,
+            expected_len,
+        )?;
+        let output = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
             .send()
             .await?;
-        Ok(())
+        verify_object_metadata(
+            output.content_length(),
+            output.content_type(),
+            expected_content_type,
+            expected_len,
+        )?;
+        verify_object_body(output.body, expected_len, expected_sha256).await
     }
 
     pub async fn get_json<T: DeserializeOwned>(&self, key: &str) -> anyhow::Result<T> {
@@ -234,6 +284,51 @@ impl StorageClient {
     }
 }
 
+fn verify_object_metadata(
+    content_length: Option<i64>,
+    content_type: Option<&str>,
+    expected_content_type: &str,
+    expected_len: u64,
+) -> anyhow::Result<()> {
+    if content_length.and_then(|length| u64::try_from(length).ok()) != Some(expected_len) {
+        anyhow::bail!("stored object content length does not match the accepted bytes");
+    }
+    if content_type != Some(expected_content_type) {
+        anyhow::bail!("stored object content type does not match the accepted output");
+    }
+    Ok(())
+}
+
+async fn verify_object_body(
+    mut body: ByteStream,
+    expected_len: u64,
+    expected_sha256: &str,
+) -> anyhow::Result<()> {
+    let mut length = 0u64;
+    let mut hasher = Sha256::new();
+    while let Some(chunk) = body.try_next().await? {
+        length = length
+            .checked_add(u64::try_from(chunk.len())?)
+            .ok_or_else(|| anyhow::anyhow!("stored object byte count overflow"))?;
+        if length > expected_len {
+            anyhow::bail!("stored object exceeds the accepted byte length");
+        }
+        hasher.update(&chunk);
+    }
+    if length != expected_len {
+        anyhow::bail!("stored object bytes do not match the accepted byte length");
+    }
+    let sha256: String = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if sha256 != expected_sha256 {
+        anyhow::bail!("stored object SHA-256 does not match the accepted bytes");
+    }
+    Ok(())
+}
+
 fn url_path_segment(value: &str) -> String {
     value
         .bytes()
@@ -253,5 +348,38 @@ mod tests {
     #[test]
     fn encodes_public_url_segments() {
         assert_eq!(url_path_segment("a b.glb"), "a%20b.glb");
+    }
+
+    #[test]
+    fn exact_object_metadata_requires_both_length_and_content_type() {
+        assert!(
+            verify_object_metadata(Some(3), Some("application/zip"), "application/zip", 3).is_ok()
+        );
+        for length in [None, Some(-1), Some(2), Some(4)] {
+            assert!(
+                verify_object_metadata(length, Some("application/zip"), "application/zip", 3)
+                    .is_err()
+            );
+        }
+        for content_type in [None, Some("application/octet-stream")] {
+            assert!(verify_object_metadata(Some(3), content_type, "application/zip", 3).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn exact_object_bytes_require_length_and_digest() {
+        let expected_sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert!(
+            verify_object_body(ByteStream::from_static(b"abc"), 3, expected_sha256)
+                .await
+                .is_ok()
+        );
+        for bytes in [b"ab".as_slice(), b"abcd".as_slice(), b"bad".as_slice()] {
+            assert!(
+                verify_object_body(ByteStream::from(bytes.to_vec()), 3, expected_sha256)
+                    .await
+                    .is_err()
+            );
+        }
     }
 }

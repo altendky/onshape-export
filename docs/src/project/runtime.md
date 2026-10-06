@@ -56,8 +56,12 @@ seconds, and its standard streams use the null device; diagnostics come only
 from the bounded protocol result. Timeout and cancellation kill and reap the
 child before cleanup. Successful return requires explicit staging-root cleanup.
 See the normative [runner contract](slicer-project-generator-integration.md#trusted-runner-contract).
-Worker/UI dispatch, candidate upload/readiness, publication, and real generator
-installation remain separate integration work. The configured CLI is trusted like service
+The publication API remeasures accepted bytes, uploads through artifact v2,
+requires full storage read-back verification, and atomically completes readiness
+and supersession. Explicit reconciliation verifies pending stored artifacts
+without rerunning acquisition or generation. Worker/UI dispatch, automatic
+reconciliation scheduling, and real generator installation remain separate
+integration work. The configured CLI is trusted like service
 code; no runtime sandbox, credential stripping, network or filesystem isolation,
 or process resource limits are required. The process boundary preserves
 repository, source-ingress, provenance, release, distribution, and license

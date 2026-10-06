@@ -165,6 +165,10 @@ The source-neutral runner tests use synthetic executables and protocol fixtures
 to exercise exact arguments, input staging, compatibility and digest checks,
 exit/result handling, bounded candidate measurement, timeout, cancellation,
 and cleanup. They do not install or execute real target generators.
+Publication tests pass successful synthetic runner outputs through a loopback
+object-storage service and verify upload-before-ready, exact stored bytes,
+failure boundaries, interrupted uploads, reconciliation, immutable retries,
+concurrent completion, and supersession.
 Before service approval or publication, the service must validate exact package
 and binary digests plus protocol, dialect, provenance-set, and capability
 metadata in the one closed

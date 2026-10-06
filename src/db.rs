@@ -310,6 +310,25 @@ pub struct GeneratorArtifactFileInsert<'a> {
     pub metadata_json: &'a str,
 }
 
+#[derive(Debug, Clone)]
+pub struct GeneratorArtifactState {
+    pub artifact_set_hash: String,
+    pub status: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratorArtifactStoredFile {
+    pub role: String,
+    pub logical_path: String,
+    pub original_path: Option<String>,
+    pub object_key: String,
+    pub content_type: String,
+    pub byte_len: i64,
+    pub sha256: String,
+    pub metadata_json: String,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ArtifactSetRecord {
@@ -2455,6 +2474,155 @@ impl Database {
         Ok(artifact_set_hash)
     }
 
+    /// Equal retries resume immutable rows; they never restage or replace history.
+    pub async fn stage_or_resume_generator_artifact(
+        &self,
+        prepared: &PreparedGeneratorProcessing,
+        artifact: GeneratorArtifactStage<'_>,
+        files: &[GeneratorArtifactFileInsert<'_>],
+    ) -> sqlx::Result<GeneratorArtifactState> {
+        if !matches!(
+            prepared.recipe().compatibility_decision,
+            GeneratorCompatibilityDecision::Supported
+        ) || files.len() != 1
+        {
+            return Err(generator_artifact_conflict());
+        }
+        let file = files[0];
+        if file.object_key != artifact.object_key
+            || file.content_type != artifact.content_type
+            || file.byte_len != artifact.byte_len
+            || file.sha256 != artifact.sha256
+            || file.role != "generated_project"
+            || file.original_path.is_some()
+            || !valid_generator_logical_path(file.logical_path)
+            || file.content_type != prepared.recipe().invocation.output.media_type
+            || file.byte_len <= 0
+            || !valid_generator_sha256(file.sha256)
+            || u64::try_from(file.byte_len)
+                .ok()
+                .is_none_or(|length| length > prepared.recipe().invocation.output.max_byte_length)
+        {
+            return Err(generator_artifact_conflict());
+        }
+        self.insert_generator_processing_recipe(prepared).await?;
+        let identity =
+            generator_artifact_set_identity(prepared, artifact.output_kind, artifact.format)
+                .map_err(generator_identity_error)?;
+        let hash = generator_artifact_set_hash(prepared, artifact.output_kind, artifact.format)
+            .map_err(generator_identity_error)?;
+        let metadata = serde_json::to_string(&ArtifactMetadata {
+            model_slug: artifact.model_slug.to_owned(),
+            producing_job_key: artifact.producing_job_key.map(ToOwned::to_owned),
+            parameter_schema_version: Some(artifact.parameter_schema_version),
+            config_values_json: Some(artifact.config_values_json.to_owned()),
+        })
+        .expect("artifact metadata serializes");
+        let mut tx = self.pool.begin().await?;
+        let inserted = sqlx::query(
+            "INSERT INTO artifact_sets (artifact_set_hash, source_hash, config_hash, options_hash, postprocess_hash, generator_processing_hash, output_kind, format, status, primary_object_key, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'staged', ?, ?) ON CONFLICT(artifact_set_hash) DO NOTHING"
+        ).bind(&hash).bind(&identity.source_hash).bind(&identity.config_hash).bind(&identity.options_hash)
+            .bind(prepared.processing_hash()).bind(prepared.processing_hash()).bind(artifact.output_kind)
+            .bind(artifact.format).bind(artifact.object_key).bind(&metadata).execute(&mut *tx).await?.rows_affected() == 1;
+        if inserted {
+            sqlx::query("INSERT INTO artifact_files (artifact_set_hash, role, logical_path, original_path, object_key, content_type, byte_len, sha256, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(&hash).bind(file.role).bind(file.logical_path).bind(file.original_path)
+                .bind(file.object_key).bind(file.content_type).bind(file.byte_len).bind(file.sha256)
+                .bind(file.metadata_json).execute(&mut *tx).await?;
+        }
+        let (record, stored) =
+            load_generator_artifact(&mut tx, prepared, artifact.output_kind, artifact.format)
+                .await?
+                .ok_or_else(generator_artifact_conflict)?;
+        if record.primary_object_key.as_deref() != Some(artifact.object_key)
+            || record.metadata_json != metadata
+            || stored
+                != (GeneratorArtifactStoredFile {
+                    role: file.role.to_owned(),
+                    logical_path: file.logical_path.to_owned(),
+                    original_path: file.original_path.map(ToOwned::to_owned),
+                    object_key: file.object_key.to_owned(),
+                    content_type: file.content_type.to_owned(),
+                    byte_len: file.byte_len,
+                    sha256: file.sha256.to_owned(),
+                    metadata_json: file.metadata_json.to_owned(),
+                })
+        {
+            return Err(generator_artifact_conflict());
+        }
+        tx.commit().await?;
+        Ok(GeneratorArtifactState {
+            artifact_set_hash: hash,
+            status: record.status,
+            updated_at: record.updated_at,
+        })
+    }
+
+    pub async fn fail_generator_artifact(&self, artifact_set_hash: &str) -> sqlx::Result<bool> {
+        Ok(sqlx::query("UPDATE artifact_sets SET status = 'upload_failed', updated_at = MAX(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds')) WHERE artifact_set_hash = ? AND generator_processing_hash IS NOT NULL AND status IN ('staged', 'upload_failed') AND superseded_at IS NULL AND superseded_by IS NULL AND supersession_reason IS NULL")
+            .bind(artifact_set_hash).execute(&self.pool).await?.rows_affected() == 1)
+    }
+
+    /// A failed check may withdraw only the exact ready state it observed.
+    /// Generator transitions advance the timestamp by at least one millisecond,
+    /// making this field a version guard even during immediate repair retries.
+    /// Pending workers use `fail_generator_artifact` instead.
+    pub async fn fail_ready_generator_verification(
+        &self,
+        artifact_set_hash: &str,
+        expected_updated_at: &str,
+    ) -> sqlx::Result<bool> {
+        Ok(sqlx::query("UPDATE artifact_sets SET status = 'upload_failed', updated_at = MAX(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds')) WHERE artifact_set_hash = ? AND generator_processing_hash IS NOT NULL AND status = 'ready' AND updated_at = ? AND superseded_at IS NULL AND superseded_by IS NULL AND supersession_reason IS NULL")
+            .bind(artifact_set_hash).bind(expected_updated_at).execute(&self.pool).await?.rows_affected() == 1)
+    }
+
+    pub async fn complete_generator_artifact(
+        &self,
+        prepared: &PreparedGeneratorProcessing,
+        output_kind: &str,
+        format: &str,
+        object_key: &str,
+    ) -> sqlx::Result<bool> {
+        let hash = generator_artifact_set_hash(prepared, output_kind, format)
+            .map_err(generator_identity_error)?;
+        let mut tx = self.pool.begin().await?;
+        // Acquire the SQLite writer before reading the state, avoiding two readers
+        // upgrading competing deferred transactions during completion.
+        sqlx::query("UPDATE artifact_sets SET status = status WHERE artifact_set_hash = ?")
+            .bind(&hash)
+            .execute(&mut *tx)
+            .await?;
+        let Some((record, file)) =
+            load_generator_artifact(&mut tx, prepared, output_kind, format).await?
+        else {
+            return Ok(false);
+        };
+        if file.object_key != object_key {
+            return Err(generator_artifact_conflict());
+        }
+        if record.status != "ready" {
+            sqlx::query("UPDATE artifact_sets SET status = 'ready', updated_at = MAX(strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds')) WHERE artifact_set_hash = ? AND status IN ('staged', 'upload_failed') AND superseded_at IS NULL AND superseded_by IS NULL AND supersession_reason IS NULL")
+                .bind(&hash).execute(&mut *tx).await?;
+            sqlx::query("UPDATE artifact_sets SET status = 'superseded', superseded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), superseded_by = ?, supersession_reason = 'replaced', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE source_hash = ? AND config_hash = ? AND options_hash = ? AND output_kind = ? AND status = 'ready' AND artifact_set_hash <> ?")
+                .bind(&hash).bind(&record.source_hash).bind(&record.config_hash).bind(&record.options_hash)
+                .bind(output_kind).bind(&hash).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn generator_artifact_for_reconciliation(
+        &self,
+        prepared: &PreparedGeneratorProcessing,
+        output_kind: &str,
+        format: &str,
+    ) -> sqlx::Result<Option<(ArtifactSetRecord, GeneratorArtifactStoredFile)>> {
+        let mut tx = self.pool.begin().await?;
+        let artifact = load_generator_artifact(&mut tx, prepared, output_kind, format).await?;
+        tx.commit().await?;
+        Ok(artifact)
+    }
+
     async fn stage_artifact_inner(
         &self,
         artifact: ArtifactUpsert<'_>,
@@ -2943,6 +3111,149 @@ fn artifact_set_record_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactSetReco
         superseded_by: row.get("superseded_by"),
         supersession_reason: row.get("supersession_reason"),
     }
+}
+
+fn generator_artifact_conflict() -> sqlx::Error {
+    sqlx::Error::Protocol("immutable generator artifact conflict".to_owned())
+}
+
+fn valid_generator_sha256(hash: &str) -> bool {
+    hash.len() == 64
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn valid_generator_logical_path(path: &str) -> bool {
+    !path.is_empty()
+        && !matches!(path, "." | "..")
+        && !path.contains(['/', '\\'])
+        && !path.chars().any(char::is_control)
+}
+
+async fn load_generator_artifact(
+    connection: &mut sqlx::SqliteConnection,
+    prepared: &PreparedGeneratorProcessing,
+    output_kind: &str,
+    format: &str,
+) -> sqlx::Result<Option<(ArtifactSetRecord, GeneratorArtifactStoredFile)>> {
+    let identity = generator_artifact_set_identity(prepared, output_kind, format)
+        .map_err(generator_identity_error)?;
+    let hash = generator_artifact_set_hash(prepared, output_kind, format)
+        .map_err(generator_identity_error)?;
+    let Some(row) = sqlx::query("SELECT * FROM artifact_sets WHERE artifact_set_hash = ?")
+        .bind(&hash)
+        .fetch_optional(&mut *connection)
+        .await?
+    else {
+        return Ok(None);
+    };
+    let record = artifact_set_record_from_row(row);
+    if !matches!(
+        prepared.recipe().compatibility_decision,
+        GeneratorCompatibilityDecision::Supported
+    ) || record.source_hash != identity.source_hash
+        || record.config_hash != identity.config_hash
+        || record.options_hash != identity.options_hash
+        || record.output_kind != output_kind
+        || record.format != format
+        || record.request_hash.is_some()
+        || record.raw_payload_hash.is_some()
+        || record.postprocess_hash.as_deref() != Some(prepared.processing_hash())
+        || record.generator_processing_hash.as_deref() != Some(prepared.processing_hash())
+        || !matches!(record.status.as_str(), "staged" | "upload_failed" | "ready")
+        || record.superseded_at.is_some()
+        || record.superseded_by.is_some()
+        || record.supersession_reason.is_some()
+    {
+        return Err(generator_artifact_conflict());
+    }
+    verify_persisted_generator_recipe(connection, prepared).await?;
+    let files = sqlx::query("SELECT * FROM artifact_files WHERE artifact_set_hash = ?")
+        .bind(&hash)
+        .fetch_all(&mut *connection)
+        .await?;
+    if files.len() != 1 {
+        return Err(generator_artifact_conflict());
+    }
+    let row = &files[0];
+    let file = GeneratorArtifactStoredFile {
+        role: row.get("role"),
+        logical_path: row.get("logical_path"),
+        original_path: row.get("original_path"),
+        object_key: row.get("object_key"),
+        content_type: row.get("content_type"),
+        byte_len: row.get("byte_len"),
+        sha256: row.get("sha256"),
+        metadata_json: row.get("metadata_json"),
+    };
+    if file.role != "generated_project"
+        || file.original_path.is_some()
+        || !valid_generator_logical_path(&file.logical_path)
+        || file.content_type != prepared.recipe().invocation.output.media_type
+        || record.primary_object_key.as_deref() != Some(file.object_key.as_str())
+        || file.object_key.is_empty()
+        || file.byte_len <= 0
+        || !valid_generator_sha256(&file.sha256)
+        || u64::try_from(file.byte_len)
+            .ok()
+            .is_none_or(|length| length > prepared.recipe().invocation.output.max_byte_length)
+    {
+        return Err(generator_artifact_conflict());
+    }
+    Ok(Some((record, file)))
+}
+
+async fn verify_persisted_generator_recipe(
+    connection: &mut sqlx::SqliteConnection,
+    prepared: &PreparedGeneratorProcessing,
+) -> sqlx::Result<()> {
+    let recipe = prepared.recipe();
+    let row = sqlx::query("SELECT * FROM generator_processing_recipes WHERE processing_hash = ?")
+        .bind(prepared.processing_hash())
+        .fetch_optional(&mut *connection)
+        .await?
+        .ok_or_else(generator_artifact_conflict)?;
+    if row.get::<i64, _>("recipe_version") != i64::from(recipe.recipe_version)
+        || row.get::<String, _>("deployed_generator_identity") != recipe.deployed_generator_identity
+        || row.get::<String, _>("manifest_identity") != recipe.input_manifest.manifest_identity
+        || Some(row.get::<String, _>("input_set_identity"))
+            != recipe.input_manifest.input_set_identity
+        || row.get::<String, _>("settings_identity") != recipe.settings_identity
+        || row.get::<String, _>("settings_schema_identity") != recipe.settings_schema_identity
+        || row.get::<String, _>("compatibility_decision_identity")
+            != recipe.compatibility_decision_identity
+        || row.get::<String, _>("compatibility_status") != recipe.compatibility_decision.status()
+        || row.get::<String, _>("recipe_json") != prepared.recipe_json()
+    {
+        return Err(generator_artifact_conflict());
+    }
+    let rows = sqlx::query("SELECT * FROM generator_processing_occurrences WHERE processing_hash = ? ORDER BY occurrence_order")
+        .bind(prepared.processing_hash()).fetch_all(&mut *connection).await?;
+    if rows.len() != prepared.occurrences().len()
+        || rows
+            .iter()
+            .zip(prepared.occurrences())
+            .any(|(row, occurrence)| {
+                row.get::<String, _>("occurrence_identity") != occurrence.occurrence_identity
+                    || usize::try_from(row.get::<i64, _>("occurrence_order")).ok()
+                        != Some(occurrence.occurrence_order)
+                    || row.get::<String, _>("object_identity") != occurrence.object_identity
+                    || row.get::<String, _>("content_identity") != occurrence.content_identity
+                    || row.get::<String, _>("content_sha256") != occurrence.content_sha256
+                    || u64::try_from(row.get::<i64, _>("content_byte_length")).ok()
+                        != Some(occurrence.content_byte_length)
+                    || row.get::<String, _>("staged_path") != occurrence.staged_path
+                    || row.get::<String, _>("transport_role") != occurrence.transport_role
+                    || row.get::<Option<String>, _>("display_name") != occurrence.display_name
+                    || row.get::<String, _>("mapping_json") != occurrence.mapping_json
+                    || row.get::<String, _>("provenance_json") != occurrence.provenance_json
+                    || row.get::<String, _>("placement_json") != occurrence.placement_json
+            })
+    {
+        return Err(generator_artifact_conflict());
+    }
+    Ok(())
 }
 
 fn generator_identity_error(error: anyhow::Error) -> sqlx::Error {
@@ -4456,6 +4767,512 @@ mod tests {
             primary_logical_path: "project.3mf",
             primary_content_type: "application/octet-stream",
         }
+    }
+
+    fn generator_publication_file(object_key: &str) -> GeneratorArtifactFileInsert<'_> {
+        GeneratorArtifactFileInsert {
+            logical_path: "project.3mf",
+            ..generator_file(object_key)
+        }
+    }
+
+    #[tokio::test]
+    async fn generator_publication_retries_preserve_exact_rows_and_reject_changed_bytes() {
+        let db = test_database().await;
+        let prepared =
+            crate::generator_processing::tests::prepared_generator_processing(b"retry-generator");
+        let key = "artifacts/generated/retry.3mf";
+        let first = db
+            .stage_or_resume_generator_artifact(
+                &prepared,
+                generator_stage(key),
+                &[generator_publication_file(key)],
+            )
+            .await
+            .unwrap();
+        let history = db
+            .artifact_set(&first.artifact_set_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.status, "staged");
+        let retry = db
+            .stage_or_resume_generator_artifact(
+                &prepared,
+                generator_stage(key),
+                &[generator_publication_file(key)],
+            )
+            .await
+            .unwrap();
+        assert_eq!(retry.artifact_set_hash, first.artifact_set_hash);
+        assert_eq!(
+            db.artifact_set(&first.artifact_set_hash)
+                .await
+                .unwrap()
+                .unwrap()
+                .created_at,
+            history.created_at
+        );
+        assert!(
+            db.fail_generator_artifact(&first.artifact_set_hash)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            db.stage_or_resume_generator_artifact(
+                &prepared,
+                generator_stage(key),
+                &[generator_publication_file(key)]
+            )
+            .await
+            .unwrap()
+            .status,
+            "upload_failed"
+        );
+        let mut changed_stage = generator_stage(key);
+        let mut changed_file = generator_publication_file(key);
+        changed_stage.byte_len = 101;
+        changed_file.byte_len = 101;
+        assert!(
+            db.stage_or_resume_generator_artifact(&prepared, changed_stage, &[changed_file])
+                .await
+                .is_err()
+        );
+        let mut changed_metadata = generator_stage(key);
+        changed_metadata.model_slug = "another-model";
+        assert!(
+            db.stage_or_resume_generator_artifact(
+                &prepared,
+                changed_metadata,
+                &[generator_publication_file(key)]
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            db.complete_generator_artifact(&prepared, "slicer_project", "project_3mf", key)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !db.fail_generator_artifact(&first.artifact_set_hash)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            db.stage_or_resume_generator_artifact(
+                &prepared,
+                generator_stage(key),
+                &[generator_publication_file(key)]
+            )
+            .await
+            .unwrap()
+            .status,
+            "ready"
+        );
+        assert!(
+            db.stage_or_resume_generator_artifact(&prepared, changed_stage, &[changed_file])
+                .await
+                .is_err()
+        );
+        let (_, stored) = db
+            .generator_artifact_for_reconciliation(&prepared, "slicer_project", "project_3mf")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.byte_len, 100);
+        assert_eq!(
+            db.artifact_set(&first.artifact_set_hash)
+                .await
+                .unwrap()
+                .unwrap()
+                .created_at,
+            history.created_at
+        );
+    }
+
+    #[tokio::test]
+    async fn generator_completion_is_atomic_and_superseded_rows_cannot_resurrect() {
+        let db = test_database().await;
+        let first =
+            crate::generator_processing::tests::prepared_generator_processing(b"first-publication");
+        let second = crate::generator_processing::tests::prepared_generator_processing(
+            b"second-publication",
+        );
+        let first_key = "artifacts/generated/first-publication.3mf";
+        let second_key = "artifacts/generated/second-publication.3mf";
+        let first_state = db
+            .stage_or_resume_generator_artifact(
+                &first,
+                generator_stage(first_key),
+                &[generator_publication_file(first_key)],
+            )
+            .await
+            .unwrap();
+        let second_state = db
+            .stage_or_resume_generator_artifact(
+                &second,
+                generator_stage(second_key),
+                &[generator_publication_file(second_key)],
+            )
+            .await
+            .unwrap();
+        db.complete_generator_artifact(&first, "slicer_project", "project_3mf", first_key)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TRIGGER prevent_test_supersession BEFORE UPDATE OF status ON artifact_sets WHEN NEW.status = 'superseded' BEGIN SELECT RAISE(ABORT, 'test supersession failure'); END")
+            .execute(&db.pool).await.unwrap();
+        assert!(
+            db.complete_generator_artifact(&second, "slicer_project", "project_3mf", second_key)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            db.artifact_set(&first_state.artifact_set_hash)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "ready"
+        );
+        assert_eq!(
+            db.artifact_set(&second_state.artifact_set_hash)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "staged"
+        );
+        sqlx::query("DROP TRIGGER prevent_test_supersession")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        db.complete_generator_artifact(&second, "slicer_project", "project_3mf", second_key)
+            .await
+            .unwrap();
+        assert_eq!(
+            db.artifact_set(&first_state.artifact_set_hash)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "superseded"
+        );
+        assert!(
+            !db.fail_generator_artifact(&first_state.artifact_set_hash)
+                .await
+                .unwrap()
+        );
+        assert!(
+            db.complete_generator_artifact(&first, "slicer_project", "project_3mf", first_key)
+                .await
+                .is_err()
+        );
+        assert!(
+            db.stage_or_resume_generator_artifact(
+                &first,
+                generator_stage(first_key),
+                &[generator_publication_file(first_key)]
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            db.generator_artifact_for_reconciliation(&first, "slicer_project", "project_3mf")
+                .await
+                .is_err()
+        );
+        assert!(
+            db.complete_generator_artifact(&second, "slicer_project", "project_3mf", second_key)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn generator_competing_completion_and_failure_cannot_downgrade_ready() {
+        let db = test_database().await;
+        let prepared = crate::generator_processing::tests::prepared_generator_processing(
+            b"concurrent-publication",
+        );
+        let key = "artifacts/generated/concurrent.3mf";
+        let state = db
+            .stage_or_resume_generator_artifact(
+                &prepared,
+                generator_stage(key),
+                &[generator_publication_file(key)],
+            )
+            .await
+            .unwrap();
+        let (one, two, failure) = tokio::join!(
+            db.complete_generator_artifact(&prepared, "slicer_project", "project_3mf", key),
+            db.complete_generator_artifact(&prepared, "slicer_project", "project_3mf", key),
+            db.fail_generator_artifact(&state.artifact_set_hash),
+        );
+        assert!(one.unwrap());
+        assert!(two.unwrap());
+        failure.unwrap();
+        assert_eq!(
+            db.artifact_set(&state.artifact_set_hash)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "ready"
+        );
+        assert!(
+            !db.fail_generator_artifact(&state.artifact_set_hash)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn generator_reconciliation_never_creates_rows_or_repairs_corrupt_history() {
+        let db = test_database().await;
+        let prepared = crate::generator_processing::tests::prepared_generator_processing(
+            b"reconcile-generator",
+        );
+        assert!(
+            db.generator_artifact_for_reconciliation(&prepared, "slicer_project", "project_3mf")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM generator_processing_recipes")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap(),
+            0
+        );
+        let key = "artifacts/generated/reconcile.3mf";
+        db.stage_or_resume_generator_artifact(
+            &prepared,
+            generator_stage(key),
+            &[generator_publication_file(key)],
+        )
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM generator_processing_occurrences WHERE processing_hash = ? AND occurrence_order = 0")
+            .bind(prepared.processing_hash()).execute(&db.pool).await.unwrap();
+        assert!(
+            db.generator_artifact_for_reconciliation(&prepared, "slicer_project", "project_3mf")
+                .await
+                .is_err()
+        );
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM generator_processing_occurrences WHERE processing_hash = ? AND occurrence_order = 0").bind(prepared.processing_hash()).fetch_one(&db.pool).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn generator_concurrent_recipe_publications_leave_one_ready_selection() {
+        let db = test_database().await;
+        let first =
+            crate::generator_processing::tests::prepared_generator_processing(b"concurrent-first");
+        let second =
+            crate::generator_processing::tests::prepared_generator_processing(b"concurrent-second");
+        let first_key = "artifacts/generated/concurrent-first.3mf";
+        let second_key = "artifacts/generated/concurrent-second.3mf";
+        let first_state = db
+            .stage_or_resume_generator_artifact(
+                &first,
+                generator_stage(first_key),
+                &[generator_publication_file(first_key)],
+            )
+            .await
+            .unwrap();
+        let second_state = db
+            .stage_or_resume_generator_artifact(
+                &second,
+                generator_stage(second_key),
+                &[generator_publication_file(second_key)],
+            )
+            .await
+            .unwrap();
+        let (one, two) = tokio::join!(
+            db.complete_generator_artifact(&first, "slicer_project", "project_3mf", first_key),
+            db.complete_generator_artifact(&second, "slicer_project", "project_3mf", second_key),
+        );
+        assert!(one.unwrap());
+        assert!(two.unwrap());
+        let first_record = db
+            .artifact_set(&first_state.artifact_set_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        let second_record = db
+            .artifact_set(&second_state.artifact_set_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            (first_record.status.as_str(), second_record.status.as_str()),
+            ("ready", "superseded") | ("superseded", "ready")
+        ));
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM artifact_files")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn generator_ready_completion_does_not_repeat_supersession() {
+        let db = test_database().await;
+        let first =
+            crate::generator_processing::tests::prepared_generator_processing(b"ready-first");
+        let second =
+            crate::generator_processing::tests::prepared_generator_processing(b"ready-second");
+        let first_key = "artifacts/generated/ready-first.3mf";
+        let second_key = "artifacts/generated/ready-second.3mf";
+        db.stage_or_resume_generator_artifact(
+            &first,
+            generator_stage(first_key),
+            &[generator_publication_file(first_key)],
+        )
+        .await
+        .unwrap();
+        db.complete_generator_artifact(&first, "slicer_project", "project_3mf", first_key)
+            .await
+            .unwrap();
+        let second_state = db
+            .stage_or_resume_generator_artifact(
+                &second,
+                generator_stage(second_key),
+                &[generator_publication_file(second_key)],
+            )
+            .await
+            .unwrap();
+        // An existing ready retry must not perform a new replacement operation.
+        db.mark_artifact_set_ready(&second_state.artifact_set_hash, second_key)
+            .await
+            .unwrap();
+        db.complete_generator_artifact(&first, "slicer_project", "project_3mf", first_key)
+            .await
+            .unwrap();
+        assert_eq!(
+            db.artifact_set(&second_state.artifact_set_hash)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "ready"
+        );
+    }
+
+    #[tokio::test]
+    async fn generator_ready_verification_failure_is_guarded_and_exact_retry_restores() {
+        let db = test_database().await;
+        let prepared = crate::generator_processing::tests::prepared_generator_processing(
+            b"ready-verification",
+        );
+        let key = "artifacts/generated/ready-verification.3mf";
+        let staged = db
+            .stage_or_resume_generator_artifact(
+                &prepared,
+                generator_stage(key),
+                &[generator_publication_file(key)],
+            )
+            .await
+            .unwrap();
+        db.complete_generator_artifact(&prepared, "slicer_project", "project_3mf", key)
+            .await
+            .unwrap();
+        let (ready, original_file) = db
+            .generator_artifact_for_reconciliation(&prepared, "slicer_project", "project_3mf")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !db.fail_ready_generator_verification(
+                &staged.artifact_set_hash,
+                "different observed timestamp"
+            )
+            .await
+            .unwrap()
+        );
+        assert_eq!(
+            db.artifact_set(&staged.artifact_set_hash)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "ready"
+        );
+        assert!(
+            db.fail_ready_generator_verification(&staged.artifact_set_hash, &ready.updated_at)
+                .await
+                .unwrap()
+        );
+        assert_generator_lookup_miss(&db, &prepared).await;
+        let (failed, failed_file) = db
+            .generator_artifact_for_reconciliation(&prepared, "slicer_project", "project_3mf")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(failed.status, "upload_failed");
+        assert!(failed.updated_at > ready.updated_at);
+        assert_eq!(failed.created_at, ready.created_at);
+        assert_eq!(failed.metadata_json, ready.metadata_json);
+        assert_eq!(failed_file, original_file);
+        assert_eq!(
+            db.stage_or_resume_generator_artifact(
+                &prepared,
+                generator_stage(key),
+                &[generator_publication_file(key)]
+            )
+            .await
+            .unwrap()
+            .status,
+            "upload_failed"
+        );
+        db.complete_generator_artifact(&prepared, "slicer_project", "project_3mf", key)
+            .await
+            .unwrap();
+        let (restored, restored_file) = db
+            .generator_artifact_for_reconciliation(&prepared, "slicer_project", "project_3mf")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.status, "ready");
+        assert!(restored.updated_at > failed.updated_at);
+        assert_eq!(restored.created_at, ready.created_at);
+        assert_eq!(restored_file, original_file);
+        assert!(
+            !db.fail_ready_generator_verification(&staged.artifact_set_hash, &ready.updated_at)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            db.artifact_set(&staged.artifact_set_hash)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "ready"
+        );
+        db.supersede_artifact_set(
+            &staged.artifact_set_hash,
+            None,
+            Some("verification test withdrawal"),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !db.fail_ready_generator_verification(&staged.artifact_set_hash, &restored.updated_at)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            db.artifact_set(&staged.artifact_set_hash)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "superseded"
+        );
     }
 
     async fn assert_generator_lookup_miss(db: &Database, prepared: &PreparedGeneratorProcessing) {
