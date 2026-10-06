@@ -137,10 +137,23 @@ generator owns final target-aware self-validation and reports its exact immutabl
 evidence into this repository, and do not add a second service-side target
 validator.
 
-Expected neutral placement derivation and source/path proof are owned by
-[#173](https://github.com/altendky/onshape-export/issues/173). Manifest-order
-orchestration, settings construction, and contextual-validator invocation are
-owned by [#175](https://github.com/altendky/onshape-export/issues/175). Generator
+The service-owned [Onshape Selection Plans](onshape-selection-plans.md)
+contract in [#173](https://github.com/altendky/onshape-export/issues/173) owns
+trusted encoding provenance, ordered selector and exact-leaf resolution,
+authoring capture/validation, expected neutral placement derivation, source/path
+proof, and complete plan identities. Its planner never encodes or acquires
+geometry. [#174](https://github.com/altendky/onshape-export/issues/174) consumes
+only successful plans and independently checks the reused immutable version
+against every consumed leaf before causal raw geometry acquisition. It does not
+resolve selectors, recapture metadata, reinterpret configurations or transforms,
+or change order.
+
+Manifest-order orchestration, deterministic retained paths, manifest/settings
+construction, role rewrite, placement summaries, and protocol/contextual
+validation are owned by
+[#175](https://github.com/altendky/onshape-export/issues/175). That orchestration
+preserves planned matrices and configuration identities and does not call
+carrier endpoints or derive placement. Generator
 raw-input bounds and final target-aware self-validation belong to
 [`slicer-project-generators#8`](https://github.com/altendky/slicer-project-generators/issues/8)
 and

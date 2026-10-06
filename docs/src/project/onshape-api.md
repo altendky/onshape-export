@@ -13,7 +13,7 @@ Workspaces are intentionally out of scope for the first version.
 
 For the implemented v2 cache model, catalog entries remain version-based for operator usability, but the service resolves the version to its immutable document microversion before computing `sourceHash`. The version-to-microversion mapping is stored for diagnostics and traceability, and multiple `versionId` aliases can point at the same resolved `sourceHash`.
 
-Resolution must complete before writing source-scoped cache records or artifacts. Transient resolution failures should follow the Onshape retry/backoff policy and record diagnostics or `failureReason`; terminal failures should abort the export before any partial cache artifacts are published. If a previously stored `versionId` to `microversionId` mapping later resolves differently or becomes inconsistent, compute a new `sourceHash` from the new microversion and mark the old mapping/cache state stale or orphaned for reconciliation diagnostics instead of mutating existing artifacts in place.
+Resolution must complete before writing source-scoped cache records or artifacts. The configuration coordinator and selection planner use the [one-attempt transport contract](onshape-selection-plans.md#transport-and-projection); outer export-job retries are separate executions. Other export operations follow the Onshape retry/backoff policy and record diagnostics or `failureReason`. Terminal failures abort the export before any partial cache artifacts are published. If a previously stored `versionId` to `microversionId` mapping later resolves differently or becomes inconsistent, compute a new `sourceHash` from the new microversion and mark the old mapping/cache state stale or orphaned for reconciliation diagnostics instead of mutating existing artifacts in place.
 
 ## Authentication
 
@@ -56,15 +56,18 @@ Configuration values may be represented as an Onshape configuration string:
 parameterId=value;other=value
 ```
 
-The implemented v2 cache path always uses Onshape's encoding endpoint after local validation and typed canonicalization:
+The configuration coordinator validates and canonicalizes typed values, then
+uses a fully validated active cache hit or one call to the pinned endpoint on a
+true miss:
 
 ```text
-POST /api/elements/d/{did}/e/{eid}/configurationencodings?versionId={vid}
+POST /api/v16/elements/d/{did}/e/{eid}/configurationencodings?versionId={vid}
 ```
 
-Use `linkDocumentId` as well if the versioned element must be accessed through a linked document context.
+`versionId` is the sole query parameter. Linked document contexts are outside
+the supported profile; omit `linkDocumentId`.
 
-Local validation confirms that every submitted parameter is supported by the normalized schema and that every value can be represented as a typed canonical value before any network call. Typed canonicalization normalizes those values into the same application payload that produces `configHash`, and equivalent supported length spellings reuse the same encoding request shape. A v2 export does not fall back to hand-built configuration strings if encoding fails; transient endpoint failures follow the normal retry policy, malformed or terminal responses are recorded in diagnostics, and the export stays failed until a valid Onshape encoding is available.
+Local validation confirms that every submitted parameter is supported by the normalized schema and that every value can be represented as a typed canonical value before any network call. Typed canonicalization normalizes those values into the same application payload that produces `configHash`, and equivalent supported length spellings reuse the same encoding request shape. Encoding has exactly one HTTP attempt and no internal retry or backoff. An outer job retry is a distinct execution. An export does not fall back to hand-built configuration strings if encoding fails; failures are recorded in diagnostics, and the export stays failed until a valid Onshape encoding is available.
 
 The app intentionally accepts only basic numeric values at this boundary. Dimensioned number controls submit a plain decimal value and a unit selected from the supported units for that parameter dimension. Onshape expressions such as `2 + 2` or `(4mm) / (1mm)` can be valid Onshape inputs, but they are not part of local canonicalization because evaluating them would require either reimplementing Onshape expression semantics or spending extra API calls. Generated canonical request values may still use simple parenthesized fractions, for example `(127/5000) m`, because those are produced by the app from exact rational values rather than accepted from users as free-form expressions.
 
@@ -81,9 +84,32 @@ Request body shape from the OpenAPI schema:
 }
 ```
 
-Encoded configuration results should be cached by source identity, `configHash`, and normalized encoding request context. The encoding response is Onshape's request representation; it does not replace the application's canonical `configHash`.
+The active encoding cache key is exactly `(sourceHash, configHash,
+encodingContextHash)`. The closed context binds trusted canonical origin, the
+pinned v16 OpenAPI identity, exact encoding operation and query, caller version,
+resolved microversion, element/kind, absent linked context, and canonicalization
+and parameter-schema versions. Request body and response evidence are validated
+separately and do not enter that context hash. See
+[Configuration Provenance](onshape-selection-plans.md#configuration-provenance)
+for the exact envelope and persistence rules.
 
-The encoding request context should include only fields that can affect the encoding result, such as the endpoint/spec version when relevant, resolved source access context, `linkDocumentId`, and the canonical encoding request body. Normalize and hash that context into an `encodingContextHash`; avoid raw headers, user/session identifiers, or tenant data unless live testing proves they affect encoding. The cache key should combine `sourceHash`, `configHash`, and `encodingContextHash`, and obsolete context variants should be pruned or expired to avoid unbounded cache growth.
+Every present active row must pass strict context, request, response, hash, and
+encoded-ID validation. An invalid present row fails; it is never a cache miss.
+Fresh evidence is inserted once and never overwritten. The transactional
+migration retains old two-key rows separately as legacy storage, with no active
+read, copying, inferred context, or encoded-ID reuse. The encoding response is
+Onshape's request representation; it does not replace `configHash` or prove a
+response-derived configured-object identity.
+
+## Resolved Object Selection
+
+[Onshape Selection Plans](onshape-selection-plans.md) defines the bounded
+version-rooted Part Studio and flat Assembly planner. It consumes the
+coordinator's closed four-field handoff, independently proves immutable source
+and encoding provenance, and resolves ordered selectors into exact solid leaves,
+captured authoring data, and neutral absolute placements. Planning does not
+encode configurations or acquire geometry. The rejected direct Assembly
+translation-selector conclusion below remains unchanged.
 
 ## Preview Export
 

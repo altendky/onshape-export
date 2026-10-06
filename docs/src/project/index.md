@@ -24,6 +24,12 @@ Current implementation note: the branch already contains the cache v2 hard cut p
 
 The cache design is the central project risk. The current implementation snapshot is documented in [Caching](caching.md), while the target layered model is documented in [Forward-Looking Cache Model](cache-model.md).
 
+[Onshape Selection Plans](onshape-selection-plans.md) resolves explicitly
+ordered solid-part selections from one immutable configured Part Studio or flat
+Assembly into source-neutral authoring, leaf, placement, and identity data.
+Its hardened configuration provenance and triple-key encoding cache are separate
+from later geometry acquisition and generator orchestration.
+
 Future slicer project artifacts are a separate proposed output family generated
 through the external
 [`slicer-project-generators`](https://github.com/altendky/slicer-project-generators)

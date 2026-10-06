@@ -1,0 +1,3 @@
+# Public SHA-256 of the pinned Onshape OpenAPI artifact, verified against its
+# immutable release commit. This is a content checksum, not a credential.
+docs/src/project/onshape-selection-plans.md:generic-api-key:88
