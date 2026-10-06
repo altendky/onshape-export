@@ -412,6 +412,20 @@ leaf configuration space. Successful planning and carrier-query discrimination
 alone do not authorize geometry acquisition. Unproven bindings remain
 unavailable without changing these plan identities.
 
+Issue #174's [trusted acquisition-provenance contract](onshape-geometry-acquisition.md#trusted-acquisition-provenance-contract)
+specifies a service-owned wrapper that retains the exact original encoding
+handoff/context and complete successful return from the same planning invocation.
+It atomically records that association outside every existing #173 hash scope;
+the planner's request, returned plan, and identity preimages remain unchanged.
+A separately supplied valid encoding or self-computed sidecar hash cannot prove
+the invocation relationship. Acquisition uses trusted lookup and complete
+read-only validation before the independent version barrier and any create.
+Missing or contradictory provenance is operational; only a well-formed
+independently resolved snapshot mismatch or rejected/unproven binding is
+unavailable. The maintainer approved reviewing the contract and implementation
+together in #310, overriding the separate contract-merge gate while preserving
+all binding and verification requirements.
+
 [#175](https://github.com/altendky/onshape-export/issues/175) consumes successful
 plans and acquisition inputs. It owns manifest identities/order, deterministic
 retained paths, manifest/settings construction, role rewrite, placement
