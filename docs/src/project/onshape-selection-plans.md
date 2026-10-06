@@ -406,6 +406,12 @@ acquisition calls. It owns causal raw Geometry 3MF request/result/payload
 evidence, without rediscovering metadata, selectors, configurations, transforms,
 or order.
 
+The [configured-leaf acquisition characterization](onshape-geometry-acquisition.md)
+separately establishes the translation-body binding for each response-derived
+leaf configuration space. Successful planning and carrier-query discrimination
+alone do not authorize geometry acquisition. Unproven bindings remain
+unavailable without changing these plan identities.
+
 [#175](https://github.com/altendky/onshape-export/issues/175) consumes successful
 plans and acquisition inputs. It owns manifest identities/order, deterministic
 retained paths, manifest/settings construction, role rewrite, placement

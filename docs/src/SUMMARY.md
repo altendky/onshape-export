@@ -12,6 +12,7 @@
 - [Forward-Looking Cache Model](project/cache-model.md)
 - [Onshape API Flow](project/onshape-api.md)
 - [Onshape Selection Plans](project/onshape-selection-plans.md)
+- [Configured-Leaf Geometry 3MF Acquisition](project/onshape-geometry-acquisition.md)
 - [Onshape Geometry Input Characterization](project/onshape-geometry-input-characterization.md)
 - [Onshape Annotation Carrier And Selector Characterization](project/onshape-annotation-carrier-characterization.md)
 - [Onshape Annotation And Generator Settings Convention](project/onshape-annotation-convention.md)

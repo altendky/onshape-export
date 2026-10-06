@@ -8,6 +8,13 @@
 
 ## Scope And Boundary
 
+Later configured-leaf acquisition work is recorded in the
+[issue #308 characterization contract](onshape-geometry-acquisition.md). It
+separately tests exact response-derived configuration strings in Part Studio
+translation bodies and reconciles the narrower #173/#174/#175/#168 handoff.
+The historical observations and broader-profile decisions below remain scoped
+to their observation dates; they do not establish those later body bindings.
+
 This report examines whether versioned Onshape Part Studio parts and Assembly
 occurrences can be mapped deterministically to retained STEP, STL, raw Onshape
 geometry 3MF, and grouped glTF/GLB preview results. GLB/glTF is included only as
