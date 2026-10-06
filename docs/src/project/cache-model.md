@@ -557,7 +557,12 @@ request/raw-payload identities; requested output kind and format; `ready`
 status; no supersession markers; a nonempty primary object key; and exact
 primary role/path/type with positive length and lowercase SHA-256 metadata.
 Generator-linked artifact rows and file evidence cannot be restaged under an
-existing artifact-set identity.
+existing artifact-set identity. Generator publication can resume an exact
+immutable pending record, verify stored bytes before readiness, and atomically
+complete readiness and supersession. Ready retries never upload again. Failed
+ready re-verification makes the observed artifact non-ready without changing
+its immutable evidence; repair may restore only its intended bytes. See the
+[publication contract](slicer-project-generator-integration.md#verified-artifact-publication).
 
 ```sql
 CREATE TABLE export_requests (

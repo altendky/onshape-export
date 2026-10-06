@@ -106,6 +106,19 @@ pub struct VerifiedGeneratorOutput {
 }
 
 impl VerifiedGeneratorOutput {
+    #[cfg(test)]
+    pub(crate) fn replace_test_bytes(&mut self, bytes: &[u8], update_declaration: bool) {
+        let file = self.bytes.get_mut().unwrap();
+        file.set_len(0).unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.write_all(bytes).unwrap();
+        if update_declaration {
+            let output = self.result.output.as_mut().unwrap();
+            output.byte_length = bytes.len() as u64;
+            output.sha256 = cache_key::hex_sha256(bytes);
+        }
+    }
+
     pub fn result(&self) -> &GeneratorResult {
         &self.result
     }
@@ -676,4 +689,4 @@ fn accept_final(
 
 #[cfg(test)]
 #[path = "generator_runner_tests.rs"]
-mod tests;
+pub(crate) mod tests;

@@ -3,9 +3,9 @@
 > **Status: Partially implemented.** The neutral protocol, settings v2, static
 > deployed-generator identity, pure processing recipe, ordered-occurrence
 > persistence, exact cache-lookup contracts, trusted geometry acquisition,
-> manifest/settings construction, and source-neutral CLI runner are implemented.
-> Production worker/UI dispatch, candidate upload/readiness verification,
-> publication, and real deployment remain unavailable.
+> manifest/settings construction, source-neutral CLI runner, verified artifact
+> publication, and reconciliation are implemented. Production worker/UI
+> dispatch and real deployment remain unavailable.
 
 ## Terminology
 
@@ -121,7 +121,8 @@ manifest, retained objects, and settings use declared safe paths under `inputs/`
 the candidate uses its declared path under `outputs/`, all within one private
 invocation root. The result reports success or structured failure, exact reported identities,
 candidate output hash, and bounded diagnostics.
-The service would independently recompute the candidate output hash rather than trust the report.
+The service independently recomputes the candidate output hash before upload and
+verifies stored bytes before readiness.
 Field names, JSON Schema, atomic-write rules, and diagnostic format are defined
 by protocol v1. Exact runner behavior is defined by the
 [integration policy](slicer-project-generator-integration.md#trusted-runner-contract).
@@ -223,8 +224,9 @@ run with the same ambient runtime access as the service because it is trusted to
 the same degree as service code. Independent result validation remains a
 publication-integrity gate, not a hostile-code boundary. The runner retains
 independently accepted bytes rather than forwarding a generator-created path.
-Worker/UI dispatch, cache/readiness writes, upload, publication, and real
-generator installation remain separate integrations. Runner tests use only
+The separate publication API owns verified upload, readiness, reconciliation,
+and supersession through the existing artifact lifecycle. Worker/UI dispatch
+and real generator installation remain separate integrations. Runner tests use only
 synthetic source-neutral executables and protocol fixtures.
 
 ## Upgrade Overview

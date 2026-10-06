@@ -4,8 +4,9 @@
 > approving, running, and publishing output from slicer project generators.
 > The neutral protocol, static deployment identity, pure processing recipe,
 > immutable recipe/occurrence persistence, and exact ready-cache lookup are
-> implemented, alongside trusted input construction and CLI execution. Worker/UI
-> orchestration and upload/readiness verification remain separate work.
+> implemented, alongside trusted input construction, CLI execution, verified
+> artifact publication, and reconciliation. Worker/UI orchestration and real
+> generator deployment remain separate work.
 
 This policy does not provide legal advice. Repository or process separation does
 not itself decide whether licenses are compatible; qualified review is required
@@ -211,6 +212,61 @@ cache or readiness rows, upload or publish candidates, install a real generator,
 or interpret a target archive. Its executable and protocol tests use synthetic
 source-neutral fixtures only.
 
+### Verified Artifact Publication
+
+Publication accepts only the runner's sealed successful output and its matching
+prepared processing recipe, under the currently configured supported deployed
+entry. It rechecks processing and invocation identity and copies the accepted
+bytes into private service-owned retention while independently remeasuring
+length and SHA-256. No failed runner outcome provides this handoff.
+
+The output kind is `slicer_project:<dialectIdentity>` and the artifact format is
+`project_3mf`. A safe service-owned download filename supplies only the cosmetic
+path segment; the public object key is derived as
+`artifacts/v2/<artifactSetHash>/<filename>`. The CLI's candidate path is never a
+public location. The bounded neutral result metadata is retained with the file
+record; the service does not inspect its target archive.
+
+The service persists the exact recipe, ordered occurrences, artifact set, and
+primary-file declarations before upload. Upload uses the independently retained
+bytes with attachment and immutable-cache headers. Generator readiness always
+requires exact content type and length from both storage HEAD and GET, followed
+by bounded streaming read-back length and SHA-256 verification. This stronger
+generator gate is independent of the ordinary preview/download verification
+mode. Private publication retention is explicitly removed before completion.
+One short database transaction marks the verified set ready and supersedes the
+previous ready sets for the same source, configuration, logical options, and
+output kind. Upload and storage calls never hold that database transaction.
+
+Exact retries compare complete immutable set and file declarations and resume
+`staged` or `upload_failed` rows without replacing evidence or timestamps.
+An existing ready set is reverified and reused without uploading again or
+repeating supersession. Different bytes under the same recipe are an integrity
+conflict. A changed recipe derives a new artifact set and follows ordinary
+supersession only after successful verification. Superseded sets cannot revive.
+
+Upload or verification failure leaves pending work non-ready. A failed pending
+attempt cannot downgrade a concurrently completed ready set. Failure while
+reverifying an already-ready set instead moves that exact observed revision to
+`upload_failed`, making it unavailable through ready lookup while preserving
+immutable metadata and file history. An exact retry can restore only the
+recorded intended bytes, consistent with the existing artifact repair policy.
+Generator transition timestamps advance monotonically to guard this update
+against stale verification attempts.
+
+Reconciliation accepts the same configured deployment and prepared recipe,
+validates an existing complete immutable record and its stored neutral result,
+and verifies storage before completing the same readiness transaction. It
+creates no artifact when absent, performs no upload, and never reruns a
+generator or Onshape acquisition. Interruption after staging or upload leaves
+the set non-ready until verified reconciliation or an exact retry completes.
+Missing, corrupt, or unverifiable storage cannot complete pending publication.
+
+These APIs provide the source-neutral publication foundation. Worker/UI
+dispatch, automatic scheduling of reconciliation, real deployment, and product
+publication remain separate integration work. Tests use the real trusted runner
+with synthetic neutral outputs and a loopback object-storage service.
+
 The service-owned [Onshape Selection Plans](onshape-selection-plans.md)
 contract in [#173](https://github.com/altendky/onshape-export/issues/173) owns
 trusted encoding provenance, ordered selector and exact-leaf resolution,
@@ -294,12 +350,11 @@ primary-file record. Generator staging and lookup accept a prepared recipe and
 derive artifact-set, source, configuration, options, post-process, and generator
 identities internally; the general free-form artifact staging path rejects
 generator-linked rows. Generator-linked artifact sets cannot be restaged under
-an existing identity. Supersession changes selection but preserves immutable
-recipe, occurrence, artifact-set, and file history. These
-implemented persistence and lookup rules do not perform mutable approval checks,
-runtime orchestration, runner behavior, upload verification, or target-aware
-validation; those remain their separately owned gates. Published artifact bytes
-are immutable in normal operation.
+an existing identity; publication can resume only exactly matching immutable
+evidence. Supersession changes selection but preserves recipe, occurrence,
+artifact-set, and file history. These persistence and lookup rules remain
+separate from mutable approval policy, worker/UI orchestration, and target-aware
+validation. Published artifact bytes are immutable in normal operation.
 
 The static deployed-generator identity is immutable processing input, while the
 decision to deploy or remove its configuration is operational policy. Changing
