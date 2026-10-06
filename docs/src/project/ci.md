@@ -161,6 +161,10 @@ deterministic or normalized output at the selected guarantee level,
 ordinary process and protocol failure handling, and compatibility against pinned
 slicer versions. They do not test a runtime sandbox or containment boundary for
 trusted generator CLIs.
+The source-neutral runner tests use synthetic executables and protocol fixtures
+to exercise exact arguments, input staging, compatibility and digest checks,
+exit/result handling, bounded candidate measurement, timeout, cancellation,
+and cleanup. They do not install or execute real target generators.
 Before service approval or publication, the service must validate exact package
 and binary digests plus protocol, dialect, provenance-set, and capability
 metadata in the one closed

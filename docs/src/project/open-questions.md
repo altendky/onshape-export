@@ -73,8 +73,6 @@
   now covers configured Part Studio IDs, duplicate names, repeated references,
   nested/suppressed occurrences, and source metadata, but it does not prove an
   export-payload mapping.
-- What exact CLI arguments and runner implementation should carry the defined
-  [file-backed neutral protocol](neutral-generator-protocol.md)?
 - Which future generator, protocol, dialect, and slicer-version combinations are
   supportable beyond the one exact static deployed binding?
 - Which source-neutral publication checks should supplement generator-owned

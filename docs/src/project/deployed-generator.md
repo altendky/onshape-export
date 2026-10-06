@@ -53,8 +53,9 @@ object model and cannot detect them reliably.
 
 The configured executable path may be a symbolic link whose resolved target is
 a regular file. Startup requires that target to exist, be readable, have at
-least one Linux executable mode bit, and hash to `binarySha256`. The immediate
-pre-invocation digest check remains owned by the trusted runner. These checks
+least one Linux executable mode bit, and hash to `binarySha256`. The trusted
+runner repeats these executable checks immediately before invocation, preserving
+their typed failure classifications. These checks
 bind configuration to measured bytes for correctness and configuration
 integrity; they do not establish authenticity or a security boundary.
 

@@ -98,9 +98,10 @@ naming algorithm.
 
 One invocation uses a fresh private root whose declared relative paths cannot
 refer outside that root. Manifest, retained geometry, and settings paths are
-beneath `inputs/`; the candidate path is beneath `outputs/`. The request and
-result file paths are supplied by the later trusted-CLI invocation interface,
-not selected from request content.
+beneath `inputs/`; the candidate path is beneath `outputs/`. The trusted runner
+supplies fixed `request.json` and `result.json` paths, not paths selected from
+request content. Its argument vector and operational behavior are defined by
+the [integration policy](slicer-project-generator-integration.md#trusted-runner-contract).
 
 The invocation owner must begin with no candidate or final result at their
 declared paths. Producers write each file to a private sibling temporary file,
@@ -117,8 +118,10 @@ final result is the invocation commit marker:
   success.
 
 The consumer reads only declared final paths after process completion and does
-not publish a generator-created path directly. Exact CLI arguments and runner
-behavior remain follow-up implementation work.
+not publish a generator-created path directly. Candidate-before-result ordering
+is a trusted producer obligation; the runner does not observe write order or
+claim that final-file checks prove it. The runner independently retains accepted
+bytes and removes the invocation root before returning success.
 
 ## Bounds And Failures
 

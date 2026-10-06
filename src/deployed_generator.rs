@@ -12,6 +12,7 @@ use serde::{
     de::{MapAccess, SeqAccess, Visitor},
 };
 use serde_json::{Map, Number, Value};
+use sha2::{Digest, Sha256};
 
 use crate::{
     cache_key,
@@ -190,6 +191,12 @@ impl DeployedGenerator {
         &self.static_identity
     }
 
+    /// Repeat the startup correctness check immediately before invocation.
+    /// This is not an authenticity check or a hostile mutation defense.
+    pub fn verify_executable(&self) -> Result<(), DeployedGeneratorError> {
+        validate_executable(&self.document)
+    }
+
     pub fn ensure_compatible(
         &self,
         request: &GeneratorCompatibilityRequest,
@@ -331,6 +338,22 @@ impl DeployedGeneratorDocument {
 
 fn validate_executable(document: &DeployedGeneratorDocument) -> Result<(), DeployedGeneratorError> {
     let path = &document.executable_path;
+    // Reject nonregular configuration replacements before opening: a FIFO
+    // could otherwise block before the process execution timeout even begins.
+    // metadata follows the executable symlinks permitted by this contract.
+    let path_metadata = fs::metadata(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            DeployedGeneratorError::ExecutableMissing { path: path.clone() }
+        } else {
+            DeployedGeneratorError::ExecutableUnreadable {
+                path: path.clone(),
+                message: error.to_string(),
+            }
+        }
+    })?;
+    if !path_metadata.is_file() {
+        return Err(DeployedGeneratorError::ExecutableNotRegularFile { path: path.clone() });
+    }
     let mut file = match fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -355,13 +378,25 @@ fn validate_executable(document: &DeployedGeneratorDocument) -> Result<(), Deplo
     if metadata.permissions().mode() & 0o111 == 0 {
         return Err(DeployedGeneratorError::ExecutableNotExecutable { path: path.clone() });
     }
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|error| DeployedGeneratorError::ExecutableUnreadable {
-            path: path.clone(),
-            message: error.to_string(),
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 65_536];
+    loop {
+        let count = file.read(&mut buffer).map_err(|error| {
+            DeployedGeneratorError::ExecutableUnreadable {
+                path: path.clone(),
+                message: error.to_string(),
+            }
         })?;
-    let measured = cache_key::hex_sha256(&bytes);
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    let measured: String = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     if measured != document.binary_sha256 {
         return Err(DeployedGeneratorError::BinaryDigestMismatch {
             expected: document.binary_sha256.clone(),
