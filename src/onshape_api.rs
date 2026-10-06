@@ -1,6 +1,10 @@
 //! Pinned, one-attempt Onshape JSON operations for immutable selection planning.
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use reqwest::{Method, Url, header};
 use serde::{
@@ -438,13 +442,29 @@ impl Default for Deadlines {
 }
 
 fn tls_config() -> Result<Arc<rustls::ClientConfig>, ApiFailure> {
-    let mut roots = rustls::RootCertStore::empty();
-    let certificates = rustls_native_certs::load_native_certs();
-    for certificate in certificates.certs {
-        roots
-            .add(certificate)
-            .map_err(|_| operational("invalid_native_certificate"))?;
+    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    cached_tls_config(&CONFIG, || {
+        build_tls_config(rustls_native_certs::load_native_certs().certs)
+    })
+}
+
+fn cached_tls_config(
+    cache: &OnceLock<Arc<rustls::ClientConfig>>,
+    build: impl FnOnce() -> Result<Arc<rustls::ClientConfig>, ApiFailure>,
+) -> Result<Arc<rustls::ClientConfig>, ApiFailure> {
+    if let Some(config) = cache.get() {
+        return Ok(Arc::clone(config));
     }
+    // Publish only a successful initialization; a transient failure can recover.
+    let config = build()?;
+    Ok(Arc::clone(cache.get_or_init(|| config)))
+}
+
+fn build_tls_config(
+    certificates: Vec<rustls::pki_types::CertificateDer<'static>>,
+) -> Result<Arc<rustls::ClientConfig>, ApiFailure> {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add_parsable_certificates(certificates);
     if roots.is_empty() {
         return Err(operational("missing_native_certificates"));
     }
@@ -1319,6 +1339,37 @@ mod tests {
         headers.insert(header::CONTENT_LENGTH, "1".parse().unwrap());
         headers.append(header::CONTENT_LENGTH, "1".parse().unwrap());
         assert!(content_length(&headers, 10).is_err());
+    }
+
+    fn synthetic_root() -> rustls::pki_types::CertificateDer<'static> {
+        // Locally generated, self-signed public CA; its private key was discarded.
+        rustls::pki_types::CertificateDer::from(
+            include_bytes!("test_data/onshape-test-root.der").as_slice(),
+        )
+    }
+
+    #[test]
+    fn tls_native_roots_keep_valid_certificates_and_reject_empty_stores() {
+        let invalid = rustls::pki_types::CertificateDer::from(b"invalid DER".as_slice());
+        assert!(build_tls_config(vec![invalid.clone(), synthetic_root()]).is_ok());
+        for certificates in [Vec::new(), vec![invalid]] {
+            let failure = build_tls_config(certificates).unwrap_err();
+            assert_eq!(failure.kind, FailureKind::OperationalApiContractFailure);
+            assert_eq!(failure.diagnostics[0].code, "missing_native_certificates");
+        }
+    }
+
+    #[test]
+    fn tls_cache_reuses_successes_and_retries_failed_initialization() {
+        let cache = OnceLock::new();
+        let first = cached_tls_config(&cache, || build_tls_config(Vec::new()));
+        assert!(first.is_err());
+        assert!(cache.get().is_none());
+        let second =
+            cached_tls_config(&cache, || build_tls_config(vec![synthetic_root()])).unwrap();
+        let third =
+            cached_tls_config(&cache, || panic!("successful TLS config must be reused")).unwrap();
+        assert!(Arc::ptr_eq(&second, &third));
     }
 
     #[test]

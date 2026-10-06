@@ -176,6 +176,12 @@ decompression. There is no internal retry, backoff, alternate host, credential
 refresh, or second attempt. Outer job retries are distinct executions and reuse
 only normally validated prior committed evidence.
 
+TLS retains every parsable certificate from the native trust store and fails
+if none can be added. Successful TLS configuration is shared for the process
+lifetime; native certificate additions or removals require a process restart.
+Initialization failures are not cached. Certificate and hostname verification
+remain required.
+
 Require HTTP 200. Once status exists, 401/403 remains `AuthenticationFailure`
 even with malformed diagnostics; other non-200/redirect responses are
 operational. DNS, connection, TLS, timeout, premature EOF, interrupted transfer,
