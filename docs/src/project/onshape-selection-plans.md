@@ -353,8 +353,8 @@ acquisition; distinct occurrence selectors distinguish shared leaves. Every
 included field and object/target order affects complete plan identity. Rename
 changes display metadata, authoring-document, complete-plan, protocol
 input/manifest, invocation, and cache identities; it preserves source, leaf,
-plan-local/manifest-local object, retained-content, causal-mapping, settings,
-and settings identities.
+plan-local/manifest-local object, retained-content, causal-mapping, and settings
+identities, as well as settings content.
 
 ## Atomic Outcomes And Ownership
 
