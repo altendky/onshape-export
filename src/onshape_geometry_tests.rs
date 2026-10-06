@@ -1301,3 +1301,543 @@ async fn cancellation_while_recording_is_blocked_publishes_no_association() {
     assert_eq!(rows, 0);
     assert_eq!(server.finish().len(), 2);
 }
+
+fn generator_input_policy() -> crate::generator_inputs::GeneratorInputPolicy {
+    crate::generator_inputs::GeneratorInputPolicy {
+        requirements_identity: "requirements-v1".to_owned(),
+        input_kind_identity: "input-kind-v1".to_owned(),
+        input_schema_identity: "input-schema-v1".to_owned(),
+        detected_kind_identity: "neutral-kind-v1".to_owned(),
+        media_type: "application/octet-stream".to_owned(),
+    }
+}
+
+async fn generator_part_fixture(name: &str) -> (TrustedAcquisitionPlan, AcquiredGeometry) {
+    let server = Server::new(vec![
+        version("m"),
+        reply(json!([metadata("e", "p", "response-config", name)])),
+        version("m"),
+        done("t", "external"),
+        bytes(),
+    ]);
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let trusted = planned(&db, &server.api).await;
+    let directory = scratch();
+    let acquired = acquire_geometry(&db, &server.api, &trusted, directory.path())
+        .await
+        .unwrap();
+    assert_eq!(server.finish().len(), 5);
+    (trusted, acquired)
+}
+
+async fn generator_assembly_fixture(
+    selectors: &[&str],
+) -> (TrustedAcquisitionPlan, AcquiredGeometry) {
+    let mut replies = assembly_replies();
+    replies[2] = reply(json!([metadata(
+        "leaf-a",
+        "p-a",
+        "carrier-config-a",
+        "Duplicate [onshape-export:v1;role=supportBlocker;key=a;targets=b]"
+    )]));
+    replies[3] = reply(json!([metadata(
+        "leaf-b",
+        "p-b",
+        "carrier-config-b",
+        "Duplicate [onshape-export:v1;role=printable;key=b;targets=]"
+    )]));
+    replies.extend([
+        version("m"),
+        done("t-first", "x-first"),
+        bytes(),
+        done("t-second", "x-second"),
+        bytes(),
+    ]);
+    let server = Server::new(replies);
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let request = request(
+        &db,
+        &server.api,
+        SelectionElementKind::Assembly,
+        selectors
+            .iter()
+            .map(|id| SelectionSelector::Occurrence {
+                occurrence_path: vec![(*id).to_owned()],
+            })
+            .collect(),
+    )
+    .await;
+    let trusted = record_planning_invocation(&db, &server.api, request)
+        .await
+        .unwrap();
+    let directory = scratch();
+    let acquired = acquire_geometry(&db, &server.api, &trusted, directory.path())
+        .await
+        .unwrap();
+    assert_eq!(server.finish().len(), 9);
+    (trusted, acquired)
+}
+
+#[tokio::test]
+async fn generator_inputs_consume_real_part_studio_handoff_without_staging() {
+    use crate::{generator_inputs::construct_generator_inputs, generator_protocol::InputRole};
+
+    let (trusted, acquired) = generator_part_fixture("Synthetic part").await;
+    let plan = acquired.plan.clone();
+    let evidence = serde_json::to_value(&acquired.bindings[0].acquisition_evidence).unwrap();
+    let bundle = construct_generator_inputs(&trusted, acquired, &generator_input_policy()).unwrap();
+    let manifest = bundle.manifest();
+    manifest.validate().unwrap();
+    assert_eq!(manifest.objects.len(), 1);
+    let object = &manifest.objects[0];
+    assert_eq!(object.display_name.as_deref(), Some("Synthetic part"));
+    assert_eq!(object.role, InputRole::RawGeometry);
+    assert_eq!(
+        object.retained_content.path,
+        format!("inputs/geometry-v1/000-{}.3mf", object.object_identity)
+    );
+    assert_eq!(bundle.provenance().plan, plan);
+    assert_eq!(
+        serde_json::to_value(&bundle.provenance().bindings[0].acquisition_evidence).unwrap(),
+        evidence
+    );
+    let mut copied = Vec::new();
+    bundle.payload(0).unwrap().copy_to(&mut copied).unwrap();
+    assert_eq!(copied, b"opaque geometry bytes");
+    assert_eq!(object.retained_content.byte_length, copied.len() as u64);
+    assert_eq!(
+        object.retained_content.sha256,
+        cache_key::hex_sha256(&copied)
+    );
+    assert!(bundle.payload(1).is_none());
+    assert!(bundle.settings().blockers.is_empty());
+    assert_eq!(bundle.settings().placements.len(), 1);
+    assert_eq!(
+        bundle.settings().placements[0].matrix,
+        onshape_selection::IDENTITY_PLACEMENT
+    );
+    crate::onshape_annotation::validate_settings_context_v2(
+        bundle.settings(),
+        bundle.expected_placements(),
+    )
+    .unwrap();
+    assert_eq!(
+        crate::onshape_annotation::generator_settings_v2_canonical_json_bytes(bundle.settings())
+            .unwrap(),
+        bundle.settings_bytes()
+    );
+}
+
+#[tokio::test]
+async fn generator_inputs_preserve_shared_blockers_equal_bytes_and_duplicate_names() {
+    use crate::{generator_inputs::construct_generator_inputs, generator_protocol::InputRole};
+
+    let (trusted, acquired) = generator_assembly_fixture(&["i-a1", "i-b", "i-a2"]).await;
+    let bundle = construct_generator_inputs(&trusted, acquired, &generator_input_policy()).unwrap();
+    let manifest = bundle.manifest();
+    manifest.validate().unwrap();
+    assert_eq!(manifest.objects.len(), 3);
+    assert!(manifest.objects.iter().all(|object| {
+        object.retained_content.content_identity
+            == manifest.objects[0].retained_content.content_identity
+    }));
+    assert_eq!(
+        manifest
+            .objects
+            .iter()
+            .map(|object| object.role)
+            .collect::<Vec<_>>(),
+        [
+            InputRole::AuxiliaryGeometry,
+            InputRole::RawGeometry,
+            InputRole::AuxiliaryGeometry
+        ]
+    );
+    let mut identities = std::collections::HashSet::new();
+    let mut paths = std::collections::HashSet::new();
+    for (index, ((object, placement), expected)) in manifest
+        .objects
+        .iter()
+        .zip(&bundle.settings().placements)
+        .zip(bundle.expected_placements())
+        .enumerate()
+    {
+        assert_eq!(object.display_name.as_deref(), Some("Duplicate"));
+        assert!(identities.insert(&object.object_identity));
+        assert!(paths.insert(&object.retained_content.path));
+        assert_eq!(
+            object.retained_content.path,
+            format!(
+                "inputs/geometry-v1/{index:03}-{}.3mf",
+                object.object_identity
+            )
+        );
+        assert_eq!(placement.object_identity, object.object_identity);
+        assert_eq!(expected.object_identity, object.object_identity);
+        assert_eq!(expected.transport_role, object.role);
+        assert_eq!(placement.matrix[3], (index + 1) as f64);
+        assert_eq!(placement.matrix, expected.expected_neutral_placement_matrix);
+        assert_eq!(
+            object.retained_content.sha256,
+            cache_key::hex_sha256(b"opaque geometry bytes")
+        );
+    }
+    assert_eq!(bundle.settings().blockers.len(), 2);
+    for (blocker, index) in bundle.settings().blockers.iter().zip([0, 2]) {
+        assert_eq!(
+            blocker.object_identity,
+            manifest.objects[index].object_identity
+        );
+        assert_eq!(
+            blocker.targets,
+            [manifest.objects[1].object_identity.clone()]
+        );
+    }
+    assert!(Arc::ptr_eq(
+        &bundle.payload(0).unwrap().storage_reference,
+        &bundle.payload(2).unwrap().storage_reference
+    ));
+    assert!(!Arc::ptr_eq(
+        &bundle.payload(0).unwrap().storage_reference,
+        &bundle.payload(1).unwrap().storage_reference
+    ));
+    crate::onshape_annotation::validate_settings_context_v2(
+        bundle.settings(),
+        bundle.expected_placements(),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn generator_inputs_rename_changes_manifest_but_preserves_mapping_paths_and_settings() {
+    use crate::generator_inputs::construct_generator_inputs;
+
+    let (trusted, acquired) = generator_part_fixture("Original name").await;
+    let original =
+        construct_generator_inputs(&trusted, acquired, &generator_input_policy()).unwrap();
+    let (trusted, acquired) = generator_part_fixture("Renamed / private-looking name").await;
+    let renamed =
+        construct_generator_inputs(&trusted, acquired, &generator_input_policy()).unwrap();
+    let before = &original.manifest().objects[0];
+    let after = &renamed.manifest().objects[0];
+    assert_eq!(before.object_identity, after.object_identity);
+    assert_eq!(before.retained_content, after.retained_content);
+    assert_eq!(before.mapping, after.mapping);
+    assert_eq!(original.settings(), renamed.settings());
+    assert_eq!(original.settings_identity(), renamed.settings_identity());
+    assert_eq!(original.settings_bytes(), renamed.settings_bytes());
+    assert_eq!(
+        original.manifest().source_identity,
+        renamed.manifest().source_identity
+    );
+    assert_eq!(
+        original.manifest().configuration_identity,
+        renamed.manifest().configuration_identity
+    );
+    assert_ne!(
+        original.provenance().plan.plan_identity,
+        renamed.provenance().plan.plan_identity
+    );
+    assert_ne!(
+        original.provenance().provenance_identity,
+        renamed.provenance().provenance_identity
+    );
+    assert_ne!(
+        original.manifest().input_set_identity,
+        renamed.manifest().input_set_identity
+    );
+    assert_ne!(
+        original.manifest().manifest_identity,
+        renamed.manifest().manifest_identity
+    );
+    assert_eq!(
+        after.display_name.as_deref(),
+        Some("Renamed / private-looking name")
+    );
+}
+
+#[tokio::test]
+async fn generator_inputs_reorder_preserves_object_identity_and_changes_paths_and_placements() {
+    use crate::generator_inputs::construct_generator_inputs;
+
+    let (trusted, acquired) = generator_assembly_fixture(&["i-a1", "i-b", "i-a2"]).await;
+    let original =
+        construct_generator_inputs(&trusted, acquired, &generator_input_policy()).unwrap();
+    let (trusted, acquired) = generator_assembly_fixture(&["i-a2", "i-b", "i-a1"]).await;
+    let reordered =
+        construct_generator_inputs(&trusted, acquired, &generator_input_policy()).unwrap();
+    for (before, after) in original
+        .manifest()
+        .objects
+        .iter()
+        .zip(reordered.manifest().objects.iter().rev())
+    {
+        assert_eq!(before.object_identity, after.object_identity);
+        assert_eq!(before.display_name, after.display_name);
+        assert_eq!(before.role, after.role);
+    }
+    assert_ne!(
+        original.manifest().objects[0].retained_content.path,
+        reordered.manifest().objects[2].retained_content.path
+    );
+    assert_eq!(original.settings().placements[0].matrix[3], 1.);
+    assert_eq!(reordered.settings().placements[0].matrix[3], 3.);
+    assert_ne!(
+        original.manifest().input_set_identity,
+        reordered.manifest().input_set_identity
+    );
+    assert_ne!(original.settings_identity(), reordered.settings_identity());
+}
+
+#[tokio::test]
+async fn generator_inputs_reject_modified_acquisition_handoff_and_equal_byte_storage_swaps() {
+    use crate::generator_inputs::construct_generator_inputs;
+
+    let mutations: [fn(&mut AcquiredGeometry); 8] = [
+        |acquired| acquired.plan.objects[0].display_name = "Altered".to_owned(),
+        |acquired| acquired.provenance_identity = "f".repeat(64),
+        |acquired| acquired.bindings.swap(0, 1),
+        |acquired| acquired.bindings[0].retained_payload.byte_length += 1,
+        |acquired| acquired.bindings[0].retained_payload.sha256 = "e".repeat(64),
+        |acquired| {
+            acquired.bindings[0].acquisition_evidence.external_data_id = "altered".to_owned()
+        },
+        |acquired| {
+            acquired.bindings[0].retained_payload.storage_reference =
+                Arc::clone(&acquired.bindings[1].retained_payload.storage_reference);
+        },
+        |acquired| {
+            acquired.bindings[0].acquisition_evidence =
+                acquired.bindings[1].acquisition_evidence.clone();
+        },
+    ];
+    for mutate in mutations {
+        let (trusted, mut acquired) = generator_assembly_fixture(&["i-a1", "i-b", "i-a2"]).await;
+        mutate(&mut acquired);
+        assert!(construct_generator_inputs(&trusted, acquired, &generator_input_policy()).is_err());
+    }
+    // Same-leaf acquisitions have identical plan/length/hash but independent
+    // retained files; a payload from another invocation is not this handoff.
+    let (trusted, mut acquired) = generator_part_fixture("Synthetic part").await;
+    let (_, other) = generator_part_fixture("Synthetic part").await;
+    acquired.bindings[0].retained_payload.storage_reference =
+        Arc::clone(&other.bindings[0].retained_payload.storage_reference);
+    assert!(construct_generator_inputs(&trusted, acquired, &generator_input_policy()).is_err());
+}
+
+#[tokio::test]
+async fn unavailable_acquisition_produces_no_generator_input_bundle() {
+    use crate::generator_inputs::construct_generator_inputs;
+
+    let server = Server::new(vec![version("m"), part_reply(), version("different")]);
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let trusted = planned(&db, &server.api).await;
+    let directory = scratch();
+    let result = acquire_geometry(&db, &server.api, &trusted, directory.path())
+        .await
+        .map_err(anyhow::Error::new)
+        .and_then(|acquired| {
+            construct_generator_inputs(&trusted, acquired, &generator_input_policy())
+        });
+    assert!(result.is_err());
+    let failure = result.err().unwrap().downcast::<ApiFailure>().unwrap();
+    assert_eq!(failure.kind, FailureKind::UnavailableSourceState);
+    assert!(
+        server
+            .finish()
+            .iter()
+            .all(|request| request.method == "GET")
+    );
+}
+
+#[tokio::test]
+async fn constructed_generator_inputs_validate_request_context_before_dispatch() {
+    use crate::{
+        generator_inputs::construct_generator_inputs,
+        generator_protocol::{GeneratorRequest, parse_request},
+    };
+
+    let (trusted, acquired) = generator_part_fixture("Synthetic part").await;
+    let bundle = construct_generator_inputs(&trusted, acquired, &generator_input_policy()).unwrap();
+    let mut request = parse_request(include_bytes!(
+        "../protocol/generator/v1/examples/request.json"
+    ))
+    .unwrap();
+    request.input_manifest.manifest_identity = bundle.manifest().manifest_identity.clone();
+    request.input_manifest.input_set_identity =
+        bundle.manifest().input_set_identity.clone().unwrap();
+    request.expected_identities.input_kind_identity =
+        bundle.manifest().export.kind_identity.clone();
+    request.expected_identities.input_schema_identity =
+        bundle.manifest().export.schema_identity.clone();
+    request.expected_identities.settings_identity = bundle.settings_identity().to_owned();
+    request.expected_identities.settings_schema_identity =
+        bundle.settings_schema_identity().to_owned();
+    request.settings.settings_identity = bundle.settings_identity().to_owned();
+    request.settings.schema_identity = bundle.settings_schema_identity().to_owned();
+    request.settings.content.sha256 = cache_key::hex_sha256(bundle.settings_bytes());
+    request.settings.content.byte_length = bundle.settings_bytes().len() as u64;
+    request.invocation_identity = request.computed_invocation_identity().unwrap();
+    bundle.validate_request(&request).unwrap();
+    let mutations: [fn(&mut GeneratorRequest); 8] = [
+        |request| request.input_manifest.manifest_identity = "f".repeat(64),
+        |request| request.input_manifest.input_set_identity = "e".repeat(64),
+        |request| request.expected_identities.input_kind_identity = "different-kind".to_owned(),
+        |request| request.expected_identities.input_schema_identity = "different-schema".to_owned(),
+        |request| {
+            request.settings.settings_identity = "different-settings".to_owned();
+            request.expected_identities.settings_identity =
+                request.settings.settings_identity.clone();
+        },
+        |request| {
+            request.settings.schema_identity = "different-settings-schema".to_owned();
+            request.expected_identities.settings_schema_identity =
+                request.settings.schema_identity.clone();
+        },
+        |request| request.settings.content.sha256 = "d".repeat(64),
+        |request| request.settings.content.byte_length += 1,
+    ];
+    for mutate in mutations {
+        let mut changed = request.clone();
+        mutate(&mut changed);
+        changed.invocation_identity = changed.computed_invocation_identity().unwrap();
+        changed.validate().unwrap();
+        assert!(bundle.validate_request(&changed).is_err());
+    }
+    for manifest_conflict in [true, false] {
+        let mut changed = request.clone();
+        let retained_path = bundle.manifest().objects[0].retained_content.path.clone();
+        if manifest_conflict {
+            changed.input_manifest.path = retained_path;
+        } else {
+            changed.settings.content.path = retained_path;
+        }
+        changed.invocation_identity = changed.computed_invocation_identity().unwrap();
+        changed.validate().unwrap();
+        assert!(bundle.validate_request(&changed).is_err());
+    }
+}
+
+#[tokio::test]
+async fn generator_inputs_preserve_real_part_studio_blocker_target_order() {
+    use crate::generator_inputs::construct_generator_inputs;
+
+    let names = [
+        (
+            "blocker",
+            "Blocker [onshape-export:v1;role=supportBlocker;key=blocker;targets=second,first]",
+        ),
+        (
+            "first",
+            "First [onshape-export:v1;role=printable;key=first;targets=]",
+        ),
+        (
+            "second",
+            "Second [onshape-export:v1;role=printable;key=second;targets=]",
+        ),
+    ];
+    let mut replies = vec![
+        version("m"),
+        reply(json!(names.map(|(part, name)| metadata(
+            "e",
+            part,
+            "response-config",
+            name
+        )))),
+        version("m"),
+    ];
+    for part in ["blocker", "first", "second"] {
+        replies.extend([done(&format!("t-{part}"), &format!("x-{part}")), bytes()]);
+    }
+    let server = Server::new(replies);
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let request = request(
+        &db,
+        &server.api,
+        SelectionElementKind::PartStudio,
+        names
+            .iter()
+            .map(|(part, _)| SelectionSelector::Part {
+                part_id: (*part).to_owned(),
+            })
+            .collect(),
+    )
+    .await;
+    let trusted = record_planning_invocation(&db, &server.api, request)
+        .await
+        .unwrap();
+    let directory = scratch();
+    let acquired = acquire_geometry(&db, &server.api, &trusted, directory.path())
+        .await
+        .unwrap();
+    let bundle = construct_generator_inputs(&trusted, acquired, &generator_input_policy()).unwrap();
+    assert_eq!(bundle.settings().blockers.len(), 1);
+    assert_eq!(
+        bundle.settings().blockers[0].object_identity,
+        bundle.manifest().objects[0].object_identity
+    );
+    assert_eq!(
+        bundle.settings().blockers[0].targets,
+        [
+            bundle.manifest().objects[2].object_identity.clone(),
+            bundle.manifest().objects[1].object_identity.clone(),
+        ]
+    );
+    assert!(
+        bundle
+            .settings()
+            .placements
+            .iter()
+            .all(|placement| placement.matrix == onshape_selection::IDENTITY_PLACEMENT)
+    );
+    assert_eq!(server.finish().len(), 9);
+}
+
+#[tokio::test]
+async fn generator_inputs_copy_exact_absolute_rotation_without_ancestor_composition() {
+    use crate::generator_inputs::construct_generator_inputs;
+
+    let absolute = [
+        0., -1., 0., 1., 1., 0., 0., -2., 0., 0., 1., 3., 0., 0., 0., 1.,
+    ];
+    let mut replies = assembly_replies();
+    let body_start = replies[1]
+        .windows(4)
+        .position(|bytes| bytes == b"\r\n\r\n")
+        .unwrap()
+        + 4;
+    let mut assembly: Value = serde_json::from_slice(&replies[1][body_start..]).unwrap();
+    assembly["rootAssembly"]["occurrences"][2]["transform"] = json!(absolute);
+    // These unconsumed fields cannot influence the supported flat leaf's
+    // complete-path-matched absolute placement or be composed into it.
+    assembly["rootAssembly"]["transform"] = json!([
+        1., 0., 0., 100., 0., 1., 0., 200., 0., 0., 1., 300., 0., 0., 0., 1.
+    ]);
+    assembly["subAssemblies"] = json!([{"transform": [42], "unconsumed": true}]);
+    replies[1] = reply(assembly);
+    replies.extend([
+        version("m"),
+        done("t-a", "x-a"),
+        bytes(),
+        done("t-b", "x-b"),
+        bytes(),
+    ]);
+    let server = Server::new(replies);
+    let db = Database::connect("sqlite::memory:").await.unwrap();
+    let trusted = planned_assembly(&db, &server.api).await;
+    assert_eq!(
+        trusted.plan().objects[0].expected_neutral_placement_matrix,
+        absolute
+    );
+    let directory = scratch();
+    let acquired = acquire_geometry(&db, &server.api, &trusted, directory.path())
+        .await
+        .unwrap();
+    let bundle = construct_generator_inputs(&trusted, acquired, &generator_input_policy()).unwrap();
+    assert_eq!(bundle.settings().placements[0].matrix, absolute);
+    assert_eq!(
+        bundle.expected_placements()[0].expected_neutral_placement_matrix,
+        absolute
+    );
+    assert_eq!(server.finish().len(), 9);
+}

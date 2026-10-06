@@ -511,6 +511,41 @@ pub struct AcquiredGeometry {
     pub plan: ResolvedSelectionPlan,
     pub provenance_identity: String,
     pub bindings: Vec<OccurrencePayloadBinding>,
+    // Freeze the successful producer's exact retention references and causal
+    // evidence. Public handoff metadata cannot establish a new acquisition.
+    retention_proof: Vec<(Arc<RetainedBytes>, String)>,
+}
+
+pub(crate) fn acquisition_evidence_identity(
+    evidence: &AcquisitionEvidence,
+) -> Result<String, ApiFailure> {
+    cache_key::hash_json("onshape-export-geometry-acquisition-evidence-v1", evidence)
+        .map_err(|_| invariant("acquisition_evidence_identity"))
+}
+
+/// Pure consumer check; no source resolution, storage reads, or API calls.
+pub(crate) fn validate_acquisition_handoff(
+    trusted: &TrustedAcquisitionPlan,
+    acquired: &AcquiredGeometry,
+) -> Result<(), ApiFailure> {
+    onshape_selection::validate_retained_plan(&acquired.plan)?;
+    if acquired.plan != trusted.record.plan
+        || acquired.provenance_identity != trusted.record.provenance_identity
+        || acquired.retention_proof.len() != acquired.bindings.len()
+    {
+        return Err(invariant("acquisition_handoff_proof"));
+    }
+    validate_acquired(&trusted.record, &acquired.bindings)?;
+    for (binding, (storage, evidence_identity)) in
+        acquired.bindings.iter().zip(&acquired.retention_proof)
+    {
+        if !Arc::ptr_eq(storage, &binding.retained_payload.storage_reference)
+            || *evidence_identity != acquisition_evidence_identity(&binding.acquisition_evidence)?
+        {
+            return Err(invariant("acquisition_handoff_proof").position(binding.position));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -628,10 +663,20 @@ async fn acquire_with_timing(
     }
     ensure_time(deadline)?;
     validate_acquired(record, &bindings)?;
+    let retention_proof = bindings
+        .iter()
+        .map(|binding| {
+            Ok((
+                Arc::clone(&binding.retained_payload.storage_reference),
+                acquisition_evidence_identity(&binding.acquisition_evidence)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, ApiFailure>>()?;
     let result = AcquiredGeometry {
         plan: record.plan.clone(),
         provenance_identity: record.provenance_identity.clone(),
         bindings,
+        retention_proof,
     };
     ensure_time(deadline)?;
     Ok(result)
