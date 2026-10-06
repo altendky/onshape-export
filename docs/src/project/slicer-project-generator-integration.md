@@ -4,8 +4,8 @@
 > approving, running, and publishing output from slicer project generators.
 > The neutral protocol, static deployment identity, pure processing recipe,
 > immutable recipe/occurrence persistence, and exact ready-cache lookup are
-> implemented. Runtime orchestration, CLI execution, and upload/readiness
-> verification remain separate work.
+> implemented, alongside trusted input construction and CLI execution. Worker/UI
+> orchestration and upload/readiness verification remain separate work.
 
 This policy does not provide legal advice. Repository or process separation does
 not itself decide whether licenses are compatible; qualified review is required
@@ -136,6 +136,80 @@ generator owns final target-aware self-validation and reports its exact immutabl
 `validationIdentity`. Do not copy target schemas, validators, fixtures, or
 evidence into this repository, and do not add a second service-side target
 validator.
+
+### Trusted Runner Contract
+
+The source-neutral runner consumes the complete
+[constructed input bundle](onshape-generator-inputs.md) and its prepared
+processing recipe. Before staging, it requires a supported compatibility
+decision, the exact configured static deployed-generator identity, and matching
+manifest, canonical settings, contextual placements, and invocation bindings.
+It derives expected generator identities from the configured document and the
+invocation's settings identity, rather than accepting caller-replaced bindings.
+
+The service chooses a staging parent and an ordinary execution timeout through
+runner options. The default process execution timeout is 600 seconds. Each call
+creates a fresh private root beneath that parent; the root is also the process
+working directory. The fixed argument vector is:
+
+```text
+--request request.json --result result.json
+```
+
+The executable is always the configured absolute path. There is no shell,
+discovery, fallback, alternate executable, work-directory flag, or job-time
+package installation. Standard input, output, and error are connected to the
+null device. The bounded protocol result is the sole generator diagnostic
+channel; printed text is neither retained nor interpreted as a result.
+
+The runner stages the manifest, canonical settings, and every ordered retained
+object separately at their declared paths. Equal-byte objects retain distinct
+paths. Each file is written to a private sibling temporary file, finished,
+closed, and atomically renamed. Staged settings and geometry are independently
+measured against declared lengths and SHA-256 values. The request is installed
+last, after complete input staging and validation, with no candidate or result
+present. Immediately before spawning, the runner repeats the configured
+executable's regular-file, readability, executable-mode, and digest checks;
+their existing deployed-generator failure classifications remain distinct.
+
+Exit code `0` requires a valid success result; exit code `1` requires a valid
+structured failure result. Other numeric exit codes are unexpected exits, and
+signal termination is a process crash. Missing, oversized, or malformed results
+are runner failures. Reported protocol version, invocation identity, and opaque
+identity mismatches are distinct from malformed-result failures. Result parsing
+and cross-document validation retain the neutral protocol's bounds and exact
+output role, identity, path, media type, and maximum-length bindings. Structured
+failure preserves the generator's bounded neutral errors and diagnostics and
+returns no candidate.
+
+After process completion, the final inventory may contain only regular declared
+files and their required ancestor directories. Symlinks, other nonregular
+entries, undeclared files or directories, and leftover temporary files fail the
+invocation. A structured failure may leave a regular candidate at its declared
+path, but those bytes are uncommitted and must never be read or returned.
+For success, the runner independently streams the candidate into an anonymous
+private service-owned file, measures its length and SHA-256, and compares both
+with the result and request limit. It returns only this accepted byte retention
+and source-neutral metadata, never the generator's path.
+
+The candidate-before-result atomic rename order is the trusted producer's
+obligation. The runner reads final files only after process completion; it does
+not watch writes or claim that a final inventory proves their temporal order.
+
+The supervisor owns the process and staging root through completion. Timeout
+and caller cancellation kill and reap the child before root cleanup; a canceled
+caller leaves the supervisor responsible for finishing that cleanup. If the OS
+cannot confirm child termination/reaping, the runner instead returns a typed
+process-cleanup failure with the retained invocation root for service diagnosis;
+it does not delete files beneath a possibly live process. Explicit
+root cleanup must succeed before successful bytes are returned. Cleanup failure
+suppresses success and preserves any preceding failure. Private accepted bytes
+remain independently owned after the invocation root has been removed.
+
+This runner does not wire generator work into workers or the public UI, create
+cache or readiness rows, upload or publish candidates, install a real generator,
+or interpret a target archive. Its executable and protocol tests use synthetic
+source-neutral fixtures only.
 
 The service-owned [Onshape Selection Plans](onshape-selection-plans.md)
 contract in [#173](https://github.com/altendky/onshape-export/issues/173) owns

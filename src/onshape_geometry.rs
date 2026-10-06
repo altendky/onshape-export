@@ -900,5 +900,11 @@ async fn acquire_leaf(
 }
 
 #[cfg(test)]
+pub(crate) async fn generator_runner_test_inputs()
+-> crate::generator_inputs::ConstructedGeneratorInputs {
+    tests::runner_test_inputs().await
+}
+
+#[cfg(test)]
 #[path = "onshape_geometry_tests.rs"]
 mod tests;

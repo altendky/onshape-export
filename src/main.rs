@@ -8,6 +8,7 @@ pub mod deployed_generator;
 pub mod generator_inputs;
 pub mod generator_processing;
 pub mod generator_protocol;
+pub mod generator_runner;
 mod onshape;
 pub mod onshape_annotation;
 pub mod onshape_api;

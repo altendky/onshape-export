@@ -2,10 +2,10 @@
 
 > **Status: Partially implemented.** The neutral protocol, settings v2, static
 > deployed-generator identity, pure processing recipe, ordered-occurrence
-> persistence, and exact cache-lookup contracts are implemented. Production
-> geometry dispatch and orchestration, CLI runner execution, candidate
-> upload/readiness verification, publication, and real deployment remain
-> unavailable.
+> persistence, exact cache-lookup contracts, trusted geometry acquisition,
+> manifest/settings construction, and source-neutral CLI runner are implemented.
+> Production worker/UI dispatch, candidate upload/readiness verification,
+> publication, and real deployment remain unavailable.
 
 ## Terminology
 
@@ -101,27 +101,30 @@ Each dialect produces a separate immutable artifact.
 A Bambu project, Orca project, and Prusa project must not share an artifact identity merely because their bytes or archive members happen to match.
 No generator should claim another slicer's compatibility unless that combination has explicit validation evidence.
 
-## Conceptual CLI Boundary
+## CLI Boundary
 
 Protocol v1 uses a file-backed JSON exchange rather than a streaming or
-long-running service protocol. The later runner will invoke a generator with
-paths for:
+long-running service protocol. The runner invokes the configured executable
+directly with:
 
-- A request JSON file.
-- A result JSON file.
+```text
+--request request.json --result result.json
+```
+
+The working directory is one fresh private invocation root. Standard streams
+use the null device; bounded result diagnostics are the generator's reporting
+channel. The ordinary process execution timeout defaults to 600 seconds.
 
 The request identifies the protocol version, opaque expected identities, the
 ordered geometry input set and roles, settings, and one output declaration. The
 manifest, retained objects, and settings use declared safe paths under `inputs/`;
 the candidate uses its declared path under `outputs/`, all within one private
-invocation root. Request/result path arguments belong to the later trusted CLI
-interface.
-The
-result reports success or structured failure, exact reported identities,
+invocation root. The result reports success or structured failure, exact reported identities,
 candidate output hash, and bounded diagnostics.
 The service would independently recompute the candidate output hash rather than trust the report.
 Field names, JSON Schema, atomic-write rules, and diagnostic format are defined
-by protocol v1. Exact process flags and runner implementation remain open.
+by protocol v1. Exact runner behavior is defined by the
+[integration policy](slicer-project-generator-integration.md#trusted-runner-contract).
 
 ## Capabilities And Versioning
 
@@ -205,19 +208,24 @@ A process exit code or successful ZIP parse alone is insufficient.
 
 ## Trusted CLI Execution
 
-A production trusted-CLI runner is not implemented. When added, it must invoke
-only exact statically configured trusted generator CLI bytes at a fixed
-configured path and must not use a shell. The CLI will exchange declared request,
-input, result, and output files through the neutral protocol. Ordinary runner
-behavior must handle success, structured failure, process crash, unexpected
-exit, and missing or malformed results.
+The trusted runner invokes only exact statically configured generator CLI bytes
+at the fixed configured path, without a shell, after an immediate executable
+recheck. It consumes the constructed input bundle and prepared recipe, stages
+all declared inputs separately, and exchanges request, result, and candidate
+files through the neutral protocol. Exit code `0` requires success, `1` requires
+structured failure, other codes are unexpected exits, and signal termination is
+a crash. Missing, malformed, incompatible, or mismatched results fail closed.
+Only independently measured successful bytes can leave the invocation, after
+explicit root cleanup; timeout and cancellation kill and reap before cleanup.
 
 No runtime sandbox or containment mechanism is required. The approved CLI may
 run with the same ambient runtime access as the service because it is trusted to
 the same degree as service code. Independent result validation remains a
-publication-integrity gate, not a hostile-code boundary. The future runtime must
-stage and publish independently accepted bytes rather than forwarding a
-generator-created path.
+publication-integrity gate, not a hostile-code boundary. The runner retains
+independently accepted bytes rather than forwarding a generator-created path.
+Worker/UI dispatch, cache/readiness writes, upload, publication, and real
+generator installation remain separate integrations. Runner tests use only
+synthetic source-neutral executables and protocol fixtures.
 
 ## Upgrade Overview
 

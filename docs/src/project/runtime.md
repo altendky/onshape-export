@@ -47,9 +47,17 @@ An incompatible request receives a stable unsupported result. It
 must not silently substitute another slicer dialect, omit settings, or fall back
 to an Onshape geometry 3MF while labeling it as a slicer project.
 
-The later runner directly invokes the exact trusted CLI at its fixed configured
-path without a shell and exchanges declared request, input, result, and output
-files through the neutral protocol. The configured CLI is trusted like service
+The trusted runner directly invokes the exact CLI at its fixed configured path
+without a shell, with `--request request.json --result result.json` and a fresh
+private invocation root as its working directory. It stages declared inputs,
+rechecks the executable immediately before spawning, and independently measures
+successful candidate bytes. Its ordinary execution timeout defaults to 600
+seconds, and its standard streams use the null device; diagnostics come only
+from the bounded protocol result. Timeout and cancellation kill and reap the
+child before cleanup. Successful return requires explicit staging-root cleanup.
+See the normative [runner contract](slicer-project-generator-integration.md#trusted-runner-contract).
+Worker/UI dispatch, candidate upload/readiness, publication, and real generator
+installation remain separate integration work. The configured CLI is trusted like service
 code; no runtime sandbox, credential stripping, network or filesystem isolation,
 or process resource limits are required. The process boundary preserves
 repository, source-ingress, provenance, release, distribution, and license
