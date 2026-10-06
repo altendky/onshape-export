@@ -148,6 +148,14 @@ against every consumed leaf before causal raw geometry acquisition. It does not
 resolve selectors, recapture metadata, reinterpret configurations or transforms,
 or change order.
 
+Its [configured-leaf acquisition contract](onshape-geometry-acquisition.md)
+keeps translation-body request provenance distinct from planned response-derived
+configuration identities. #174 retains opaque bytes and ordered
+occurrence-to-payload bindings; it allocates no protocol paths and does not
+parse internal 3MF grouping, units, geometry, or placement. Unsupported bindings
+are unavailable, while authentication, transport, and upstream-contract failures
+remain operational failures.
+
 Manifest-order orchestration, deterministic retained paths, manifest/settings
 construction, role rewrite, placement summaries, and protocol/contextual
 validation are owned by

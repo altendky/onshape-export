@@ -303,6 +303,13 @@ and one downloaded payload. Download responses were labeled only
 `application/octet-stream`, so profile-specific byte validation remains
 mandatory and media labels alone cannot establish geometry kind.
 
+The separate [configured-leaf acquisition contract](onshape-geometry-acquisition.md)
+defines #174's pinned version-addressed requests, configuration-body evidence,
+causal cardinality, bounded transport, and typed failures. Its service boundary
+retains opaque raw bytes; internal Geometry 3MF parsing and validation belong to
+the trusted generator. The legacy whole-element export behavior described here
+does not establish that acquisition contract.
+
 ## Polling Policy
 
 Use conservative polling with backoff:
