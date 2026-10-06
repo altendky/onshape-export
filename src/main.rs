@@ -4995,15 +4995,48 @@ async fn resolve_configuration_encoding(
     config_hash: &str,
     typed_values: &BTreeMap<String, parameters::CanonicalParameterValue>,
 ) -> anyhow::Result<EncodedConfigurationIdentity> {
-    let resolved = crate::configuration_encoding::resolve_for_hashes(
-        &state.db,
-        &state.onshape.strict_api()?,
-        &model.onshape,
-        typed_values,
-        source_hash,
-        config_hash,
-    )
-    .await?;
+    let api = state.onshape.strict_api()?;
+    let source = &model.onshape;
+    let cached_source = state
+        .db
+        .source_resolution_for_version(
+            &source.document_id,
+            &source.version_id,
+            &source.element_id,
+            source.element_kind.key(),
+            source.link_document_id.as_deref(),
+        )
+        .await?;
+    let resolved = if let Some(record) = cached_source {
+        let cached_source = ResolvedOnshapeSourceIdentity {
+            document_id: record.document_id,
+            version_id: record.version_id,
+            microversion_id: record.microversion_id,
+            element_id: record.element_id,
+            element_kind: source.element_kind.clone(),
+            link_document_id: record.link_document_id,
+        };
+        crate::configuration_encoding::resolve_for_export(
+            &state.db,
+            &api,
+            source,
+            &cached_source,
+            typed_values,
+            source_hash,
+            config_hash,
+        )
+        .await?
+    } else {
+        crate::configuration_encoding::resolve_for_hashes(
+            &state.db,
+            &api,
+            source,
+            typed_values,
+            source_hash,
+            config_hash,
+        )
+        .await?
+    };
     Ok(resolved.identity)
 }
 
@@ -6369,6 +6402,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn export_without_cached_source_uses_one_strict_version_read() {
+        let mut state = test_state().await;
+        let model = test_model();
+        let validated = validated_configuration_for_test_values(HashMap::new());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        state
+            .onshape
+            .set_test_selection_origin(format!("http://{}", listener.local_addr().unwrap()));
+        let source = ResolvedOnshapeSourceIdentity {
+            document_id: model.onshape.document_id.clone(),
+            version_id: model.onshape.version_id.clone(),
+            microversion_id: "mid".to_owned(),
+            element_id: model.onshape.element_id.clone(),
+            element_kind: model.onshape.element_kind.clone(),
+            link_document_id: None,
+        };
+        let handoff = crate::configuration_encoding::seed(
+            &state.db,
+            &state.onshape.strict_api().unwrap(),
+            &source,
+            &validated.typed_values,
+            "cached-encoding",
+            "configuration=cached-encoding",
+        )
+        .await;
+        let server = std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            let started = std::time::Instant::now();
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(started.elapsed() < Duration::from_secs(5));
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("synthetic version listener failed: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0_u8];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            let body = serde_json::json!({
+                "documentId":source.document_id,"id":source.version_id,"microversion":"mid"
+            })
+            .to_string();
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let encoding = resolve_configuration_encoding(
+            &state,
+            &model,
+            &handoff.source_hash,
+            &handoff.config_hash,
+            &validated.typed_values,
+        )
+        .await
+        .unwrap();
+        assert_eq!(encoding.encoded_id, handoff.encoded_id);
+        assert!(
+            server.join().unwrap().starts_with(
+                "GET /api/v16/documents/d/did/versions/vid?parents=false HTTP/1.1\r\n"
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn enqueue_preview_dedupes_identical_request_hash() {
         let mut state = test_state().await;
         let model = test_model();
@@ -6384,38 +6489,7 @@ mod tests {
         state
             .onshape
             .set_test_selection_origin(format!("http://{}", listener.local_addr().unwrap()));
-        let document_id = model.onshape.document_id.clone();
-        let version_id = model.onshape.version_id.clone();
-        let version_server = std::thread::spawn(move || {
-            listener.set_nonblocking(true).unwrap();
-            for _ in 0..3 {
-                let started = std::time::Instant::now();
-                let mut stream = loop {
-                    match listener.accept() {
-                        Ok((stream, _)) => break stream,
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            assert!(started.elapsed() < Duration::from_secs(5));
-                            std::thread::sleep(Duration::from_millis(5));
-                        }
-                        Err(error) => panic!("synthetic version listener failed: {error}"),
-                    }
-                };
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .unwrap();
-                let mut request = Vec::new();
-                let mut byte = [0_u8];
-                while !request.ends_with(b"\r\n\r\n") {
-                    stream.read_exact(&mut byte).unwrap();
-                    request.push(byte[0]);
-                }
-                assert!(String::from_utf8(request).unwrap().starts_with(&format!(
-                    "GET /api/v16/documents/d/{document_id}/versions/{version_id}?parents=false HTTP/1.1\r\n"
-                )));
-                let body = serde_json::json!({"documentId":document_id,"id":version_id,"microversion":"mid"}).to_string();
-                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
-            }
-        });
+        listener.set_nonblocking(true).unwrap();
 
         assert!(enqueue_preview(&state, &model, &validated).await.unwrap());
         assert!(!enqueue_preview(&state, &model, &validated).await.unwrap());
@@ -6431,7 +6505,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(job.status, "queued");
-        version_server.join().unwrap();
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
     }
 
     #[tokio::test]

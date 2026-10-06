@@ -147,6 +147,17 @@ the coordinator/cache path. Missing, forged, cross-version, cross-origin,
 cross-schema, or otherwise unequal provenance is operational; planning never
 falls back, parses `queryParam`, substitutes a legacy row, or retries.
 
+Existing preview/download exports have a scoped exception to the coordinator's
+fresh-version ordering: they may reuse a fully validated active encoding hit
+against the exact version-specific cached source resolution and current typed
+values. This keeps ready artifacts available during a version-endpoint outage.
+Every source field must match the catalog source; all hashes and stored evidence
+are revalidated, including `queryParam`. Invalid evidence fails without a network
+request. A missing cached source resolution or active row enters the fresh
+coordinator; only a true active triple-key miss permits its single encoding
+attempt. This exception does not apply to public planning-handoff coordination
+or the planner's independent version read.
+
 ## Transport And Projection
 
 Pin the reviewed OpenAPI 3.0.1 artifact from `onshape-mcp-io` 0.5.2 at

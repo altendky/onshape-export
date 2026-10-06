@@ -335,6 +335,41 @@ pub(crate) async fn resolve_for_hashes(
     .await
 }
 
+/// Existing exports may reuse validated active evidence without a fresh version read.
+/// A true miss still enters the fresh coordinator; invalid evidence never does.
+pub(crate) async fn resolve_for_export(
+    db: &Database,
+    api: &OnshapeApi,
+    source: &OnshapeSource,
+    resolved: &ResolvedOnshapeSourceIdentity,
+    typed: &BTreeMap<String, CanonicalParameterValue>,
+    source_hash: &str,
+    config_hash: &str,
+) -> Result<EncodingResolution, ApiFailure> {
+    if resolved.document_id != source.document_id
+        || resolved.version_id != source.version_id
+        || resolved.element_id != source.element_id
+        || resolved.element_kind.key() != source.element_kind.key()
+        || resolved.link_document_id != source.link_document_id
+    {
+        return Err(failure("encoding_export_source_mismatch"));
+    }
+    let expected = expected(api, resolved, typed)?;
+    if expected.source_hash != source_hash || expected.config_hash != config_hash {
+        return Err(failure("encoding_export_binding_mismatch"));
+    }
+    if let Some(record) = db
+        .configuration_encoding(source_hash, config_hash, &expected.context_hash)
+        .await
+        .map_err(|_| failure("encoding_cache_read_failed"))?
+    {
+        let validated = validate_record(&record, &expected, true)?;
+        retain_typed_selection(db, &expected, typed).await?;
+        return Ok(validated);
+    }
+    resolve_for_hashes(db, api, source, typed, source_hash, config_hash).await
+}
+
 async fn resolve_inner(
     db: &Database,
     api: &OnshapeApi,
@@ -686,6 +721,356 @@ mod tests {
 
     fn version() -> Value {
         json!({"documentId":"d","id":"v","microversion":"m"})
+    }
+
+    async fn export_without_requests(
+        db: &Database,
+        api: &OnshapeApi,
+        resolved: &ResolvedOnshapeSourceIdentity,
+        values: &BTreeMap<String, CanonicalParameterValue>,
+        source_hash: &str,
+        config_hash: &str,
+    ) -> Result<EncodingResolution, ApiFailure> {
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            resolve_for_export(db, api, &root(), resolved, values, source_hash, config_hash),
+        )
+        .await
+        .expect("validated export cache access must not wait for an Onshape operation")
+    }
+
+    fn assert_no_connections(listener: &TcpListener) {
+        listener.set_nonblocking(true).unwrap();
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+        );
+    }
+
+    #[tokio::test]
+    async fn export_active_hits_work_online_and_during_outage_without_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let api = OnshapeApi::for_test(&format!("http://{}", listener.local_addr().unwrap()));
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let handoff = seed(
+            &db,
+            &api,
+            &source(),
+            &typed(),
+            "cached-enc",
+            "configuration=cached-enc",
+        )
+        .await;
+        let online = export_without_requests(
+            &db,
+            &api,
+            &source(),
+            &typed(),
+            &handoff.source_hash,
+            &handoff.config_hash,
+        )
+        .await
+        .unwrap();
+        assert_eq!(online.handoff, handoff);
+        assert_eq!(online.identity.query_param, "configuration=cached-enc");
+        assert_no_connections(&listener);
+        drop(listener);
+        let outage = export_without_requests(
+            &db,
+            &api,
+            &source(),
+            &typed(),
+            &handoff.source_hash,
+            &handoff.config_hash,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outage.handoff, handoff);
+        assert_eq!(outage.identity.query_param, online.identity.query_param);
+    }
+
+    #[tokio::test]
+    async fn export_current_typed_and_source_bindings_fail_before_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let api = OnshapeApi::for_test(&format!("http://{}", listener.local_addr().unwrap()));
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let handoff = seed(&db, &api, &source(), &typed(), "enc", "configuration=enc").await;
+        for case in 0..8 {
+            let mut resolved = source();
+            let mut values = typed();
+            let mut source_hash = handoff.source_hash.clone();
+            let mut config_hash = handoff.config_hash.clone();
+            match case {
+                0 => {
+                    values.insert(
+                        "flag".to_owned(),
+                        CanonicalParameterValue::Boolean { value: false },
+                    );
+                }
+                1 => source_hash = "a".repeat(64),
+                2 => config_hash = "b".repeat(64),
+                3 => resolved.document_id = "other-document".to_owned(),
+                4 => resolved.version_id = "other-version".to_owned(),
+                5 => resolved.element_id = "other-element".to_owned(),
+                6 => resolved.microversion_id = "other-microversion".to_owned(),
+                _ => resolved.element_kind = ElementKind::Assembly,
+            }
+            let failure =
+                export_without_requests(&db, &api, &resolved, &values, &source_hash, &config_hash)
+                    .await
+                    .unwrap_err();
+            assert_eq!(
+                failure.kind,
+                FailureKind::OperationalApiContractFailure,
+                "case {case}"
+            );
+            assert_no_connections(&listener);
+        }
+    }
+
+    #[tokio::test]
+    async fn export_malformed_active_evidence_never_falls_through_to_requests() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let api = OnshapeApi::for_test(&format!("http://{}", listener.local_addr().unwrap()));
+        let expected = expected(&api, &source(), &typed()).unwrap();
+        for field in ["context", "request", "response"] {
+            let db = Database::connect("sqlite::memory:").await.unwrap();
+            let context_json = if field == "context" {
+                "{}".to_owned()
+            } else {
+                canonical_string(&expected.context).unwrap()
+            };
+            let request_json = if field == "request" {
+                r#"{"parameters":null}"#.to_owned()
+            } else {
+                canonical_string(&expected.request).unwrap()
+            };
+            let response_json = if field == "response" {
+                r#"{"encodedId":"wrong","queryParam":"configuration=enc"}"#
+            } else {
+                r#"{"encodedId":"enc","queryParam":"configuration=enc"}"#
+            };
+            db.insert_configuration_encoding_if_absent(ConfigurationEncodingInsert {
+                source_hash: &expected.source_hash,
+                config_hash: &expected.config_hash,
+                encoding_context_hash: &expected.context_hash,
+                encoding_context_json: &context_json,
+                encoded_id: "enc",
+                query_param: "configuration=enc",
+                request_json: &request_json,
+                response_json,
+            })
+            .await
+            .unwrap();
+            let failure = export_without_requests(
+                &db,
+                &api,
+                &source(),
+                &typed(),
+                &expected.source_hash,
+                &expected.config_hash,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(
+                failure.kind,
+                FailureKind::OperationalApiContractFailure,
+                "{field}"
+            );
+            assert_no_connections(&listener);
+            assert!(
+                db.configuration_encoding(
+                    &expected.source_hash,
+                    &expected.config_hash,
+                    &expected.context_hash
+                )
+                .await
+                .unwrap()
+                .is_some()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn export_true_miss_uses_one_fresh_version_read_and_one_encoding() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let (api, server) = fixture(vec![
+            version(),
+            json!({"encodedId":"fresh-enc","queryParam":"configuration=fresh-enc"}),
+        ]);
+        let expected = expected(&api, &source(), &typed()).unwrap();
+        let resolved = resolve_for_export(
+            &db,
+            &api,
+            &root(),
+            &source(),
+            &typed(),
+            &expected.source_hash,
+            &expected.config_hash,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resolved.handoff.source_hash, expected.source_hash);
+        assert_eq!(resolved.handoff.config_hash, expected.config_hash);
+        assert_eq!(
+            resolved.handoff.encoding_context_hash,
+            expected.context_hash
+        );
+        assert_eq!(resolved.identity.encoded_id, "fresh-enc");
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[0]
+                .starts_with("GET /api/v16/documents/d/d/versions/v?parents=false HTTP/1.1\r\n")
+        );
+        assert!(requests[1].starts_with(
+            "POST /api/v16/elements/d/d/e/e/configurationencodings?versionId=v HTTP/1.1\r\n"
+        ));
+        assert_eq!(
+            requests[1].split("\r\n\r\n").nth(1).unwrap(),
+            canonical_string(&expected.request).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn export_fresh_microversion_mismatch_rejects_without_encoding() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let (api, server) = fixture(vec![
+            json!({"documentId":"d","id":"v","microversion":"changed-m"}),
+        ]);
+        let expected = expected(&api, &source(), &typed()).unwrap();
+        let failure = resolve_for_export(
+            &db,
+            &api,
+            &root(),
+            &source(),
+            &typed(),
+            &expected.source_hash,
+            &expected.config_hash,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failure.kind, FailureKind::OperationalApiContractFailure);
+        assert_eq!(
+            failure.diagnostics[0].code,
+            "encoding_coordinator_binding_mismatch"
+        );
+        assert!(
+            db.configuration_encoding(
+                &expected.source_hash,
+                &expected.config_hash,
+                &expected.context_hash
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0]
+                .starts_with("GET /api/v16/documents/d/d/versions/v?parents=false HTTP/1.1\r\n")
+        );
+    }
+
+    #[tokio::test]
+    async fn export_version_aliases_share_source_hash_but_require_distinct_context_rows() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let (api, server) = fixture(vec![
+            json!({"documentId":"d","id":"v2","microversion":"m"}),
+            json!({"encodedId":"enc-v2","queryParam":"configuration=enc-v2"}),
+        ]);
+        let first = seed(
+            &db,
+            &api,
+            &source(),
+            &typed(),
+            "enc-v1",
+            "configuration=enc-v1",
+        )
+        .await;
+        let mut second_source = source();
+        second_source.version_id = "v2".to_owned();
+        let mut second_root = root();
+        second_root.version_id = "v2".to_owned();
+        let second = resolve_for_export(
+            &db,
+            &api,
+            &second_root,
+            &second_source,
+            &typed(),
+            &first.source_hash,
+            &first.config_hash,
+        )
+        .await
+        .unwrap();
+        assert_eq!(second.handoff.source_hash, first.source_hash);
+        assert_eq!(second.handoff.config_hash, first.config_hash);
+        assert_ne!(
+            second.handoff.encoding_context_hash,
+            first.encoding_context_hash
+        );
+        assert_eq!(second.identity.encoded_id, "enc-v2");
+        assert_eq!(
+            resolve_for_export(
+                &db,
+                &api,
+                &root(),
+                &source(),
+                &typed(),
+                &first.source_hash,
+                &first.config_hash
+            )
+            .await
+            .unwrap()
+            .identity
+            .encoded_id,
+            "enc-v1"
+        );
+        assert_eq!(
+            resolve_for_export(
+                &db,
+                &api,
+                &second_root,
+                &second_source,
+                &typed(),
+                &first.source_hash,
+                &first.config_hash
+            )
+            .await
+            .unwrap()
+            .identity
+            .encoded_id,
+            "enc-v2"
+        );
+        assert!(
+            db.configuration_encoding(
+                &first.source_hash,
+                &first.config_hash,
+                &first.encoding_context_hash
+            )
+            .await
+            .unwrap()
+            .is_some()
+        );
+        assert!(
+            db.configuration_encoding(
+                &second.handoff.source_hash,
+                &second.handoff.config_hash,
+                &second.handoff.encoding_context_hash
+            )
+            .await
+            .unwrap()
+            .is_some()
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[0]
+                .starts_with("GET /api/v16/documents/d/d/versions/v2?parents=false HTTP/1.1\r\n")
+        );
+        assert!(requests[1].starts_with(
+            "POST /api/v16/elements/d/d/e/e/configurationencodings?versionId=v2 HTTP/1.1\r\n"
+        ));
     }
 
     #[test]
