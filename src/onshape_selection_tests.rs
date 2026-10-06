@@ -425,6 +425,24 @@ async fn invalid_preflight_never_contacts_onshape() {
             .kind,
         FailureKind::InvalidSelection
     );
+    let assembly = request(
+        &db,
+        &server.api,
+        SelectionElementKind::Assembly,
+        vec![occurrence("i")],
+    )
+    .await;
+    for valid in [valid, assembly] {
+        let mut unknown_selector_field = serde_json::to_value(&valid).unwrap();
+        SelectionRequest::from_json(&serde_json::to_vec(&unknown_selector_field).unwrap()).unwrap();
+        unknown_selector_field["selectors"][0]["extra"] = json!(1);
+        assert_eq!(
+            SelectionRequest::from_json(&serde_json::to_vec(&unknown_selector_field).unwrap())
+                .unwrap_err()
+                .kind,
+            FailureKind::InvalidSelection
+        );
+    }
     assert!(server.finish().is_empty());
 }
 
