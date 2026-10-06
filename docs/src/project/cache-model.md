@@ -69,7 +69,7 @@ Repair policy for the initial slice:
 | Source identity | Identify the immutable Onshape element being exported. | `documentId`, resolved `microversionId`, `elementId`, `elementKind`, link-document context if later needed. | `sourceHash`, source metadata, resolved version/microversion diagnostics. |
 | Parameter metadata | Preserve and normalize Onshape configuration schema. | `sourceHash`, Onshape configuration response, local schema version. | Raw configuration JSON, normalized parameter schema, schema hash/version. |
 | Configuration selection | Identify validated parameter values. | `sourceHash`, normalized schema hash/version, typed canonical values after defaults and overrides. | `configHash`, canonical values, validation details. |
-| Configuration encoding | Cache Onshape's encoded configuration string. | `sourceHash`, `configHash`, encoding request body, `linkDocumentId`. | `encodedId`, `queryParam`, decoded parameters when available. |
+| Configuration encoding | Cache validated Onshape encoding evidence. | `sourceHash`, `configHash`, `encodingContextHash`, exact canonical request and response evidence. | Exact `encodedId`, canonical context, and `queryParam` evidence for callers that need it. |
 | Export options | Identify user/catalog-visible export intent. | Format, preview/download settings, orientation, grouping, selection filters, options schema version. | `optionsHash`, logical options payload. |
 | Onshape request | Identify the exact wire request sent to Onshape. | Source/config/options, endpoint, method, path, full body with known defaults filled in, defaults policy version. | `requestHash`, canonical request JSON, request builder version. |
 | Translation attempt | Resume and diagnose an Onshape translation. | `requestHash`, `translationId`. | Start/final response JSON, poll state, result IDs, `responseHash`. |
@@ -114,18 +114,29 @@ Current code stores supported parameter selections as typed canonical values. Le
 
 ### Configuration Encoding Identity
 
-Onshape configuration strings can be hand-built for simple cases, but the robust target is to use Onshape's encoding endpoint:
+The trusted coordinator uses the pinned Onshape encoding operation on a true active-cache miss:
 
 ```text
-POST /api/elements/d/{did}/e/{eid}/configurationencodings?versionId={vid}
+POST /api/v16/elements/d/{did}/e/{eid}/configurationencodings?versionId={vid}
 ```
 
-Store both returned values:
+Retain response evidence and the representations consumed by each caller:
 
-- `encodedId`, used in async export bodies.
-- `queryParam`, used by query-string APIs.
+- `encodedId`, used in async export bodies and unchanged structured planning queries.
+- `queryParam`, retained and validated when an existing export caller needs it;
+  the planner never consumes it.
 
 The encoding response does not replace `configHash`. It is an Onshape representation of the selected configuration, while `configHash` is the application identity for validated values.
+
+The active SQLite cache key is exactly `(sourceHash, configHash,
+encodingContextHash)`. The context binds trusted canonical origin, pinned API
+and operation, exact version and resolved microversion, element/kind, sole
+`versionId` query, and canonicalization/schema versions. The
+[selection-plan provenance contract](onshape-selection-plans.md#configuration-provenance)
+defines its closed payload and hash. Validate every hit; a present invalid row
+fails without an encoding call. Insert once and revalidate concurrent winners.
+The migration preserves old two-key rows separately without copying or reusing
+them. Planning consumes only the closed four-field handoff and never encodes.
 
 ### `optionsHash`
 
@@ -653,7 +664,7 @@ Initial v2 should store metadata in the database and use object storage for raw 
 ```text
 onshape/source/v2/{sourceHash}/configuration.raw.json
 onshape/source/v2/{sourceHash}/parameters.normalized/{parameterSchemaHash}.json
-config-encodings/v1/{sourceHash}/{configHash}.json
+config-encodings/v2/{sourceHash}/{configHash}/{encodingContextHash}.json
 
 onshape/requests/v1/{requestHash}/request.json
 onshape/translations/v1/{translationId}/start.json

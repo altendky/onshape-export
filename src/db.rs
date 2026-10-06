@@ -53,7 +53,6 @@ pub struct SourceResolutionUpsert<'a> {
 }
 
 #[allow(dead_code)]
-#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct ConfigurationSelectionRecord {
     pub source_hash: String,
@@ -77,6 +76,8 @@ pub struct ConfigurationSelectionUpsert<'a> {
 pub struct ConfigurationEncodingRecord {
     pub source_hash: String,
     pub config_hash: String,
+    pub encoding_context_hash: String,
+    pub encoding_context_json: String,
     pub encoded_id: String,
     pub query_param: String,
     pub request_json: String,
@@ -86,9 +87,11 @@ pub struct ConfigurationEncodingRecord {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ConfigurationEncodingUpsert<'a> {
+pub struct ConfigurationEncodingInsert<'a> {
     pub source_hash: &'a str,
     pub config_hash: &'a str,
+    pub encoding_context_hash: &'a str,
+    pub encoding_context_json: &'a str,
     pub encoded_id: &'a str,
     pub query_param: &'a str,
     pub request_json: &'a str,
@@ -1028,7 +1031,6 @@ impl Database {
         Ok(())
     }
 
-    #[cfg(test)]
     pub async fn configuration_selection(
         &self,
         source_hash: &str,
@@ -1045,7 +1047,7 @@ impl Database {
         .bind(config_hash)
         .fetch_optional(&self.pool)
         .await
-        .map(|row| row.map(configuration_selection_record_from_row))
+        .and_then(|row| row.map(configuration_selection_record_from_row).transpose())
     }
 
     pub async fn upsert_configuration_selection(
@@ -1073,53 +1075,70 @@ impl Database {
         Ok(())
     }
 
+    pub async fn insert_configuration_selection_if_absent(
+        &self,
+        selection: ConfigurationSelectionUpsert<'_>,
+    ) -> sqlx::Result<()> {
+        sqlx::query(
+            "INSERT INTO configuration_selections (source_hash, config_hash, values_json, validation_json) VALUES (?, ?, ?, ?) ON CONFLICT(source_hash, config_hash) DO NOTHING",
+        )
+        .bind(selection.source_hash)
+        .bind(selection.config_hash)
+        .bind(selection.values_json)
+        .bind(selection.validation_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn configuration_encoding(
         &self,
         source_hash: &str,
         config_hash: &str,
+        encoding_context_hash: &str,
     ) -> sqlx::Result<Option<ConfigurationEncodingRecord>> {
         sqlx::query(
             r#"
-            SELECT source_hash, config_hash, encoded_id, query_param, request_json,
+            SELECT source_hash, config_hash, encoding_context_hash, encoding_context_json,
+                   encoded_id, query_param, request_json,
                    response_json, created_at, updated_at
             FROM configuration_encodings
-            WHERE source_hash = ? AND config_hash = ?
+            WHERE source_hash = ? AND config_hash = ? AND encoding_context_hash = ?
             "#,
         )
         .bind(source_hash)
         .bind(config_hash)
+        .bind(encoding_context_hash)
         .fetch_optional(&self.pool)
         .await
-        .map(|row| row.map(configuration_encoding_record_from_row))
+        .and_then(|row| row.map(configuration_encoding_record_from_row).transpose())
     }
 
-    pub async fn upsert_configuration_encoding(
+    pub async fn insert_configuration_encoding_if_absent(
         &self,
-        encoding: ConfigurationEncodingUpsert<'_>,
-    ) -> sqlx::Result<()> {
-        sqlx::query(
+        encoding: ConfigurationEncodingInsert<'_>,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query(
             r#"
             INSERT INTO configuration_encodings (
-                source_hash, config_hash, encoded_id, query_param, request_json, response_json
+                source_hash, config_hash, encoding_context_hash, encoding_context_json,
+                encoded_id, query_param, request_json, response_json
             )
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(source_hash, config_hash) DO UPDATE SET
-                encoded_id = excluded.encoded_id,
-                query_param = excluded.query_param,
-                request_json = excluded.request_json,
-                response_json = excluded.response_json,
-                updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_hash, config_hash, encoding_context_hash) DO NOTHING
             "#,
         )
         .bind(encoding.source_hash)
         .bind(encoding.config_hash)
+        .bind(encoding.encoding_context_hash)
+        .bind(encoding.encoding_context_json)
         .bind(encoding.encoded_id)
         .bind(encoding.query_param)
         .bind(encoding.request_json)
         .bind(encoding.response_json)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(result.rows_affected() == 1)
     }
 
     #[cfg(test)]
@@ -2762,33 +2781,34 @@ fn source_resolution_record_from_row(row: sqlx::sqlite::SqliteRow) -> SourceReso
     }
 }
 
-#[cfg(test)]
 fn configuration_selection_record_from_row(
     row: sqlx::sqlite::SqliteRow,
-) -> ConfigurationSelectionRecord {
-    ConfigurationSelectionRecord {
-        source_hash: row.get("source_hash"),
-        config_hash: row.get("config_hash"),
-        values_json: row.get("values_json"),
-        validation_json: row.get("validation_json"),
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-    }
+) -> sqlx::Result<ConfigurationSelectionRecord> {
+    Ok(ConfigurationSelectionRecord {
+        source_hash: row.try_get("source_hash")?,
+        config_hash: row.try_get("config_hash")?,
+        values_json: row.try_get("values_json")?,
+        validation_json: row.try_get("validation_json")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
 }
 
 fn configuration_encoding_record_from_row(
     row: sqlx::sqlite::SqliteRow,
-) -> ConfigurationEncodingRecord {
-    ConfigurationEncodingRecord {
-        source_hash: row.get("source_hash"),
-        config_hash: row.get("config_hash"),
-        encoded_id: row.get("encoded_id"),
-        query_param: row.get("query_param"),
-        request_json: row.get("request_json"),
-        response_json: row.get("response_json"),
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-    }
+) -> sqlx::Result<ConfigurationEncodingRecord> {
+    Ok(ConfigurationEncodingRecord {
+        source_hash: row.try_get("source_hash")?,
+        config_hash: row.try_get("config_hash")?,
+        encoding_context_hash: row.try_get("encoding_context_hash")?,
+        encoding_context_json: row.try_get("encoding_context_json")?,
+        encoded_id: row.try_get("encoded_id")?,
+        query_param: row.try_get("query_param")?,
+        request_json: row.try_get("request_json")?,
+        response_json: row.try_get("response_json")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
 }
 
 #[cfg(test)]
@@ -3730,45 +3750,176 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn configuration_encodings_round_trip_by_source_and_config_hash() {
+    async fn configuration_encodings_are_insert_once_and_keyed_by_context() {
         let db = test_database().await;
-        db.upsert_configuration_encoding(ConfigurationEncodingUpsert {
+        let encoding = ConfigurationEncodingInsert {
             source_hash: "sourcehash",
             config_hash: "confighash",
+            encoding_context_hash: "context-a",
+            encoding_context_json: "{}",
             encoded_id: "encoded-1",
             query_param: "configuration=encoded-1",
             request_json: r#"{"parameters":[{"parameterId":"enabled","parameterValue":"true"}]}"#,
             response_json: r#"{"encodedId":"encoded-1","queryParam":"configuration=encoded-1"}"#,
-        })
-        .await
-        .unwrap();
+        };
+        assert!(
+            db.insert_configuration_encoding_if_absent(encoding)
+                .await
+                .unwrap()
+        );
 
         let record = db
-            .configuration_encoding("sourcehash", "confighash")
+            .configuration_encoding("sourcehash", "confighash", "context-a")
             .await
             .unwrap()
             .unwrap();
         assert_eq!(record.encoded_id, "encoded-1");
         assert_eq!(record.query_param, "configuration=encoded-1");
 
-        db.upsert_configuration_encoding(ConfigurationEncodingUpsert {
-            source_hash: "sourcehash",
-            config_hash: "confighash",
-            encoded_id: "encoded-2",
-            query_param: "configuration=encoded-2",
-            request_json: r#"{"parameters":[{"parameterId":"enabled","parameterValue":"false"}]}"#,
-            response_json: r#"{"encodedId":"encoded-2","queryParam":"configuration=encoded-2"}"#,
-        })
-        .await
-        .unwrap();
+        assert!(
+            !db.insert_configuration_encoding_if_absent(ConfigurationEncodingInsert {
+                encoded_id: "contradictory",
+                ..encoding
+            })
+            .await
+            .unwrap()
+        );
+        assert!(
+            db.insert_configuration_encoding_if_absent(ConfigurationEncodingInsert {
+                encoding_context_hash: "context-b",
+                encoded_id: "encoded-2",
+                ..encoding
+            })
+            .await
+            .unwrap()
+        );
 
         let updated = db
-            .configuration_encoding("sourcehash", "confighash")
+            .configuration_encoding("sourcehash", "confighash", "context-a")
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(updated.encoded_id, "encoded-2");
-        assert!(updated.request_json.contains("false"));
+        assert_eq!(updated.encoded_id, "encoded-1");
+        assert_eq!(
+            db.configuration_encoding("sourcehash", "confighash", "context-b")
+                .await
+                .unwrap()
+                .unwrap()
+                .encoded_id,
+            "encoded-2"
+        );
+    }
+
+    #[tokio::test]
+    async fn encoding_context_migration_preserves_legacy_and_unrelated_rows() {
+        let db = Database::connect_without_migrations("sqlite::memory:")
+            .await
+            .unwrap();
+        // Run the normal migration runner against the exact historical prefix.
+        let all = sqlx::migrate!();
+        let historical = sqlx::migrate::Migrator {
+            migrations: std::borrow::Cow::Owned(
+                all.iter()
+                    .filter(|migration| migration.version < 20261005000000)
+                    .cloned()
+                    .collect(),
+            ),
+            ..sqlx::migrate::Migrator::DEFAULT
+        };
+        historical.run(&db.pool).await.unwrap();
+        sqlx::query("INSERT INTO configuration_encodings (source_hash, config_hash, encoded_id, query_param, request_json, response_json) VALUES ('source', 'config', 'legacy', 'legacy-query', '{}', '{}')")
+            .execute(&db.pool).await.unwrap();
+        db.upsert_configuration_selection(ConfigurationSelectionUpsert {
+            source_hash: "source",
+            config_hash: "config",
+            values_json: "{}",
+            validation_json: "{}",
+        })
+        .await
+        .unwrap();
+        all.run(&db.pool).await.unwrap();
+        let legacy: String =
+            sqlx::query_scalar("SELECT encoded_id FROM legacy_configuration_encodings")
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(legacy, "legacy");
+        assert!(
+            db.configuration_encoding("source", "config", "context")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            db.configuration_selection("source", "config")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        let primary_key_columns: Vec<(String, i64)> =
+            sqlx::query("PRAGMA table_info(configuration_encodings)")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|row| row.get::<i64, _>("pk") > 0)
+                .map(|row| (row.get("name"), row.get("pk")))
+                .collect();
+        assert_eq!(
+            primary_key_columns,
+            vec![
+                ("source_hash".to_owned(), 1),
+                ("config_hash".to_owned(), 2),
+                ("encoding_context_hash".to_owned(), 3),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_present_encoding_and_selection_columns_return_errors_without_panics() {
+        let db = test_database().await;
+        db.insert_configuration_encoding_if_absent(ConfigurationEncodingInsert {
+            source_hash: "source",
+            config_hash: "config",
+            encoding_context_hash: "context",
+            encoding_context_json: "{}",
+            encoded_id: "enc",
+            query_param: "query",
+            request_json: "{}",
+            response_json: "{}",
+        })
+        .await
+        .unwrap();
+        db.upsert_configuration_selection(ConfigurationSelectionUpsert {
+            source_hash: "source",
+            config_hash: "config",
+            values_json: "{}",
+            validation_json: "{}",
+        })
+        .await
+        .unwrap();
+        for expression in ["x'FF'", "CAST(x'FF' AS TEXT)"] {
+            let sql = format!("UPDATE configuration_encodings SET response_json = {expression}");
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(&db.pool)
+                .await
+                .unwrap();
+            assert!(
+                db.configuration_encoding("source", "config", "context")
+                    .await
+                    .is_err()
+            );
+            let sql = format!("UPDATE configuration_selections SET values_json = {expression}");
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(&db.pool)
+                .await
+                .unwrap();
+            assert!(
+                db.configuration_selection("source", "config")
+                    .await
+                    .is_err()
+            );
+        }
     }
 
     #[tokio::test]

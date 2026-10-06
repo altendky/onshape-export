@@ -32,13 +32,8 @@ pub struct OnshapeClient {
     base_url: Url,
     access_key: Option<String>,
     secret_key: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct EncodedConfiguration {
-    pub identity: EncodedConfigurationIdentity,
-    pub request_json: String,
-    pub response_json: String,
+    #[cfg(test)]
+    test_selection_origin: Option<String>,
 }
 
 type CanonicalRequestPathParams = BTreeMap<String, String>;
@@ -109,7 +104,13 @@ impl PolledTranslation {
 
 impl OnshapeClient {
     pub fn new(config: OnshapeConfig) -> anyhow::Result<Self> {
-        let base_url = Url::parse(&config.base_url)?;
+        let origin = crate::onshape_api::canonical_origin(&config.base_url)?;
+        anyhow::ensure!(
+            origin == crate::onshape_api::PRODUCTION_ORIGIN,
+            "configured Onshape origin is not trusted"
+        );
+        let base_url = Url::parse(&origin)
+            .map_err(|_| anyhow::anyhow!("canonical Onshape origin could not be parsed"))?;
         Ok(Self {
             client: reqwest::Client::builder()
                 .default_headers(default_headers())
@@ -117,11 +118,32 @@ impl OnshapeClient {
             base_url,
             access_key: config.access_key,
             secret_key: config.secret_key,
+            #[cfg(test)]
+            test_selection_origin: None,
         })
     }
 
     pub fn base_url(&self) -> &Url {
         &self.base_url
+    }
+
+    pub(crate) fn strict_api(
+        &self,
+    ) -> Result<crate::onshape_api::OnshapeApi, crate::onshape_api::ApiFailure> {
+        #[cfg(test)]
+        if let Some(origin) = &self.test_selection_origin {
+            return Ok(crate::onshape_api::OnshapeApi::for_test(origin));
+        }
+        crate::onshape_api::OnshapeApi::new(
+            self.base_url.as_str(),
+            self.access_key.clone(),
+            self.secret_key.clone(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_selection_origin(&mut self, origin: String) {
+        self.test_selection_origin = Some(origin);
     }
 
     pub fn has_credentials(&self) -> bool {
@@ -207,50 +229,6 @@ impl OnshapeClient {
             element_id: source.element_id.clone(),
             element_kind: source.element_kind.clone(),
             link_document_id: source.link_document_id.clone(),
-        })
-    }
-
-    pub async fn encode_configuration(
-        &self,
-        source: &OnshapeSource,
-        values: &BTreeMap<String, String>,
-    ) -> anyhow::Result<EncodedConfiguration> {
-        anyhow::ensure!(
-            self.has_credentials(),
-            "Onshape credentials are not configured"
-        );
-
-        let (path, body) = configuration_encoding_request(source, values);
-        let request_json = serde_json::to_string(&body)?;
-        let mut url = self.base_url.clone();
-        url.set_path(&path);
-        url.query_pairs_mut()
-            .append_pair("versionId", &source.version_id);
-        if let Some(link_document_id) = &source.link_document_id {
-            url.query_pairs_mut()
-                .append_pair("linkDocumentId", link_document_id);
-        }
-        let query = url.query().unwrap_or_default().to_owned();
-
-        let mut headers = self.signed_json_headers(Method::POST, url.path(), &query)?;
-        headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
-        let response: Value = onshape_response(
-            self.client
-                .post(url)
-                .headers(headers)
-                .json(&body)
-                .send()
-                .await?,
-        )
-        .await?
-        .json()
-        .await?;
-        let response_json = serde_json::to_string(&response)?;
-
-        Ok(EncodedConfiguration {
-            identity: parse_configuration_encoding_response(&response)?,
-            request_json,
-            response_json,
         })
     }
 
@@ -570,41 +548,6 @@ fn api_host_class(base_url: &Url) -> String {
     base_url.host_str().unwrap_or_default().to_owned()
 }
 
-fn configuration_encoding_request(
-    source: &OnshapeSource,
-    values: &BTreeMap<String, String>,
-) -> (String, Value) {
-    let path = format!(
-        "/api/elements/d/{}/e/{}/configurationencodings",
-        source.document_id, source.element_id
-    );
-
-    let parameters = values
-        .keys()
-        .map(|key| {
-            json!({
-                "parameterId": key,
-                "parameterValue": values[key],
-            })
-        })
-        .collect::<Vec<_>>();
-
-    (path, json!({ "parameters": parameters }))
-}
-
-fn parse_configuration_encoding_response(
-    response: &Value,
-) -> anyhow::Result<EncodedConfigurationIdentity> {
-    let encoded_id = first_string(response, &["encodedId"])
-        .ok_or_else(|| anyhow::anyhow!("Onshape encoding response did not include encodedId"))?;
-    let query_param = first_string(response, &["queryParam"])
-        .ok_or_else(|| anyhow::anyhow!("Onshape encoding response did not include queryParam"))?;
-    Ok(EncodedConfigurationIdentity {
-        encoded_id,
-        query_param,
-    })
-}
-
 fn parse_started_translation(
     response: &Value,
     operation: &str,
@@ -849,7 +792,7 @@ fn default_headers() -> HeaderMap {
     headers
 }
 
-fn signed_headers(
+pub(crate) fn signed_headers(
     method: Method,
     path: &str,
     query: &str,
@@ -899,7 +842,6 @@ fn nonce() -> String {
 mod tests {
     use super::*;
     use crate::catalog::ElementKind;
-    use std::collections::BTreeMap;
 
     #[test]
     fn gltf_export_body_requests_grouped_preview() {
@@ -1159,53 +1101,7 @@ mod tests {
     }
 
     #[test]
-    fn configuration_encoding_request_uses_sorted_parameters() {
-        let source = OnshapeSource {
-            document_id: "did".to_owned(),
-            version_id: "vid".to_owned(),
-            element_id: "eid".to_owned(),
-            element_kind: ElementKind::PartStudio,
-            link_document_id: Some("ldid".to_owned()),
-        };
-        let values = BTreeMap::from([
-            ("width".to_owned(), "10 mm".to_owned()),
-            ("enabled".to_owned(), "true".to_owned()),
-        ]);
-
-        let (path, body) = configuration_encoding_request(&source, &values);
-
-        assert_eq!(path, "/api/elements/d/did/e/eid/configurationencodings");
-        assert_eq!(
-            body,
-            json!({
-                "parameters": [
-                    {
-                        "parameterId": "enabled",
-                        "parameterValue": "true",
-                    },
-                    {
-                        "parameterId": "width",
-                        "parameterValue": "10 mm",
-                    },
-                ]
-            })
-        );
-    }
-
-    #[test]
-    fn source_queries_are_url_encoded_before_signing() {
-        let mut configuration_url = Url::parse("https://cad.onshape.com").unwrap();
-        configuration_url.set_path("/api/elements/d/did/e/eid/configurationencodings");
-        configuration_url
-            .query_pairs_mut()
-            .append_pair("versionId", "vid&= value")
-            .append_pair("linkDocumentId", "ld/id?");
-
-        assert_eq!(
-            configuration_url.query(),
-            Some("versionId=vid%26%3D+value&linkDocumentId=ld%2Fid%3F")
-        );
-
+    fn version_queries_are_url_encoded_before_signing() {
         let mut version_url = Url::parse("https://cad.onshape.com").unwrap();
         version_url.set_path("/api/documents/d/did/versions/vid");
         version_url
@@ -1213,19 +1109,6 @@ mod tests {
             .append_pair("linkDocumentId", "ld/id?");
 
         assert_eq!(version_url.query(), Some("linkDocumentId=ld%2Fid%3F"));
-    }
-
-    #[test]
-    fn parse_configuration_encoding_response_requires_expected_fields() {
-        let parsed = parse_configuration_encoding_response(&json!({
-            "encodedId": "enc-123",
-            "queryParam": "configuration=enc-123",
-        }))
-        .unwrap();
-
-        assert_eq!(parsed.encoded_id, "enc-123");
-        assert_eq!(parsed.query_param, "configuration=enc-123");
-        assert!(parse_configuration_encoding_response(&json!({"encodedId": "enc"})).is_err());
     }
 
     #[test]

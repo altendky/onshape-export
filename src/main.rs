@@ -2,12 +2,15 @@ mod cache_key;
 mod cache_model;
 mod catalog;
 mod config;
+pub mod configuration_encoding;
 mod db;
 pub mod deployed_generator;
 pub mod generator_processing;
 pub mod generator_protocol;
 mod onshape;
 pub mod onshape_annotation;
+pub mod onshape_api;
+pub mod onshape_selection;
 mod parameters;
 mod storage;
 
@@ -4521,7 +4524,7 @@ async fn prepare_preview_export(
         model,
         source_hash,
         config_hash,
-        &encoding_request_values(&validated.typed_values),
+        &validated.typed_values,
     )
     .await?;
     let options_hash = preview_options_hash(model);
@@ -4563,7 +4566,7 @@ async fn prepare_download_export(
         model,
         source_hash,
         config_hash,
-        &encoding_request_values(&validated.typed_values),
+        &validated.typed_values,
     )
     .await?;
     let options_hash = download_options_hash(model, format);
@@ -4765,18 +4768,23 @@ async fn current_preview_request_hash(
     source_hash: &str,
     config_hash: &str,
 ) -> anyhow::Result<Option<String>> {
-    let Some(configuration) = state
-        .db
-        .configuration_encoding(source_hash, config_hash)
-        .await?
+    let source = resolve_source_identity(state, model).await?;
+    let Some(configuration) = crate::configuration_encoding::lookup(
+        &state.db,
+        &state.onshape.strict_api()?,
+        &source,
+        source_hash,
+        config_hash,
+    )
+    .await?
     else {
         return Ok(None);
     };
     let request = state.onshape.build_preview_glb_export_request(
         &model.onshape,
         &EncodedConfigurationIdentity {
-            encoded_id: configuration.encoded_id,
-            query_param: configuration.query_param,
+            encoded_id: configuration.identity.encoded_id,
+            query_param: configuration.identity.query_param,
         },
         &model.exports.preview_options,
     );
@@ -4790,18 +4798,23 @@ async fn current_download_request_hash(
     config_hash: &str,
     format: catalog::DownloadFormat,
 ) -> anyhow::Result<Option<String>> {
-    let Some(configuration) = state
-        .db
-        .configuration_encoding(source_hash, config_hash)
-        .await?
+    let source = resolve_source_identity(state, model).await?;
+    let Some(configuration) = crate::configuration_encoding::lookup(
+        &state.db,
+        &state.onshape.strict_api()?,
+        &source,
+        source_hash,
+        config_hash,
+    )
+    .await?
     else {
         return Ok(None);
     };
     let request = state.onshape.build_download_export_request(
         &model.onshape,
         &EncodedConfigurationIdentity {
-            encoded_id: configuration.encoded_id,
-            query_param: configuration.query_param,
+            encoded_id: configuration.identity.encoded_id,
+            query_param: configuration.identity.query_param,
         },
         format,
         &model.exports.download_options,
@@ -4980,35 +4993,51 @@ async fn resolve_configuration_encoding(
     model: &catalog::Model,
     source_hash: &str,
     config_hash: &str,
-    request_values: &BTreeMap<String, String>,
+    typed_values: &BTreeMap<String, parameters::CanonicalParameterValue>,
 ) -> anyhow::Result<EncodedConfigurationIdentity> {
-    if let Some(record) = state
+    let api = state.onshape.strict_api()?;
+    let source = &model.onshape;
+    let cached_source = state
         .db
-        .configuration_encoding(source_hash, config_hash)
-        .await?
-    {
-        return Ok(EncodedConfigurationIdentity {
-            encoded_id: record.encoded_id,
-            query_param: record.query_param,
-        });
-    }
-
-    let encoded = state
-        .onshape
-        .encode_configuration(&model.onshape, request_values)
+        .source_resolution_for_version(
+            &source.document_id,
+            &source.version_id,
+            &source.element_id,
+            source.element_kind.key(),
+            source.link_document_id.as_deref(),
+        )
         .await?;
-    state
-        .db
-        .upsert_configuration_encoding(db::ConfigurationEncodingUpsert {
+    let resolved = if let Some(record) = cached_source {
+        let cached_source = ResolvedOnshapeSourceIdentity {
+            document_id: record.document_id,
+            version_id: record.version_id,
+            microversion_id: record.microversion_id,
+            element_id: record.element_id,
+            element_kind: source.element_kind.clone(),
+            link_document_id: record.link_document_id,
+        };
+        crate::configuration_encoding::resolve_for_export(
+            &state.db,
+            &api,
+            source,
+            &cached_source,
+            typed_values,
             source_hash,
             config_hash,
-            encoded_id: &encoded.identity.encoded_id,
-            query_param: &encoded.identity.query_param,
-            request_json: &encoded.request_json,
-            response_json: &encoded.response_json,
-        })
-        .await?;
-    Ok(encoded.identity)
+        )
+        .await?
+    } else {
+        crate::configuration_encoding::resolve_for_hashes(
+            &state.db,
+            &api,
+            source,
+            typed_values,
+            source_hash,
+            config_hash,
+        )
+        .await?
+    };
+    Ok(resolved.identity)
 }
 
 fn parameter_schema_hash(schema: &ParameterSchema) -> anyhow::Result<String> {
@@ -6319,18 +6348,7 @@ mod tests {
         )]));
         let config_hash = configuration_hash(&source_hash, &validated).unwrap();
         seed_test_source_resolution(&state, &model, &source_hash).await;
-        state
-            .db
-            .upsert_configuration_encoding(db::ConfigurationEncodingUpsert {
-                source_hash: &source_hash,
-                config_hash: &config_hash,
-                encoded_id: "encoded-1",
-                query_param: "configuration=encoded-1",
-                request_json: r#"{"parameters":[{"parameterId":"a","parameterValue":"1"}]}"#,
-                response_json: r#"{"encodedId":"encoded-1","queryParam":"configuration=encoded-1"}"#,
-            })
-            .await
-            .unwrap();
+        seed_test_encoding(&state, &model, &validated).await;
         let current_request = state.onshape.build_preview_glb_export_request(
             &model.onshape,
             &EncodedConfigurationIdentity {
@@ -6384,8 +6402,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn export_without_cached_source_uses_one_strict_version_read() {
+        let mut state = test_state().await;
+        let model = test_model();
+        let validated = validated_configuration_for_test_values(HashMap::new());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        state
+            .onshape
+            .set_test_selection_origin(format!("http://{}", listener.local_addr().unwrap()));
+        let source = ResolvedOnshapeSourceIdentity {
+            document_id: model.onshape.document_id.clone(),
+            version_id: model.onshape.version_id.clone(),
+            microversion_id: "mid".to_owned(),
+            element_id: model.onshape.element_id.clone(),
+            element_kind: model.onshape.element_kind.clone(),
+            link_document_id: None,
+        };
+        let handoff = crate::configuration_encoding::seed(
+            &state.db,
+            &state.onshape.strict_api().unwrap(),
+            &source,
+            &validated.typed_values,
+            "cached-encoding",
+            "configuration=cached-encoding",
+        )
+        .await;
+        let server = std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            let started = std::time::Instant::now();
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(started.elapsed() < Duration::from_secs(5));
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("synthetic version listener failed: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0_u8];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            let body = serde_json::json!({
+                "documentId":source.document_id,"id":source.version_id,"microversion":"mid"
+            })
+            .to_string();
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let encoding = resolve_configuration_encoding(
+            &state,
+            &model,
+            &handoff.source_hash,
+            &handoff.config_hash,
+            &validated.typed_values,
+        )
+        .await
+        .unwrap();
+        assert_eq!(encoding.encoded_id, handoff.encoded_id);
+        assert!(
+            server.join().unwrap().starts_with(
+                "GET /api/v16/documents/d/did/versions/vid?parents=false HTTP/1.1\r\n"
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn enqueue_preview_dedupes_identical_request_hash() {
-        let state = test_state().await;
+        let mut state = test_state().await;
         let model = test_model();
         let source_hash = resolved_source_hash_for_test_model(&model);
         let validated = validated_configuration_for_test_values(HashMap::from([(
@@ -6394,18 +6484,12 @@ mod tests {
         )]));
         let config_hash = configuration_hash(&source_hash, &validated).unwrap();
         seed_test_source_resolution(&state, &model, &source_hash).await;
+        seed_test_encoding(&state, &model, &validated).await;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         state
-            .db
-            .upsert_configuration_encoding(db::ConfigurationEncodingUpsert {
-                source_hash: &source_hash,
-                config_hash: &config_hash,
-                encoded_id: "encoded-1",
-                query_param: "configuration=encoded-1",
-                request_json: r#"{"parameters":[{"parameterId":"a","parameterValue":"1"}]}"#,
-                response_json: r#"{"encodedId":"encoded-1","queryParam":"configuration=encoded-1"}"#,
-            })
-            .await
-            .unwrap();
+            .onshape
+            .set_test_selection_origin(format!("http://{}", listener.local_addr().unwrap()));
+        listener.set_nonblocking(true).unwrap();
 
         assert!(enqueue_preview(&state, &model, &validated).await.unwrap());
         assert!(!enqueue_preview(&state, &model, &validated).await.unwrap());
@@ -6421,6 +6505,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(job.status, "queued");
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
     }
 
     #[tokio::test]
@@ -7153,6 +7241,23 @@ mod tests {
             })
             .await
             .unwrap();
+    }
+
+    async fn seed_test_encoding(
+        state: &AppState,
+        model: &catalog::Model,
+        validated: &ValidatedConfiguration,
+    ) {
+        let source = resolve_source_identity(state, model).await.unwrap();
+        crate::configuration_encoding::seed(
+            &state.db,
+            &state.onshape.strict_api().unwrap(),
+            &source,
+            &validated.typed_values,
+            "encoded-1",
+            "configuration=encoded-1",
+        )
+        .await;
     }
 
     fn validated_configuration_for_test_values(

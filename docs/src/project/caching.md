@@ -47,7 +47,7 @@ Remaining deviations from the updated plan:
 | Catalog metadata | Catalog row and slug for lookup; source IDs for cache identity | Live model information in SQLite. |
 | Raw Onshape configuration | Source identity | Preserve original Onshape parameter response. |
 | Normalized parameter schema | Source identity and schema version | UI-ready form model. |
-| Configuration encoding | Source identity and config hash | Cached output of Onshape configuration encoding, if used. |
+| Configuration encoding | Source identity, config hash, and encoding context hash | Insert-once validated Onshape encoding evidence; legacy two-key rows are inactive. |
 | Preview artifact | Source identity, config hash, preview options hash | Browser 3D preview, usually GLB but sometimes direct glTF or a single glTF asset set. |
 | Download artifact | Source identity, config hash, format, export options hash | STEP, STL, and raw Onshape geometry 3MF downloads. |
 | Manifest | Artifact group id | Application state for completed, missing, and superseded outputs. |
@@ -110,7 +110,7 @@ For the current v1 implementation track, the logical target layout remains the s
 onshape/v1/{source_hash}/configuration.raw.json
 onshape/v1/{source_hash}/parameters.normalized/{parameter_schema_hash}.json
 
-encodings/v1/{source_hash}/{config_hash}.json
+encodings/v2/{source_hash}/{config_hash}/{encoding_context_hash}.json
 
 previews/v1/{source_hash}/{config_hash}/{options_hash}/preview.glb
 previews/v1/{source_hash}/{config_hash}/{options_hash}/preview.gltf
