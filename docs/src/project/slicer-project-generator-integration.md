@@ -180,6 +180,13 @@ and
 [`slicer-project-generators#9`](https://github.com/altendky/slicer-project-generators/issues/9),
 not to the neutral settings validator.
 
+The [input construction implementation](onshape-generator-inputs.md) consumes
+the verified trusted acquisition handoff, declares one deterministic versioned
+path per occurrence, and returns a read-only manifest/settings/provenance
+bundle. Before later dispatch its request-context check binds the invocation to
+the exact manifest and canonical settings. It performs no staging, generator
+invocation, or cache operation.
+
 A successful process exit, matching self-reported hash, or parseable ZIP is not
 sufficient for publication.
 

@@ -921,7 +921,7 @@ fn validate_version(version: u32, field: &str) -> Result<(), ProtocolError> {
     )
 }
 
-fn validate_identity(value: &str, field: &str) -> Result<(), ProtocolError> {
+pub(crate) fn validate_identity(value: &str, field: &str) -> Result<(), ProtocolError> {
     ensure(
         !value.is_empty()
             && value.len() <= MAX_IDENTITY_LENGTH
@@ -976,7 +976,7 @@ fn is_media_type_character(byte: u8) -> bool {
         )
 }
 
-fn validate_relative_path(value: &str, field: &str) -> Result<(), ProtocolError> {
+pub(crate) fn validate_relative_path(value: &str, field: &str) -> Result<(), ProtocolError> {
     ensure(
         !value.is_empty() && value.len() <= MAX_PATH_LENGTH && value.is_ascii(),
         format!("{field} must be a non-empty ASCII path of at most {MAX_PATH_LENGTH} bytes"),

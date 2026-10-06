@@ -5,6 +5,7 @@ mod config;
 pub mod configuration_encoding;
 mod db;
 pub mod deployed_generator;
+pub mod generator_inputs;
 pub mod generator_processing;
 pub mod generator_protocol;
 mod onshape;

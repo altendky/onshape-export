@@ -163,14 +163,14 @@ identity, and settings-schema identity. Package/build/binary, provenance,
 normalization, and validation identities remain processing identity rather than
 logical options.
 
-The recipe contract can represent multiple retained inputs, but production
-construction and dispatch of such manifests remain unavailable. They must not
-infer source-object identity from archive order, filenames, display names, or
-result-array position. Only mappings proven under the characterization rules may
-populate that ordered input set. As of the controlled selected-object
-follow-ups, no profile satisfies the required Part Studio and complete Assembly
-occurrence-path contract, so production multi-object dispatch remains
-unavailable.
+The recipe contract can represent multiple retained inputs. The
+[trusted immutable-leaf input constructor](onshape-generator-inputs.md) now
+produces complete ordered manifests and neutral placement settings from the
+supported Part Studio and rigid Assembly planning/acquisition handoff. It never
+infers source-object identity from archive order, filenames, display names,
+result-array position, or content equality. The historical aggregate-export
+mapping limitations remain in force. Staging and production generator dispatch
+remain follow-up work in #168.
 The service-owned static deployed-generator identity binds package and binary
 digests plus approved protocol, dialect, provenance, capabilities, input/schema,
 normalization, and validation identities. Invocation settings and candidate
