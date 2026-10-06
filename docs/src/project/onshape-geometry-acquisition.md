@@ -1,14 +1,16 @@
 # Configured-Leaf Geometry 3MF Acquisition
 
-> **Status: #174 phase 1 provenance contract submitted for review; production
-> acquisition remains unimplemented.**
+> **Status: trusted provenance and opaque acquisition implemented; contract and
+> implementation submitted together for review.**
 > Bounded characterization in
 > [#308](https://github.com/altendky/onshape-export/issues/308) rejected Part
 > Studio direct binding and demonstrated the tested Assembly-leaf binding and
 > original Part Studio encoding handoff. The contract below defines trusted
-> recording and consumption of that handoff. Review and merge of the phase 1
-> contract PR must precede phase 2 implementation; this PR does not close #174
-> or enable production support.
+> recording and consumption of that handoff. The maintainer approved combining
+> the contract and phase 2 implementation in
+> [#310](https://github.com/altendky/onshape-export/pull/310), overriding the
+> separate contract-merge gate. This changes delivery sequencing, not the
+> demonstrated binding, provenance, or verification requirements.
 
 ## Scope And Ownership
 
@@ -115,8 +117,8 @@ non-default identities returned default geometry. Exact Assembly-leaf
 `fullConfiguration` use discriminated the tested configurations. These are
 separate conclusions; no equality among configuration spaces is inferred.
 The Part Studio alternative uses only the original encoding handoff under the
-trusted provenance contract below. Phase 2 remains gated on review and merge of
-that contract.
+trusted provenance contract below. Contract and implementation undergo review
+together under the combined delivery above.
 
 Unsupported or unproven bindings are unavailable before create. If direct use
 is rejected or remains unproven, any alternative must separately retain trusted
@@ -233,7 +235,7 @@ outside existing #173 source, configuration, leaf, object, and plan hash scopes.
 
 ### Persistence, Concurrency, And Lifecycle
 
-Phase 2 adds one service-owned table `acquisition_plan_provenance` through the
+The implementation adds one service-owned table `acquisition_plan_provenance` through the
 normal transactional migration runner. Its required columns are
 `provenance_schema_version` (integer fixed to 1), `plan_identity` (text),
 `provenance_identity` (text), and `record_json` (the complete canonical record).
@@ -487,9 +489,9 @@ inspection is permitted only to establish bounded characterization results.
 | Proven snapshot mismatch or unsupported/unproven source binding | Unavailable acquisition; zero create calls |
 | HTTP 401/403, including malformed diagnostic bodies | Authentication failure; no availability conclusion |
 | DNS, TLS, connection, framing, premature EOF, or HTTP timeout | Transport failure |
-| Other non-success HTTP status, including 429/5xx | Operational HTTP failure |
-| Translation `FAILED` | Operational translation failure; do not infer unsupported source from free text |
-| Poll/translation/acquisition deadline exhaustion | Operational timeout |
+| Other non-success geometry HTTP status, including 429/5xx | `OperationalHttpFailure`; the version barrier retains the selection API's operational status classification |
+| Translation `FAILED` | `OperationalTranslationFailure`; do not infer unsupported source from free text |
+| Poll/translation/acquisition deadline exhaustion | `OperationalTimeoutFailure`; per-operation connect/read/HTTP total timeouts remain transport failures |
 | Invalid JSON, identity contradiction, malformed/cardinality result, empty payload, media or size mismatch | Operational API-contract failure |
 
 Every failure returns no successful ordered occurrence-to-payload handoff.
@@ -508,11 +510,11 @@ authentication precedence, transport interruption, HTTP failures, and every
 deadline boundary. Require atomic failure, ordered distinct occurrence bindings,
 reuse only for exact equal leaves, and no content-based occurrence collapse.
 
-### Phase 2 Provenance Verification Matrix
+### Provenance Verification Matrix
 
 Use only source-neutral synthetic requests, encoding-cache evidence, plans,
-storage, and fake transport. The phase 1 PR specifies these obligations; phase 2
-must implement them before production support. Existing controlled evidence is
+storage, and fake transport. These are implementation verification obligations
+under the combined contract/implementation review. Existing controlled evidence is
 sufficient for the original Part Studio handoff mechanism; no new fixture or
 upstream slicer source is needed for this verification.
 
@@ -664,12 +666,41 @@ metadata `configurationId` remains rejected and unavailable; an arbitrary valid
 encoding is not a substitute. Independently configured Assembly leaves retain
 their separate demonstrated `fullConfiguration` representation.
 
-Review and merge of #174's focused phase 1 contract PR satisfies the separate
-handoff review required by the merged #308 document. Phase 2 then implements
-and verifies this contract and the pinned acquisition/transport flow. Closing
-issue #308 established bounded evidence; it did not approve provenance recording or
-enable production acquisition. The phase 1 PR must not close #174, and #174 is
-complete only after both phases are delivered and verified.
+The maintainer approved reviewing the contract and implementation together in
+PR #310 instead of requiring a separate phase 1 merge before implementation.
+The combined review covers both this handoff contract and the pinned
+acquisition/transport implementation. Closing issue #308 established bounded
+evidence; it did not itself approve provenance recording or enable production
+acquisition. Issue #174 is complete only when the combined delivery is verified
+and merged.
+
+## Implementation And Use
+
+`onshape_geometry::plan_for_acquisition` runs the existing configuration
+coordinator and planner with an owned request, captures the original validated
+context before planning, then validates and commits the complete successful
+association. `lookup_acquisition_plan` accepts only the closed lookup request
+above and revalidates persistent records and encoding evidence without network
+calls. `onshape_selection::validate_retained_plan` revalidates source/selector,
+normalized matrix, authoring, and unchanged plan/object identities locally.
+
+`acquire_geometry` revalidates the trusted association, independently resolves
+the reused version, and executes one pinned create/poll/download chain per exact
+leaf. It retains each opaque payload in a private anonymous file in the trusted
+caller-supplied retention directory. References own file lifetime; failure or
+last-reference release closes and removes it. Restart preserves planning
+associations, not an acquisition-byte cache. A successful binding can copy bytes
+to a downstream-owned writer with `RetainedPayload::copy_to`; it exposes no
+storage path and cannot mutate the retained bytes. #175/#168 decide protocol
+paths and staging. No HTTP route, generator invocation, or publication is added.
+
+The transport shares the selection API's signing, trust, status-before-framing,
+and bounded streaming collectors, extending only response policies for pinned
+geometry status/media. Downloads remain opaque binary bytes even when the
+accepted declaration includes a charset. Tests use synthetic loopback responses,
+synthetic encoding evidence, disk database reopening/conflicts, and local
+retention files; no controlled-fixture identifiers or target-derived data enter
+the implementation or tests.
 
 Record only sanitized aliases, request shapes, counts, booleans,
 classifications, and bounded conclusions. Keep controlled document, version,

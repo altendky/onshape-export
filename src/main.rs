@@ -10,6 +10,7 @@ pub mod generator_protocol;
 mod onshape;
 pub mod onshape_annotation;
 pub mod onshape_api;
+pub mod onshape_geometry;
 pub mod onshape_selection;
 mod parameters;
 mod storage;

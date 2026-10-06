@@ -467,6 +467,47 @@ pub struct DeletedTableRows {
 }
 
 impl Database {
+    /// Producer-only immutable association. Compare inside the recording transaction
+    /// so a race cannot publish a different handoff for the same complete plan.
+    pub(crate) async fn record_acquisition_provenance(
+        &self,
+        plan_identity: &str,
+        provenance_identity: &str,
+        record_json: &str,
+    ) -> sqlx::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("INSERT INTO acquisition_plan_provenance (provenance_schema_version, plan_identity, provenance_identity, record_json) VALUES (1, ?, ?, ?) ON CONFLICT(provenance_schema_version, plan_identity) DO NOTHING")
+            .bind(plan_identity)
+            .bind(provenance_identity)
+            .bind(record_json)
+            .execute(&mut *tx)
+            .await?;
+        let row = sqlx::query("SELECT provenance_identity, record_json FROM acquisition_plan_provenance WHERE provenance_schema_version = 1 AND plan_identity = ?")
+            .bind(plan_identity)
+            .fetch_one(&mut *tx)
+            .await?;
+        if row.try_get::<String, _>("provenance_identity")? != provenance_identity
+            || row.try_get::<String, _>("record_json")? != record_json
+        {
+            return Err(sqlx::Error::Protocol(
+                "acquisition provenance conflict".to_owned(),
+            ));
+        }
+        tx.commit().await
+    }
+
+    pub(crate) async fn acquisition_provenance(
+        &self,
+        plan_identity: &str,
+    ) -> sqlx::Result<Option<(String, String)>> {
+        sqlx::query("SELECT provenance_identity, record_json FROM acquisition_plan_provenance WHERE provenance_schema_version = 1 AND plan_identity = ?")
+            .bind(plan_identity)
+            .fetch_optional(&self.pool)
+            .await?
+            .map(|row| Ok((row.try_get("provenance_identity")?, row.try_get("record_json")?)))
+            .transpose()
+    }
+
     pub async fn connect(database_url: &str) -> sqlx::Result<Self> {
         let db = Self::connect_without_migrations(database_url).await?;
         sqlx::migrate!().run(&db.pool).await?;

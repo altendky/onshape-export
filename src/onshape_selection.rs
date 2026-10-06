@@ -159,6 +159,167 @@ pub struct ResolvedSelectionPlan {
     pub plan_identity: String,
 }
 
+/// Validate retained planning evidence without recapturing or normalizing source data.
+pub(crate) fn validate_retained_plan(plan: &ResolvedSelectionPlan) -> Result<(), ApiFailure> {
+    let failure = || {
+        ApiFailure::new(
+            FailureKind::OperationalApiContractFailure,
+            "invalid_retained_selection_plan",
+        )
+    };
+    let root = &plan.root;
+    if !(1..=MAX_SELECTORS).contains(&plan.objects.len())
+        || ![
+            &root.document_id,
+            &root.version_id,
+            &root.document_microversion,
+            &root.element_id,
+            &root.configuration_identity,
+        ]
+        .into_iter()
+        .all(|value| bounded_visible_ascii(value))
+        || !is_sha256(&plan.plan_identity)
+        || !is_sha256(&plan.authoring_document_identity)
+    {
+        return Err(failure());
+    }
+
+    let mut identities = HashSet::new();
+    for object in &plan.objects {
+        let leaf = &object.configured_leaf;
+        let matrix = &object.expected_neutral_placement_matrix;
+        if ![
+            &leaf.document_id,
+            &leaf.document_microversion,
+            &leaf.element_id,
+            &leaf.configuration_identity,
+            &leaf.part_id,
+        ]
+        .into_iter()
+        .all(|value| bounded_visible_ascii(value))
+            || leaf.document_id != root.document_id
+            || leaf.document_microversion != root.document_microversion
+            || !is_sha256(&object.plan_local_object_identity)
+            || !identities.insert(&object.plan_local_object_identity)
+            || !proper_rigid(matrix)
+            || matrix[12..] != [0., 0., 0., 1.]
+            || matrix
+                .iter()
+                .any(|value| *value == 0. && value.is_sign_negative())
+        {
+            return Err(failure());
+        }
+        match (root.element_kind, &object.selector) {
+            (SelectionElementKind::PartStudio, AuthoringSelector::PartStudioPart { .. }) => {
+                if leaf.element_id != root.element_id
+                    || leaf.configuration_identity != root.configuration_identity
+                    || object.selector != part_selector(leaf)
+                    || *matrix != IDENTITY_PLACEMENT
+                {
+                    return Err(failure());
+                }
+            }
+            (
+                SelectionElementKind::Assembly,
+                AuthoringSelector::AssemblyOccurrence {
+                    document_id,
+                    document_microversion,
+                    element_id,
+                    configuration_identity,
+                    occurrence_path,
+                },
+            ) => {
+                if document_id != &root.document_id
+                    || document_microversion != &root.document_microversion
+                    || element_id != &root.element_id
+                    || configuration_identity != &root.configuration_identity
+                    || occurrence_path.len() != 1
+                    || !bounded_visible_ascii(&occurrence_path[0])
+                {
+                    return Err(failure());
+                }
+            }
+            _ => return Err(failure()),
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ObjectIdentity<'a> {
+            selector: &'a AuthoringSelector,
+            configured_leaf: &'a ConfiguredLeaf,
+        }
+        let identity = cache_key::hash_json(
+            "onshape-export-selection-plan-object-v1",
+            &ObjectIdentity {
+                selector: &object.selector,
+                configured_leaf: leaf,
+            },
+        )
+        .map_err(|_| failure())?;
+        if identity != object.plan_local_object_identity {
+            return Err(failure());
+        }
+    }
+
+    let document = AuthoringDocument {
+        schema_version: 1,
+        objects: plan
+            .objects
+            .iter()
+            .map(|object| authoring::AuthoringObject {
+                selector: object.selector.clone(),
+                display_name: object.display_name.clone(),
+                annotation: object.annotation.clone(),
+            })
+            .collect(),
+    };
+    let context = plan
+        .objects
+        .iter()
+        .enumerate()
+        .map(|(position, object)| {
+            Ok(AuthoringContextEntry {
+                selector: object.selector.clone(),
+                plan_position: position,
+                configured_part_identity: String::from_utf8(
+                    cache_key::canonical_json_bytes(&object.configured_leaf)
+                        .map_err(|_| failure())?,
+                )
+                .map_err(|_| failure())?,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiFailure>>()?;
+    authoring::validate_authoring_context(&document, &context).map_err(|_| failure())?;
+    if authoring::authoring_document_identity(&document).map_err(|_| failure())?
+        != plan.authoring_document_identity
+    {
+        return Err(failure());
+    }
+    let envelope = Envelope {
+        domain: "onshape-export-selection-plan-v1",
+        payload: PlanPayload {
+            root,
+            authoring_document_identity: &plan.authoring_document_identity,
+            objects: &plan.objects,
+        },
+    };
+    let mut hash = BoundedHash {
+        digest: Sha256::new(),
+        count: 0,
+        overflow: false,
+    };
+    serde_jcs::to_writer(&mut hash, &envelope).map_err(|_| failure())?;
+    let identity: String = hash
+        .digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if identity != plan.plan_identity {
+        return Err(failure());
+    }
+    Ok(())
+}
+
 struct Candidate {
     leaf: ConfiguredLeaf,
     selector: AuthoringSelector,
@@ -1611,6 +1772,178 @@ mod tests {
         let mut missing = serde_json::to_value(&original).unwrap();
         missing.as_object_mut().unwrap().remove("planIdentity");
         assert!(serde_json::from_value::<ResolvedSelectionPlan>(missing).is_err());
+    }
+
+    fn retained_test_plan(kind: SelectionElementKind) -> ResolvedSelectionPlan {
+        match kind {
+            SelectionElementKind::PartStudio => {
+                let req = request(kind, &["p", "q"]);
+                let (root, candidates) = resolve_part_studio(
+                    &req,
+                    "m",
+                    &json!([part("p", "root", "c"), part("q", "root", "c")]),
+                )
+                .unwrap();
+                construct_plan(root, candidates).unwrap()
+            }
+            SelectionElementKind::Assembly => {
+                let mut resolved = asm_result(&assembly(&["a", "b"])).unwrap();
+                for candidate in &mut resolved.candidates {
+                    candidate.name = "Shared part".into();
+                }
+                resolved.candidates[1].matrix[3] = 12.;
+                construct_plan(resolved.root, resolved.candidates).unwrap()
+            }
+        }
+    }
+
+    /// Rehash even malformed evidence, so invariant tests do not merely catch stale digests.
+    fn rehash_retained_test_plan(plan: &mut ResolvedSelectionPlan) {
+        for object in &mut plan.objects {
+            object.plan_local_object_identity = cache_key::hash_json(
+                "onshape-export-selection-plan-object-v1",
+                &json!({"selector":object.selector,"configuredLeaf":object.configured_leaf}),
+            )
+            .unwrap();
+        }
+        let document = AuthoringDocument {
+            schema_version: 1,
+            objects: plan
+                .objects
+                .iter()
+                .map(|object| authoring::AuthoringObject {
+                    selector: object.selector.clone(),
+                    display_name: object.display_name.clone(),
+                    annotation: object.annotation.clone(),
+                })
+                .collect(),
+        };
+        plan.authoring_document_identity =
+            cache_key::hash_json("onshape-export-authoring-document-v1", &document).unwrap();
+        plan.plan_identity = cache_key::hash_json(
+            "onshape-export-selection-plan-v1",
+            &PlanPayload {
+                root: &plan.root,
+                authoring_document_identity: &plan.authoring_document_identity,
+                objects: &plan.objects,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn retained_plan_validation_preserves_complete_plans_and_shared_occurrences() {
+        for kind in [
+            SelectionElementKind::PartStudio,
+            SelectionElementKind::Assembly,
+        ] {
+            let plan = retained_test_plan(kind);
+            validate_retained_plan(&plan).unwrap();
+            let bytes = cache_key::canonical_json_bytes(&plan).unwrap();
+            let decoded: ResolvedSelectionPlan = serde_json::from_slice(&bytes).unwrap();
+            validate_retained_plan(&decoded).unwrap();
+            assert_eq!(cache_key::canonical_json_bytes(&decoded).unwrap(), bytes);
+            if kind == SelectionElementKind::Assembly {
+                assert_eq!(
+                    plan.objects[0].configured_leaf,
+                    plan.objects[1].configured_leaf
+                );
+                assert_ne!(plan.objects[0].selector, plan.objects[1].selector);
+                assert_ne!(
+                    plan.objects[0].expected_neutral_placement_matrix,
+                    plan.objects[1].expected_neutral_placement_matrix
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn retained_plan_validation_rejects_metadata_order_and_identity_tampering() {
+        let original = retained_test_plan(SelectionElementKind::PartStudio);
+        let mutations: [fn(&mut ResolvedSelectionPlan); 5] = [
+            |plan| plan.objects[0].display_name = "Changed display".into(),
+            |plan| plan.objects.reverse(),
+            |plan| plan.plan_identity = "a".repeat(64),
+            |plan| plan.authoring_document_identity = "b".repeat(64),
+            |plan| plan.objects[0].plan_local_object_identity = "c".repeat(64),
+        ];
+        for mutate in mutations {
+            let mut plan = original.clone();
+            mutate(&mut plan);
+            assert_eq!(
+                kind(validate_retained_plan(&plan)),
+                FailureKind::OperationalApiContractFailure
+            );
+        }
+    }
+
+    #[test]
+    fn retained_part_studio_plan_rejects_rehashed_source_selector_and_matrix_defects() {
+        let original = retained_test_plan(SelectionElementKind::PartStudio);
+        let mutations: [fn(&mut ResolvedSelectionPlan); 12] = [
+            |plan| plan.objects.clear(),
+            |plan| plan.objects = vec![plan.objects[0].clone(); MAX_SELECTORS + 1],
+            |plan| plan.objects.push(plan.objects[0].clone()),
+            |plan| plan.root.version_id = "not visible".into(),
+            |plan| plan.objects[0].configured_leaf.document_id = "other".into(),
+            |plan| plan.objects[0].configured_leaf.document_microversion = "other".into(),
+            |plan| plan.objects[0].configured_leaf.element_id = "other".into(),
+            |plan| plan.objects[0].configured_leaf.configuration_identity = "other".into(),
+            |plan| plan.objects[0].configured_leaf.part_id = "other".into(),
+            |plan| plan.objects[0].expected_neutral_placement_matrix[3] = 1.,
+            |plan| plan.objects[0].expected_neutral_placement_matrix[12] = EPSILON / 2.,
+            |plan| {
+                plan.objects[0]
+                    .annotation
+                    .targets
+                    .push("missing-target".into())
+            },
+        ];
+        for mutate in mutations {
+            let mut plan = original.clone();
+            mutate(&mut plan);
+            rehash_retained_test_plan(&mut plan);
+            assert_eq!(
+                kind(validate_retained_plan(&plan)),
+                FailureKind::OperationalApiContractFailure
+            );
+        }
+        let mut negative_zero = original;
+        negative_zero.objects[0].expected_neutral_placement_matrix[1] = -0.;
+        rehash_retained_test_plan(&mut negative_zero);
+        assert!(validate_retained_plan(&negative_zero).is_err());
+        assert!(negative_zero.objects[0].expected_neutral_placement_matrix[1].is_sign_negative());
+    }
+
+    #[test]
+    fn retained_assembly_plan_rejects_rehashed_context_and_rigidity_defects() {
+        let original = retained_test_plan(SelectionElementKind::Assembly);
+        let mutations: [fn(&mut ResolvedSelectionPlan); 7] = [
+            |plan| plan.root.configuration_identity = "other".into(),
+            |plan| plan.root.document_id = "other".into(),
+            |plan| plan.root.element_id = "other".into(),
+            |plan| {
+                let AuthoringSelector::AssemblyOccurrence {
+                    occurrence_path, ..
+                } = &mut plan.objects[0].selector
+                else {
+                    panic!()
+                };
+                occurrence_path.push("nested".into());
+            },
+            |plan| plan.objects[0].expected_neutral_placement_matrix[0] = -1.,
+            |plan| plan.objects[0].expected_neutral_placement_matrix[12] = EPSILON / 2.,
+            |plan| plan.objects[0].display_name = "Contradictory shared metadata".into(),
+        ];
+        for mutate in mutations {
+            let mut plan = original.clone();
+            mutate(&mut plan);
+            rehash_retained_test_plan(&mut plan);
+            assert_eq!(
+                kind(validate_retained_plan(&plan)),
+                FailureKind::OperationalApiContractFailure
+            );
+        }
     }
 
     #[test]

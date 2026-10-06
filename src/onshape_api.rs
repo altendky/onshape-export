@@ -21,6 +21,7 @@ pub const API_BASELINE_SHA256: &str =
 pub const SMALL_RESPONSE_LIMIT: usize = 65_536;
 pub const PARTS_RESPONSE_LIMIT: usize = 33_554_432;
 pub const ASSEMBLY_RESPONSE_LIMIT: usize = 16_777_216;
+pub(crate) const GEOMETRY_DOWNLOAD_LIMIT: usize = 134_217_728;
 const MAX_DEPTH: usize = 32;
 const MAX_ARRAY_ENTRIES: usize = 4_096;
 const MAX_OBJECT_MEMBERS: usize = 256;
@@ -33,6 +34,9 @@ pub enum FailureKind {
     UnavailableSourceState,
     AuthenticationFailure,
     TransportFailure,
+    OperationalTimeoutFailure,
+    OperationalTranslationFailure,
+    OperationalHttpFailure,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +76,9 @@ impl ApiFailure {
             FailureKind::UnavailableSourceState => "The selected source state is unavailable.",
             FailureKind::AuthenticationFailure => "Onshape authentication failed.",
             FailureKind::TransportFailure => "The Onshape operation did not complete.",
+            FailureKind::OperationalTimeoutFailure => "The geometry acquisition deadline expired.",
+            FailureKind::OperationalTranslationFailure => "The geometry translation failed.",
+            FailureKind::OperationalHttpFailure => "The geometry HTTP operation failed.",
         };
         Self {
             kind,
@@ -188,6 +195,42 @@ pub struct OnshapeApi {
     secret_key: Option<String>,
 }
 
+#[derive(Debug)]
+pub(crate) struct GeometryDownload {
+    pub bytes: Vec<u8>,
+    pub transport_media: String,
+}
+
+#[derive(Clone, Copy)]
+enum ResponsePolicy {
+    SelectionJson,
+    GeometryJson { create: bool },
+    GeometryBytes,
+}
+
+pub(crate) fn geometry_create_path(document: &str, version: &str, element: &str) -> String {
+    encoded_path(&[
+        "api",
+        "v16",
+        "partstudios",
+        "d",
+        document,
+        "v",
+        version,
+        "e",
+        element,
+        "translations",
+    ])
+}
+
+pub(crate) fn geometry_create_body(configuration: &str, part: &str) -> Value {
+    serde_json::json!({
+        "formatName": "3MF", "storeInDocument": false, "notifyUser": false,
+        "triggerAutoDownload": false, "configuration": configuration,
+        "partIds": part, "grouping": true, "resolution": "fine",
+    })
+}
+
 impl OnshapeApi {
     pub fn new(
         base_url: &str,
@@ -212,6 +255,83 @@ impl OnshapeApi {
 
     pub fn origin(&self) -> &str {
         &self.origin
+    }
+
+    pub(crate) async fn create_geometry_translation(
+        &self,
+        document: &str,
+        version: &str,
+        element: &str,
+        configuration: &str,
+        part: &str,
+        deadline: tokio::time::Instant,
+    ) -> Result<Value, ApiFailure> {
+        let body = geometry_create_body(configuration, part);
+        let response = self
+            .request_with_policy(
+                "createPartStudioTranslation",
+                Method::POST,
+                &[
+                    "api",
+                    "v16",
+                    "partstudios",
+                    "d",
+                    document,
+                    "v",
+                    version,
+                    "e",
+                    element,
+                    "translations",
+                ],
+                &[],
+                Some(&body),
+                SMALL_RESPONSE_LIMIT,
+                ResponsePolicy::GeometryJson { create: true },
+                Some(deadline),
+            )
+            .await?;
+        parse_json(&response.bytes, SMALL_RESPONSE_LIMIT)
+            .map_err(|failure| failure.operation("createPartStudioTranslation"))
+    }
+
+    pub(crate) async fn poll_geometry_translation(
+        &self,
+        id: &str,
+        deadline: tokio::time::Instant,
+    ) -> Result<Value, ApiFailure> {
+        let response = self
+            .request_with_policy(
+                "getTranslation",
+                Method::GET,
+                &["api", "v16", "translations", id],
+                &[],
+                None,
+                SMALL_RESPONSE_LIMIT,
+                ResponsePolicy::GeometryJson { create: false },
+                Some(deadline),
+            )
+            .await?;
+        parse_json(&response.bytes, SMALL_RESPONSE_LIMIT)
+            .map_err(|failure| failure.operation("getTranslation"))
+    }
+
+    pub(crate) async fn download_geometry(
+        &self,
+        document: &str,
+        id: &str,
+        deadline: tokio::time::Instant,
+    ) -> Result<GeometryDownload, ApiFailure> {
+        self.request_with_policy(
+            "downloadExternalData",
+            Method::GET,
+            &["api", "v16", "documents", "d", document, "externaldata", id],
+            &[],
+            None,
+            GEOMETRY_DOWNLOAD_LIMIT,
+            ResponsePolicy::GeometryBytes,
+            Some(deadline),
+        )
+        .await
     }
 
     /// This socket override cannot be enabled in production and never changes trust.
@@ -374,6 +494,46 @@ impl OnshapeApi {
         body: Option<&Value>,
         limit: usize,
     ) -> Result<Value, ApiFailure> {
+        let response = self
+            .request_with_policy(
+                operation,
+                method,
+                segments,
+                query,
+                body,
+                limit,
+                ResponsePolicy::SelectionJson,
+                None,
+            )
+            .await?;
+        parse_json(&response.bytes, limit).map_err(|failure| failure.operation(operation))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn request_with_policy(
+        &self,
+        operation: &str,
+        method: Method,
+        segments: &[&str],
+        query: &[(&str, &str)],
+        body: Option<&Value>,
+        limit: usize,
+        policy: ResponsePolicy,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<GeometryDownload, ApiFailure> {
+        let now = tokio::time::Instant::now();
+        let operation_deadline = now + self.deadlines.total;
+        let clipped = deadline.is_some_and(|deadline| deadline <= operation_deadline);
+        let deadline = deadline.map_or(operation_deadline, |deadline| {
+            deadline.min(operation_deadline)
+        });
+        if deadline <= now {
+            return Err(ApiFailure::new(
+                FailureKind::OperationalTimeoutFailure,
+                "acquisition_deadline",
+            )
+            .operation(operation));
+        }
         let (Some(access_key), Some(secret_key)) = (&self.access_key, &self.secret_key) else {
             return Err(
                 ApiFailure::new(FailureKind::AuthenticationFailure, "missing_credentials")
@@ -397,7 +557,11 @@ impl OnshapeApi {
         .map_err(|_| operational("request_signing_failed").operation(operation))?;
         headers.insert(
             header::ACCEPT,
-            header::HeaderValue::from_static("application/json"),
+            header::HeaderValue::from_static(if matches!(policy, ResponsePolicy::GeometryBytes) {
+                "application/octet-stream"
+            } else {
+                "application/json"
+            }),
         );
         headers.insert(
             header::ACCEPT_ENCODING,
@@ -411,16 +575,31 @@ impl OnshapeApi {
             .map(crate::cache_key::canonical_json_bytes)
             .transpose()
             .map_err(|_| operational("invalid_request_body").operation(operation))?;
-        tokio::time::timeout(
-            self.deadlines.total,
-            self.exchange(method, &url, &path, headers, body.as_deref(), limit),
+        let timeout_failure = || {
+            ApiFailure::new(
+                if clipped {
+                    FailureKind::OperationalTimeoutFailure
+                } else {
+                    FailureKind::TransportFailure
+                },
+                "operation_deadline",
+            )
+            .operation(operation)
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return Err(timeout_failure());
+        }
+        let response = tokio::time::timeout_at(
+            deadline,
+            self.exchange(method, &url, &path, headers, body.as_deref(), limit, policy),
         )
         .await
-        .map_err(|_| {
-            ApiFailure::new(FailureKind::TransportFailure, "operation_deadline")
-                .operation(operation)
-        })?
-        .map_err(|failure| failure.operation(operation))
+        .map_err(|_| timeout_failure())?
+        .map_err(|failure| failure.operation(operation))?;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(timeout_failure());
+        }
+        Ok(response)
     }
 }
 
@@ -529,7 +708,8 @@ impl OnshapeApi {
         mut headers: header::HeaderMap,
         body: Option<&[u8]>,
         limit: usize,
-    ) -> Result<Value, ApiFailure> {
+        policy: ResponsePolicy,
+    ) -> Result<GeometryDownload, ApiFailure> {
         let host = url
             .host_str()
             .ok_or_else(|| operational("invalid_api_host"))?;
@@ -624,9 +804,13 @@ impl OnshapeApi {
         let status = status_from_line(&first_line)?;
         // Observe the status before inspecting Content-Length or diagnostics.
         // General HTTP clients lose this information when rejecting framing.
-        if status != 200 {
+        if status != 200
+            && !(status == 201 && matches!(policy, ResponsePolicy::GeometryJson { create: true }))
+        {
             let kind = if matches!(status, 401 | 403) {
                 FailureKind::AuthenticationFailure
+            } else if !matches!(policy, ResponsePolicy::SelectionJson) {
+                FailureKind::OperationalHttpFailure
             } else {
                 FailureKind::OperationalApiContractFailure
             };
@@ -647,7 +831,12 @@ impl OnshapeApi {
             }
         }
         let headers = parse_header_block(&head)?;
-        validate_json_headers(&headers)?;
+        let transport_media = if matches!(policy, ResponsePolicy::GeometryBytes) {
+            validate_geometry_headers(&headers)?
+        } else {
+            validate_json_headers(&headers)?;
+            String::new()
+        };
         let declared = content_length(&headers, limit)?;
         let mut encodings = headers.get_all(header::TRANSFER_ENCODING).iter();
         let chunked = if let Some(encoding) = encodings.next() {
@@ -678,7 +867,13 @@ impl OnshapeApi {
         } else {
             collect_to_eof(&mut reader, self.deadlines.read, limit).await?
         };
-        parse_json(&bytes, limit)
+        if bytes.is_empty() && matches!(policy, ResponsePolicy::GeometryBytes) {
+            return Err(operational("empty_geometry_payload"));
+        }
+        Ok(GeometryDownload {
+            bytes,
+            transport_media,
+        })
     }
 }
 
@@ -992,6 +1187,70 @@ fn validate_json_headers(headers: &header::HeaderMap) -> Result<(), ApiFailure> 
         return Err(operational("invalid_content_type"));
     }
     Ok(())
+}
+
+fn validate_geometry_headers(headers: &header::HeaderMap) -> Result<String, ApiFailure> {
+    let mut encodings = headers.get_all(header::CONTENT_ENCODING).iter();
+    if let Some(encoding) = encodings.next()
+        && (encodings.next().is_some() || !encoding.as_bytes().eq_ignore_ascii_case(b"identity"))
+    {
+        return Err(operational("unsupported_content_encoding"));
+    }
+    let mut types = headers.get_all(header::CONTENT_TYPE).iter();
+    let value = types
+        .next()
+        .ok_or_else(|| operational("invalid_content_type"))?;
+    if types.next().is_some() || !valid_geometry_media_type(value.as_bytes()) {
+        return Err(operational("invalid_content_type"));
+    }
+    value
+        .to_str()
+        .map(str::to_owned)
+        .map_err(|_| operational("invalid_content_type"))
+}
+
+fn valid_geometry_media_type(mut bytes: &[u8]) -> bool {
+    trim_ows(&mut bytes);
+    let Some(base) = take_token(&mut bytes) else {
+        return false;
+    };
+    if !base.eq_ignore_ascii_case(b"application") || !consume(&mut bytes, b'/') {
+        return false;
+    }
+    let Some(subtype) = take_token(&mut bytes) else {
+        return false;
+    };
+    if !subtype.eq_ignore_ascii_case(b"octet-stream") {
+        return false;
+    }
+    trim_ows(&mut bytes);
+    if bytes.is_empty() {
+        return true;
+    }
+    if !consume(&mut bytes, b';') {
+        return false;
+    }
+    trim_ows(&mut bytes);
+    let Some(parameter) = take_token(&mut bytes) else {
+        return false;
+    };
+    if !parameter.eq_ignore_ascii_case(b"charset") {
+        return false;
+    }
+    trim_ows(&mut bytes);
+    if !consume(&mut bytes, b'=') {
+        return false;
+    }
+    trim_ows(&mut bytes);
+    let quoted = consume(&mut bytes, b'"');
+    let Some(charset) = take_token(&mut bytes) else {
+        return false;
+    };
+    if !charset.eq_ignore_ascii_case(b"utf-8") || (quoted && !consume(&mut bytes, b'"')) {
+        return false;
+    }
+    trim_ows(&mut bytes);
+    bytes.is_empty()
 }
 
 // Parse MIME tokens and quoted parameters rather than matching a prefix. Unknown
@@ -1787,6 +2046,268 @@ mod tests {
         assert_eq!(
             api.parts("d", "m", "e", "c").await.unwrap_err().kind,
             FailureKind::OperationalApiContractFailure
+        );
+        request.recv().unwrap();
+        assert_eq!(server.join().unwrap(), 1);
+    }
+
+    #[test]
+    fn geometry_media_contract_is_closed_and_case_insensitive() {
+        for media in [
+            "application/octet-stream",
+            "Application/Octet-Stream; Charset=UTF-8",
+            " application/octet-stream \t; charset = \"utf-8\" \t",
+        ] {
+            assert!(valid_geometry_media_type(media.as_bytes()), "{media}");
+        }
+        for media in [
+            "application/json",
+            "application/octet-stream-extra",
+            "application/octet-stream;charset=ascii",
+            "application/octet-stream;foo=bar",
+            "application/octet-stream;charset=utf-8;charset=utf-8",
+            "application/octet-stream;",
+            "application/octet-stream;charset=\"utf-8",
+            "application/octet-stream;charset=utf-8;foo=bar",
+        ] {
+            assert!(!valid_geometry_media_type(media.as_bytes()), "{media}");
+        }
+    }
+
+    #[tokio::test]
+    async fn geometry_create_request_is_pinned_and_preserves_configuration_string() {
+        let configuration = "configuration=a%2Fb&text=\"synthetic\"\\value";
+        for status in ["200 OK", "201 Created"] {
+            let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}").into_bytes();
+            let (api, request, server) = fixture(response);
+            assert_eq!(
+                api.create_geometry_translation(
+                    "d/one",
+                    ".",
+                    "e?one",
+                    configuration,
+                    "part/one",
+                    tokio::time::Instant::now() + Duration::from_secs(1)
+                )
+                .await
+                .unwrap(),
+                serde_json::json!({})
+            );
+            let request = request.recv().unwrap();
+            let path = geometry_create_path("d/one", ".", "e?one");
+            assert_eq!(
+                path,
+                "/api/v16/partstudios/d/d%2Fone/v/%2E/e/e%3Fone/translations"
+            );
+            assert!(request.starts_with(&format!("POST {path} HTTP/1.1\r\n")));
+            assert!(request.contains("accept: application/json\r\n"));
+            assert!(request.contains("content-type: application/json\r\n"));
+            assert!(request.contains("accept-encoding: identity\r\n"));
+            let body: Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(body, geometry_create_body(configuration, "part/one"));
+            assert_eq!(body.as_object().unwrap().len(), 8);
+            assert_eq!(body["configuration"], configuration);
+            assert_eq!(body["partIds"], "part/one");
+            assert_eq!(server.join().unwrap(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn geometry_poll_path_and_status_failures_preserve_authentication() {
+        let (api, request, server) = fixture(json_response("{}"));
+        api.poll_geometry_translation(
+            "../one",
+            tokio::time::Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert!(
+            request
+                .recv()
+                .unwrap()
+                .starts_with("GET /api/v16/translations/..%2Fone HTTP/1.1\r\n")
+        );
+        assert_eq!(server.join().unwrap(), 1);
+        for (status, kind) in [
+            ("201 Created", FailureKind::OperationalHttpFailure),
+            ("302 Found", FailureKind::OperationalHttpFailure),
+            ("401 Unauthorized", FailureKind::AuthenticationFailure),
+            ("403 Forbidden", FailureKind::AuthenticationFailure),
+            ("429 Too Many Requests", FailureKind::OperationalHttpFailure),
+            ("500 Server Error", FailureKind::OperationalHttpFailure),
+        ] {
+            let (api, request, server) = fixture(
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: invalid\r\n\r\nprivate upstream text"
+                )
+                .into_bytes(),
+            );
+            let failure = api
+                .poll_geometry_translation(
+                    "id",
+                    tokio::time::Instant::now() + Duration::from_secs(1),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(failure.kind, kind, "{status}");
+            assert!(!failure.to_string().contains("private"));
+            request.recv().unwrap();
+            assert_eq!(server.join().unwrap(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn geometry_download_preserves_opaque_bytes_media_and_exact_resource_path() {
+        let payload = [0, 255, 1, 128];
+        let mut response = b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream;charset=utf-8\r\nContent-Length: 4\r\nConnection: close\r\n\r\n".to_vec();
+        response.extend_from_slice(&payload);
+        let (api, request, server) = fixture(response);
+        let download = api
+            .download_geometry(
+                "d/one",
+                "..",
+                tokio::time::Instant::now() + Duration::from_secs(1),
+            )
+            .await
+            .unwrap();
+        assert_eq!(download.bytes, payload);
+        assert_eq!(
+            download.transport_media,
+            "application/octet-stream;charset=utf-8"
+        );
+        let request = request.recv().unwrap();
+        assert!(
+            request
+                .starts_with("GET /api/v16/documents/d/d%2Fone/externaldata/%2E%2E HTTP/1.1\r\n")
+        );
+        assert!(request.contains("accept: application/octet-stream\r\n"));
+        assert!(request.contains("accept-encoding: identity\r\n"));
+        assert!(!request.to_ascii_lowercase().contains("if-none-match"));
+        assert_eq!(server.join().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn geometry_download_rejects_header_defects_and_empty_payloads() {
+        for declarations in [
+            "Content-Length: 0\r\nContent-Type: application/octet-stream",
+            "Content-Length: 1",
+            "Content-Length: 1\r\nContent-Type: application/json",
+            "Content-Length: 1\r\nContent-Type: application/octet-stream\r\nContent-Type: application/octet-stream",
+            "Content-Length: 1\r\nContent-Type: application/octet-stream\r\nContent-Encoding: gzip",
+            "Content-Length: 1\r\nContent-Type: application/octet-stream\r\nContent-Encoding: identity\r\nContent-Encoding: identity",
+            "Content-Length: 134217729\r\nContent-Type: application/octet-stream",
+        ] {
+            let body = if declarations.starts_with("Content-Length: 0") {
+                ""
+            } else {
+                "x"
+            };
+            let (api, request, server) = fixture(
+                format!("HTTP/1.1 200 OK\r\n{declarations}\r\nConnection: close\r\n\r\n{body}")
+                    .into_bytes(),
+            );
+            assert_eq!(
+                api.download_geometry(
+                    "d",
+                    "id",
+                    tokio::time::Instant::now() + Duration::from_secs(1)
+                )
+                .await
+                .unwrap_err()
+                .kind,
+                FailureKind::OperationalApiContractFailure,
+                "{declarations}"
+            );
+            request.recv().unwrap();
+            assert_eq!(server.join().unwrap(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn geometry_framing_enforces_actual_and_declared_byte_bounds() {
+        for (framing, body, expected) in [
+            ("Content-Length: 2", "xy", None),
+            (
+                "Content-Length: 3",
+                "xyz",
+                Some(FailureKind::OperationalApiContractFailure),
+            ),
+            ("", "xyz", Some(FailureKind::OperationalApiContractFailure)),
+            (
+                "Content-Length: 2",
+                "x",
+                Some(FailureKind::TransportFailure),
+            ),
+            (
+                "Content-Length: 2",
+                "xyz",
+                Some(FailureKind::OperationalApiContractFailure),
+            ),
+            ("Transfer-Encoding: chunked", "2\r\nxy\r\n0\r\n\r\n", None),
+            (
+                "Transfer-Encoding: chunked",
+                "3\r\nxyz\r\n0\r\n\r\n",
+                Some(FailureKind::OperationalApiContractFailure),
+            ),
+            (
+                "Transfer-Encoding: chunked",
+                "2\r\nx",
+                Some(FailureKind::TransportFailure),
+            ),
+        ] {
+            let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n{framing}\r\nConnection: close\r\n\r\n{body}").replace("\r\n\r\nConnection", "\r\nConnection").into_bytes();
+            let (api, request, server) = fixture(response);
+            let result = api
+                .request_with_policy(
+                    "downloadExternalData",
+                    Method::GET,
+                    &["api", "v16"],
+                    &[],
+                    None,
+                    2,
+                    ResponsePolicy::GeometryBytes,
+                    Some(tokio::time::Instant::now() + Duration::from_secs(1)),
+                )
+                .await;
+            match expected {
+                None => assert_eq!(result.unwrap().bytes, b"xy"),
+                Some(kind) => assert_eq!(result.unwrap_err().kind, kind, "{framing} {body}"),
+            }
+            request.recv().unwrap();
+            assert_eq!(server.join().unwrap(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn geometry_absolute_deadline_prevents_calls_and_clips_response_wait() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let api = OnshapeApi::for_test(&format!("http://{}", listener.local_addr().unwrap()));
+        let expired = tokio::time::Instant::now();
+        assert_eq!(
+            api.poll_geometry_translation("id", expired)
+                .await
+                .unwrap_err()
+                .kind,
+            FailureKind::OperationalTimeoutFailure
+        );
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+
+        let (api, request, server) =
+            fixture_with_delay(json_response("{}"), Duration::from_millis(100));
+        assert_eq!(
+            api.poll_geometry_translation(
+                "id",
+                tokio::time::Instant::now() + Duration::from_millis(20)
+            )
+            .await
+            .unwrap_err()
+            .kind,
+            FailureKind::OperationalTimeoutFailure
         );
         request.recv().unwrap();
         assert_eq!(server.join().unwrap(), 1);
