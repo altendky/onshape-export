@@ -202,7 +202,9 @@ async fn planned(db: &Database, api: &OnshapeApi) -> TrustedAcquisitionPlan {
 }
 
 fn scratch() -> tempfile::TempDir {
-    let root = std::env::temp_dir().join("agents");
+    let root =
+        std::path::PathBuf::from(std::env::var_os("TMPDIR").unwrap_or_else(|| "/tmp".into()))
+            .join("agents");
     std::fs::create_dir_all(&root).unwrap();
     tempfile::tempdir_in(root).unwrap()
 }
