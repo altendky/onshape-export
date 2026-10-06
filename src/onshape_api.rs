@@ -107,7 +107,25 @@ impl ApiFailure {
 
 impl fmt::Display for ApiFailure {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{:?}", self.kind)
+        write!(formatter, "{:?}", self.kind)?;
+        if let Some(diagnostic) = self.diagnostics.first().filter(|diagnostic| {
+            !diagnostic.code.is_empty()
+                && diagnostic.code.len() <= 128
+                && diagnostic.code.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.-".contains(&byte)
+                })
+        }) {
+            write!(formatter, " ({}", diagnostic.code)?;
+            if let Some(operation) = diagnostic.operation.as_deref().filter(|operation| {
+                !operation.is_empty()
+                    && operation.len() <= 128
+                    && operation.bytes().all(|byte| byte.is_ascii_graphic())
+            }) {
+                write!(formatter, " in {operation}")?;
+            }
+            write!(formatter, ")")?;
+        }
+        Ok(())
     }
 }
 
@@ -1301,6 +1319,54 @@ mod tests {
         headers.insert(header::CONTENT_LENGTH, "1".parse().unwrap());
         headers.append(header::CONTENT_LENGTH, "1".parse().unwrap());
         assert!(content_length(&headers, 10).is_err());
+    }
+
+    #[test]
+    fn display_preserves_safe_diagnostics_through_anyhow() {
+        let mut failure = operational("encoding_handoff_binding_mismatch");
+        assert_eq!(
+            failure.to_string(),
+            "OperationalApiContractFailure (encoding_handoff_binding_mismatch)"
+        );
+        failure = failure.operation("encodingValidation");
+        failure.diagnostics[0].message = "synthetic upstream response".to_owned();
+        failure.diagnostics.push(SafeDiagnostic {
+            code: "later_diagnostic".to_owned(),
+            message: "another response".to_owned(),
+            operation: None,
+            selector_position: None,
+        });
+        let expected = "OperationalApiContractFailure (encoding_handoff_binding_mismatch in encodingValidation)";
+        assert_eq!(failure.to_string(), expected);
+        assert_eq!(anyhow::Error::new(failure.clone()).to_string(), expected);
+        failure.diagnostics.clear();
+        assert_eq!(failure.to_string(), "OperationalApiContractFailure");
+    }
+
+    #[test]
+    fn display_omits_diagnostic_values_outside_sanitized_bounds() {
+        for code in ["".to_owned(), "bad\ncode".to_owned(), "x".repeat(129)] {
+            let mut failure = transport("tls_connection_failed").operation("getVersion");
+            failure.diagnostics[0].code = code;
+            assert_eq!(failure.to_string(), "TransportFailure");
+        }
+        for operation in ["".to_owned(), "bad\noperation".to_owned(), "x".repeat(129)] {
+            let mut failure = transport("tls_connection_failed");
+            failure.diagnostics[0].operation = Some(operation);
+            assert_eq!(
+                failure.to_string(),
+                "TransportFailure (tls_connection_failed)"
+            );
+        }
+        let failure = transport(&"x".repeat(128)).operation(&"y".repeat(128));
+        assert_eq!(
+            failure.to_string(),
+            format!(
+                "TransportFailure ({} in {})",
+                "x".repeat(128),
+                "y".repeat(128)
+            )
+        );
     }
 
     #[test]
