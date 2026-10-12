@@ -1,0 +1,21 @@
+name: Bambu released package
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Configured product paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify unchanged released generator as the runtime user
+        run: docker build --target generator-verification --tag onshape-export-bambu-verification .

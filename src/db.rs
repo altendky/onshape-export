@@ -1,8 +1,15 @@
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use sqlx::{Executor, Row, Sqlite, SqlitePool, sqlite::SqlitePoolOptions};
+use sqlx::{
+    Executor, Row, Sqlite, SqlitePool,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
 
 use crate::catalog::{
     Catalog, ExportConfig, Model, OnshapeSource, ParameterOverride, ParameterPolicy,
@@ -317,6 +324,15 @@ pub struct GeneratorArtifactState {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct BambuProjectRequestRecord {
+    pub request_json: String,
+    pub processing_hash: Option<String>,
+    pub output_snapshot_identity: Option<String>,
+    pub failure_category: Option<String>,
+    pub failure_code: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratorArtifactStoredFile {
     pub role: String,
@@ -477,6 +493,9 @@ struct ArtifactMetadata {
 #[derive(Debug, Clone)]
 pub struct Database {
     pool: SqlitePool,
+    persistent_filename: Option<PathBuf>,
+    #[cfg(test)]
+    output_test_directory: Option<std::sync::Arc<tempfile::TempDir>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -535,13 +554,58 @@ impl Database {
     }
 
     pub async fn connect_without_migrations(database_url: &str) -> sqlx::Result<Self> {
+        let options = SqliteConnectOptions::from_str(database_url)?;
+        let filename = options.get_filename().to_owned();
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
-            .connect(database_url)
+            .connect_with(options)
             .await?;
 
         Self::apply_pragmas(&pool).await?;
-        Ok(Self { pool })
+        let main = sqlx::query("PRAGMA database_list")
+            .fetch_all(&pool)
+            .await?
+            .into_iter()
+            .find(|row| row.get::<String, _>("name") == "main")
+            .ok_or_else(|| sqlx::Error::Protocol("SQLite main database is missing".to_owned()))?;
+        let persistent_filename = if main.get::<String, _>("file").is_empty() {
+            None
+        } else {
+            Some(std::fs::canonicalize(filename)?)
+        };
+        #[cfg(test)]
+        let output_test_directory = if persistent_filename.is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            let parent = PathBuf::from(std::env::var_os("TMPDIR").unwrap_or_else(|| "/tmp".into()))
+                .join("agents");
+            std::fs::create_dir_all(&parent)?;
+            let directory = tempfile::tempdir_in(parent)?;
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
+            Some(std::sync::Arc::new(directory))
+        } else {
+            None
+        };
+        Ok(Self {
+            pool,
+            persistent_filename,
+            #[cfg(test)]
+            output_test_directory,
+        })
+    }
+
+    /// Operational retention lives beside the persistent SQLite database, or
+    /// under an explicitly configured absolute external directory. No path is
+    /// part of processing identity or exposed by project status.
+    pub(crate) fn generator_output_root(&self) -> anyhow::Result<PathBuf> {
+        if let Some(filename) = &self.persistent_filename {
+            let configured = std::env::var_os("GENERATOR_OUTPUT_RETENTION_DIR").map(PathBuf::from);
+            return generator_output_root(filename, configured.as_deref());
+        }
+        #[cfg(test)]
+        if let Some(directory) = &self.output_test_directory {
+            return Ok(directory.path().to_owned());
+        }
+        anyhow::bail!("project output retention requires a persistent SQLite database")
     }
 
     pub async fn ping(&self) -> sqlx::Result<()> {
@@ -577,6 +641,7 @@ impl Database {
         const GENERATED_TABLES: &[&str] = &[
             "artifact_files",
             "artifact_sets",
+            "bambu_project_requests",
             "generator_processing_occurrences",
             "generator_processing_recipes",
             "postprocess_runs",
@@ -617,7 +682,7 @@ impl Database {
             SELECT id, catalog_schema_version, entry_version, slug, name, description,
                    published, tags_json, thumbnail, document_id, version_id, element_id,
                    element_kind, link_document_id, downloads_json, preview_format,
-                   preview_options_json, download_options_json, parameter_source,
+                   preview_options_json, download_options_json, bambu_project_json, parameter_source,
                    parameter_allow_unknown, parameter_auto_refresh
             FROM catalog_models
             ORDER BY display_order, slug
@@ -643,7 +708,7 @@ impl Database {
             SELECT id, catalog_schema_version, entry_version, slug, name, description,
                    published, tags_json, thumbnail, document_id, version_id, element_id,
                    element_kind, link_document_id, downloads_json, preview_format,
-                   preview_options_json, download_options_json, parameter_source,
+                   preview_options_json, download_options_json, bambu_project_json, parameter_source,
                    parameter_allow_unknown, parameter_auto_refresh
             FROM catalog_models
             WHERE slug = ? AND published = 1
@@ -688,16 +753,22 @@ impl Database {
             let downloads_json = serde_json::to_string(&model.exports.downloads)?;
             let preview_options_json = serde_json::to_string(&model.exports.preview_options)?;
             let download_options_json = serde_json::to_string(&model.exports.download_options)?;
+            let bambu_project_json = model
+                .exports
+                .bambu_project
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?;
             let result = sqlx::query(
                 r#"
                 INSERT INTO catalog_models (
                     display_order, catalog_schema_version, entry_version, slug, name,
                     description, published, tags_json, thumbnail, document_id, version_id,
                     element_id, element_kind, link_document_id, downloads_json,
-                    preview_format, preview_options_json, download_options_json,
+                    preview_format, preview_options_json, download_options_json, bambu_project_json,
                     parameter_source, parameter_allow_unknown, parameter_auto_refresh
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(i64::try_from(display_order).context("catalog display order overflow")?)
@@ -718,6 +789,7 @@ impl Database {
             .bind(preview_format_key(&model.exports.preview))
             .bind(preview_options_json)
             .bind(download_options_json)
+            .bind(bambu_project_json)
             .bind(parameter_source_key(&model.parameter_policy.source))
             .bind(bool_to_i64(model.parameter_policy.allow_unknown))
             .bind(bool_to_i64(model.parameter_policy.auto_refresh))
@@ -857,6 +929,10 @@ impl Database {
                 preview: enum_text_column(&row, "preview_format")?,
                 preview_options: json_column(&row, "preview_options_json")?,
                 download_options: json_column(&row, "download_options_json")?,
+                bambu_project: row
+                    .get::<Option<String>, _>("bambu_project_json")
+                    .map(|json| serde_json::from_str(&json))
+                    .transpose()?,
             },
             parameter_policy: ParameterPolicy {
                 source: enum_text_column(&row, "parameter_source")?,
@@ -1738,6 +1814,112 @@ impl Database {
         .await
     }
 
+    pub(crate) async fn insert_bambu_project_request(
+        &self,
+        request_identity: &str,
+        request_json: &str,
+    ) -> sqlx::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("INSERT INTO bambu_project_requests (request_identity, request_json) VALUES (?, ?) ON CONFLICT DO NOTHING")
+            .bind(request_identity).bind(request_json).execute(&mut *tx).await?;
+        let stored: String = sqlx::query_scalar(
+            "SELECT request_json FROM bambu_project_requests WHERE request_identity = ?",
+        )
+        .bind(request_identity)
+        .fetch_one(&mut *tx)
+        .await?;
+        if stored != request_json {
+            return Err(sqlx::Error::Protocol(
+                "immutable project request conflict".to_owned(),
+            ));
+        }
+        tx.commit().await
+    }
+
+    pub(crate) async fn bambu_project_request(
+        &self,
+        request_identity: &str,
+    ) -> sqlx::Result<Option<BambuProjectRequestRecord>> {
+        sqlx::query("SELECT request_json, processing_hash, output_snapshot_identity, failure_category, failure_code FROM bambu_project_requests WHERE request_identity = ?")
+            .bind(request_identity).fetch_optional(&self.pool).await
+            .map(|row| row.map(|row| BambuProjectRequestRecord {
+                request_json: row.get("request_json"),
+                processing_hash: row.get("processing_hash"),
+                output_snapshot_identity: row.get("output_snapshot_identity"),
+                failure_category: row.get("failure_category"),
+                failure_code: row.get("failure_code"),
+            }))
+    }
+
+    pub(crate) async fn bind_bambu_project_output(
+        &self,
+        request_identity: &str,
+        request_json: &str,
+        prepared: &PreparedGeneratorProcessing,
+        snapshot_identity: &str,
+    ) -> sqlx::Result<()> {
+        if !valid_generator_sha256(snapshot_identity) {
+            return Err(sqlx::Error::Protocol(
+                "invalid project output snapshot identity".to_owned(),
+            ));
+        }
+        self.insert_generator_processing_recipe(prepared).await?;
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query("SELECT request_json, processing_hash, output_snapshot_identity FROM bambu_project_requests WHERE request_identity = ?")
+            .bind(request_identity).fetch_one(&mut *tx).await?;
+        let hash: Option<String> = row.get("processing_hash");
+        let snapshot: Option<String> = row.get("output_snapshot_identity");
+        if row.get::<String, _>("request_json") != request_json
+            || hash
+                .as_deref()
+                .is_some_and(|hash| hash != prepared.processing_hash())
+            || snapshot
+                .as_deref()
+                .is_some_and(|snapshot| snapshot != snapshot_identity)
+            || hash.is_some() != snapshot.is_some()
+        {
+            return Err(sqlx::Error::Protocol(
+                "immutable project recipe association conflict".to_owned(),
+            ));
+        }
+        sqlx::query("UPDATE bambu_project_requests SET processing_hash = ?, output_snapshot_identity = ?, failure_category = NULL, failure_code = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE request_identity = ?")
+            .bind(prepared.processing_hash()).bind(snapshot_identity).bind(request_identity).execute(&mut *tx).await?;
+        tx.commit().await
+    }
+
+    pub(crate) async fn record_bambu_project_failure(
+        &self,
+        request_identity: &str,
+        category: Option<&str>,
+        code: Option<&str>,
+    ) -> sqlx::Result<()> {
+        sqlx::query("UPDATE bambu_project_requests SET failure_category = ?, failure_code = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE request_identity = ?")
+            .bind(category).bind(code).bind(request_identity).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn reopen_generator_processing(
+        &self,
+        generator: &crate::deployed_generator::DeployedGenerator,
+        processing_hash: &str,
+    ) -> anyhow::Result<PreparedGeneratorProcessing> {
+        let mut tx = self.pool.begin().await?;
+        let json: String = sqlx::query_scalar(
+            "SELECT recipe_json FROM generator_processing_recipes WHERE processing_hash = ?",
+        )
+        .bind(processing_hash)
+        .fetch_one(&mut *tx)
+        .await?;
+        let prepared = crate::generator_processing::reopen_generator_processing(
+            generator,
+            processing_hash,
+            &json,
+        )?;
+        verify_persisted_generator_recipe(&mut tx, &prepared).await?;
+        tx.commit().await?;
+        Ok(prepared)
+    }
+
     async fn insert_generator_processing_recipe_fields(
         &self,
         recipe: GeneratorProcessingRecipeInsert<'_>,
@@ -2185,6 +2367,17 @@ impl Database {
                 max_attempts: row.get("max_attempts"),
             })
         })
+    }
+
+    pub(crate) async fn extend_job_lease(
+        &self,
+        work_key: &str,
+        attempt: i64,
+        lease_seconds: i64,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query("UPDATE jobs SET lease_until = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+' || ? || ' seconds') WHERE work_key = ? AND attempt = ? AND status = 'running'")
+            .bind(lease_seconds).bind(work_key).bind(attempt).execute(&self.pool).await?;
+        Ok(result.rows_affected() == 1)
     }
 
     pub async fn finish_job(
@@ -3111,6 +3304,42 @@ fn artifact_set_record_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactSetReco
         superseded_by: row.get("superseded_by"),
         supersession_reason: row.get("supersession_reason"),
     }
+}
+
+fn generator_output_root(
+    filename: &Path,
+    override_directory: Option<&Path>,
+) -> anyhow::Result<PathBuf> {
+    let base = match override_directory {
+        Some(directory) => directory.to_owned(),
+        None => filename
+            .parent()
+            .context("persistent database has no parent")?
+            .join(".bambu-generator-outputs"),
+    };
+    anyhow::ensure!(
+        base.is_absolute(),
+        "project output retention directory must be absolute"
+    );
+    anyhow::ensure!(
+        !base
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir)),
+        "project output retention directory must not contain parent traversal"
+    );
+    let existing = base
+        .ancestors()
+        .find(|path| path.exists())
+        .context("project output retention directory has no existing ancestor")?;
+    let canonical = std::fs::canonicalize(existing)?.join(base.strip_prefix(existing)?);
+    for path in [&base, &canonical] {
+        anyhow::ensure!(
+            crate::generator_output_checkpoint::outside_repository(path),
+            "project output retention must remain outside Git checkouts"
+        );
+    }
+    let namespace = crate::cache_key::hex_sha256(filename.as_os_str().as_encoded_bytes());
+    Ok(canonical.join(namespace))
 }
 
 fn generator_artifact_conflict() -> sqlx::Error {
@@ -5857,6 +6086,120 @@ mod tests {
         db
     }
 
+    #[tokio::test]
+    async fn catalog_project_selection_round_trips_explicit_order_and_nullable_opt_in() {
+        let db = test_database().await;
+        let mut selected = test_catalog_model("selected", "synthetic-document");
+        let selectors = vec![
+            crate::onshape_selection::SelectionSelector::Part {
+                part_id: "synthetic-b".to_owned(),
+            },
+            crate::onshape_selection::SelectionSelector::Part {
+                part_id: "synthetic-a".to_owned(),
+            },
+        ];
+        selected.exports.bambu_project = Some(crate::catalog::BambuProjectConfig {
+            selectors: selectors.clone(),
+        });
+        let ordinary = test_catalog_model("ordinary", "synthetic-ordinary-document");
+        db.replace_catalog(&Catalog::from_models(vec![selected, ordinary]).unwrap())
+            .await
+            .unwrap();
+        let loaded = db.catalog().await.unwrap();
+        assert_eq!(
+            loaded
+                .find("selected")
+                .unwrap()
+                .exports
+                .bambu_project
+                .as_ref()
+                .unwrap()
+                .selectors,
+            selectors
+        );
+        assert!(
+            loaded
+                .find("ordinary")
+                .unwrap()
+                .exports
+                .bambu_project
+                .is_none()
+        );
+        assert_eq!(
+            db.published_catalog_model("selected")
+                .await
+                .unwrap()
+                .unwrap()
+                .exports
+                .bambu_project
+                .unwrap()
+                .selectors,
+            selectors
+        );
+        db.clear_generated_state().await.unwrap();
+        assert_eq!(
+            db.published_catalog_model("selected")
+                .await
+                .unwrap()
+                .unwrap()
+                .exports
+                .bambu_project
+                .unwrap()
+                .selectors,
+            selectors
+        );
+    }
+
+    #[test]
+    fn output_retention_root_is_external_absolute_and_scoped_to_one_database() {
+        let parent = PathBuf::from(std::env::var_os("TMPDIR").unwrap_or_else(|| "/tmp".into()))
+            .join("agents");
+        std::fs::create_dir_all(&parent).unwrap();
+        let directory = tempfile::tempdir_in(parent).unwrap();
+        let checkout = directory.path().join("checkout");
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        std::fs::write(checkout.join(".git/HEAD"), "ref: refs/heads/synthetic\n").unwrap();
+        let filename = checkout.join("service.db");
+        assert!(generator_output_root(&filename, None).is_err());
+        assert!(generator_output_root(&filename, Some(Path::new("relative"))).is_err());
+        let external = directory.path().join("external");
+        let retained = generator_output_root(&filename, Some(&external)).unwrap();
+        assert!(retained.starts_with(&external));
+        assert_ne!(
+            retained,
+            generator_output_root(&checkout.join("second.db"), Some(&external)).unwrap()
+        );
+        assert!(generator_output_root(&filename, Some(&external.join("../checkout"))).is_err());
+        let worktree = directory.path().join("worktree");
+        std::fs::create_dir(&worktree).unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            "gitdir: synthetic-external-metadata\n",
+        )
+        .unwrap();
+        assert!(generator_output_root(&worktree.join("service.db"), None).is_err());
+    }
+
+    #[tokio::test]
+    async fn memory_database_output_retention_is_private_and_owned_only_by_test_database() {
+        use std::os::unix::fs::PermissionsExt;
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let root = db.generator_output_root().unwrap();
+        assert!(root.is_absolute());
+        assert_eq!(
+            std::fs::metadata(&root).unwrap().permissions().mode() & 0o077,
+            0
+        );
+        assert!(crate::generator_output_checkpoint::outside_repository(
+            &root
+        ));
+        let clone = db.clone();
+        drop(db);
+        assert!(root.exists());
+        drop(clone);
+        assert!(!root.exists());
+    }
+
     fn test_catalog_model(slug: &str, document_id: &str) -> Model {
         Model {
             catalog_schema_version: crate::catalog::CATALOG_SCHEMA_VERSION,
@@ -5880,6 +6223,7 @@ mod tests {
                     DownloadFormat::Stl,
                     DownloadFormat::ThreeMf,
                 ],
+                bambu_project: None,
                 preview: PreviewFormat::Glb,
                 preview_options: PreviewOptions {
                     resolution: PreviewResolution::Fine,

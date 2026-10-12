@@ -5,8 +5,13 @@
 > The neutral protocol, static deployment identity, pure processing recipe,
 > immutable recipe/occurrence persistence, and exact ready-cache lookup are
 > implemented, alongside trusted input construction, CLI execution, verified
-> artifact publication, and reconciliation. Worker/UI orchestration and real
-> generator deployment remain separate work.
+> artifact publication, and reconciliation. The Bambu product adds worker/UI
+> orchestration and one exact reviewed static deployment.
+
+The [Bambu MVP integration](bambu-project-mvp.md) pins the unchanged published
+release and its complete reviewed neutral handoff. Service-owned installation,
+full static identity admission, transport bounds, and non-root black-box product
+verification remain distinct from the upstream release decision.
 
 This policy does not provide legal advice. Repository or process separation does
 not itself decide whether licenses are compatible; qualified review is required
@@ -216,7 +221,8 @@ source-neutral fixtures only.
 
 Publication accepts only the runner's sealed successful output and its matching
 prepared processing recipe, under the currently configured supported deployed
-entry. It rechecks processing and invocation identity and copies the accepted
+entry, including a verified reopening of its durable accepted-output checkpoint.
+It rechecks processing and invocation identity and copies the accepted
 bytes into private service-owned retention while independently remeasuring
 length and SHA-256. No failed runner outcome provides this handoff.
 
@@ -266,6 +272,33 @@ These APIs provide the source-neutral publication foundation. Worker/UI
 dispatch, automatic scheduling of reconciliation, real deployment, and product
 publication remain separate integration work. Tests use the real trusted runner
 with synthetic neutral outputs and a loopback object-storage service.
+
+### Durable Accepted Output Checkpoints
+
+Product orchestration may persist the runner's already accepted output before
+publication. The private checkpoint contains those opaque bytes and a closed
+neutral receipt binding schema version, processing hash, invocation identity,
+and successful result. Its identity is the canonical receipt hash under the
+`onshape-export-accepted-generator-output-v1` domain. Copying independently
+remeasures the declared byte length and SHA-256. Files and directory ancestry
+must be synced and atomically installed before the database associates the
+request with the immutable recipe and checkpoint identity together.
+
+Reopening is authorized only by that trusted database association and the exact
+currently supported prepared recipe. Strict bounded parsing, canonical receipt
+and identity checks, result-to-invocation validation, private regular-file checks,
+and independent byte remeasurement precede reconstruction of the sealed output
+handoff. This preserves evidence of an accepted invocation; it does not claim a
+new invocation or admit caller-provided receipts as success. Checkpoints remain
+outside Git checkouts and the service never interprets their target bytes.
+
+Before accepted output is bound, a failed attempt may retry acquisition. After
+binding, recovery never reacquires geometry to change its recipe. Verified
+storage reconciliation runs first; exact checkpoint republication can repair
+interrupted or corrupt uploads only through the same immutable publication and
+supersession guards. Corrupt or missing checkpoints cannot supply alternative
+bytes. Ready checkpoints may remain privately retained for later repair;
+publication's temporary retention cleanup does not remove these durable copies.
 
 The service-owned [Onshape Selection Plans](onshape-selection-plans.md)
 contract in [#173](https://github.com/altendky/onshape-export/issues/173) owns

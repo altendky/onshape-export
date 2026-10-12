@@ -1,5 +1,5 @@
 use anyhow::{Context, ensure};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     cache_key,
@@ -20,8 +20,8 @@ use crate::{
 
 pub const GENERATOR_PROCESSING_RECIPE_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GeneratorCompatibilityIdentity {
     pub protocol_version: u32,
     pub dialect_identity: String,
@@ -31,8 +31,8 @@ pub struct GeneratorCompatibilityIdentity {
     pub settings_schema_identity: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "status")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "status", deny_unknown_fields)]
 pub enum GeneratorCompatibilityDecision {
     Supported,
     Unsupported { field: String },
@@ -47,8 +47,8 @@ impl GeneratorCompatibilityDecision {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GeneratorProcessingRecipe {
     pub recipe_version: u32,
     pub deployed_generator_identity: String,
@@ -277,6 +277,76 @@ pub fn prepare_generator_processing(
 
 pub fn generator_processing_hash(recipe: &GeneratorProcessingRecipe) -> anyhow::Result<String> {
     cache_key::hash_json("generator-processing-recipe-v1", recipe)
+}
+
+/// Reopen only a complete service-owned canonical recipe. Recompute all derived
+/// identities, invocation bindings, and ordered occurrences against the current
+/// deployment; the database owner separately verifies persisted occurrence rows.
+/// This is not a constructor for newly acquired inputs or a runner authorization.
+pub fn reopen_generator_processing(
+    generator: &DeployedGenerator,
+    processing_hash: &str,
+    recipe_json: &str,
+) -> anyhow::Result<PreparedGeneratorProcessing> {
+    let value = crate::onshape_api::parse_json(recipe_json.as_bytes(), 16_777_216)?;
+    let recipe: GeneratorProcessingRecipe = serde_json::from_value(value)?;
+    ensure!(
+        recipe.deployed_generator_identity == generator.static_identity()
+            && recipe.recipe_version == GENERATOR_PROCESSING_RECIPE_VERSION
+            && matches!(
+                recipe.compatibility_decision,
+                GeneratorCompatibilityDecision::Supported
+            ),
+        "stored generator recipe does not match the supported deployment"
+    );
+    ensure!(
+        recipe.input_manifest.objects.len() == recipe.settings.placements.len(),
+        "stored generator placement order is incomplete"
+    );
+    let expected: Vec<_> = recipe
+        .input_manifest
+        .objects
+        .iter()
+        .zip(&recipe.settings.placements)
+        .map(|(object, placement)| ExpectedPlacementSummaryV2 {
+            object_identity: object.object_identity.clone(),
+            transport_role: object.role,
+            expected_neutral_placement_matrix: placement.matrix.clone(),
+        })
+        .collect();
+    let c = &recipe.compatibility;
+    let invocation = &recipe.invocation;
+    let prepared = prepare_generator_processing(
+        generator,
+        &GeneratorCompatibilityRequest {
+            protocol_version: c.protocol_version,
+            dialect_identity: c.dialect_identity.clone(),
+            capability_identities: c.capability_identities.clone(),
+            input_kind_identity: c.input_kind_identity.clone(),
+            input_schema_identity: c.input_schema_identity.clone(),
+            settings_schema_identity: c.settings_schema_identity.clone(),
+        },
+        &recipe.input_manifest,
+        &recipe.settings,
+        &expected,
+        &GeneratorProcessingProtocolInputs {
+            manifest_path: invocation.input_manifest.path.clone(),
+            settings_content_identity: invocation.settings.content.content_identity.clone(),
+            settings_path: invocation.settings.content.path.clone(),
+            settings_media_type: invocation.settings.content.media_type.clone(),
+            settings_detected_kind_identity: invocation
+                .settings
+                .content
+                .detected_kind_identity
+                .clone(),
+            output: invocation.output.clone(),
+        },
+    )?;
+    ensure!(
+        prepared.processing_hash() == processing_hash && prepared.recipe_json() == recipe_json,
+        "stored generator recipe integrity mismatch"
+    );
+    Ok(prepared)
 }
 
 fn derive_occurrences(

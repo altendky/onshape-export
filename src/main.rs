@@ -1,3 +1,7 @@
+mod bambu_deployment;
+mod bambu_project;
+#[cfg(test)]
+mod bambu_real_package_tests;
 mod cache_key;
 mod cache_model;
 mod catalog;
@@ -6,6 +10,7 @@ pub mod configuration_encoding;
 mod db;
 pub mod deployed_generator;
 pub mod generator_inputs;
+mod generator_output_checkpoint;
 pub mod generator_processing;
 pub mod generator_protocol;
 pub mod generator_publication;
@@ -265,12 +270,15 @@ struct AppState {
     db: Database,
     onshape: OnshapeClient,
     storage: StorageClient,
-    _deployed_generator: Option<deployed_generator::DeployedGeneratorAvailability>,
+    deployed_generator: Option<deployed_generator::DeployedGeneratorAvailability>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum JobPayload {
+    BambuProject {
+        request: bambu_project::ProjectJob,
+    },
     ParameterRefresh {
         model_slug: String,
     },
@@ -454,6 +462,7 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     let deployed_generator = if command_requires_deployed_generator(&cli.command) {
         let availability = deployed_generator::DeployedGeneratorAvailability::load_from_env()?;
+        bambu_deployment::validate_availability(&availability)?;
         log_deployed_generator_availability(&availability);
         Some(availability)
     } else {
@@ -1228,7 +1237,7 @@ async fn build_state(
         db,
         onshape,
         storage,
-        _deployed_generator: deployed_generator,
+        deployed_generator,
     })
 }
 
@@ -1534,6 +1543,14 @@ fn app(state: AppState) -> Router {
             "/models/{slug}/exports/{format}/{config_hash}/status",
             get(download_status),
         )
+        .route(
+            "/models/{slug}/projects/bambu",
+            post(generate_bambu_project),
+        )
+        .route(
+            "/models/{slug}/projects/bambu/{request_identity}/status",
+            get(bambu_project_status),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -1621,6 +1638,7 @@ async fn model_page(
         &parameter_controls,
         &preview,
         &downloads,
+        &state,
     ))
 }
 
@@ -1633,6 +1651,25 @@ fn render_model_html(
     parameter_controls: &str,
     preview: &str,
     downloads: &str,
+    state: &AppState,
+) -> Html<String> {
+    render_model_html_with_project(
+        model,
+        parameter_controls,
+        preview,
+        downloads,
+        "<p>No Bambu project generated for these parameters yet.</p>",
+        bambu_deployment::configured_generator(state).is_ok(),
+    )
+}
+
+fn render_model_html_with_project(
+    model: &catalog::Model,
+    parameter_controls: &str,
+    preview: &str,
+    downloads: &str,
+    project: &str,
+    available: bool,
 ) -> Html<String> {
     Html(format!(
         r#"<!doctype html>
@@ -1753,6 +1790,7 @@ fn render_model_html(
             <button type="submit">Validate Parameters</button>
             <button type="submit" formaction="/models/{slug}/preview">Generate Preview</button>
             {download_buttons}
+            {project_button}
           </div>
         </form>
       </section>
@@ -1765,6 +1803,7 @@ fn render_model_html(
           <h2>Downloads</h2>
           {downloads}
         </section>
+        {project_section}
       </div>
     </div>
   </main>
@@ -1987,6 +2026,26 @@ fn render_model_html(
         preview = preview,
         downloads = downloads,
         download_buttons = render_download_buttons(model),
+        project_button = if model.exports.bambu_project.is_some() && available {
+            format!(
+                r#"<button type="submit" formaction="/models/{}/projects/bambu">Generate Bambu Project</button>"#,
+                escape_html(&model.slug)
+            )
+        } else {
+            String::new()
+        },
+        project_section = if model.exports.bambu_project.is_some() {
+            format!(
+                "<section><h2>Bambu Project 3MF</h2>{}</section>",
+                if available {
+                    project
+                } else {
+                    "<p>Bambu project generation is unavailable.</p>"
+                }
+            )
+        } else {
+            String::new()
+        },
     ))
 }
 
@@ -2052,6 +2111,7 @@ async fn generate_preview(
                     &parameter_controls,
                     &preview,
                     &downloads,
+                    &state,
                 ));
             }
         };
@@ -2072,6 +2132,7 @@ async fn generate_preview(
             &parameter_controls,
             &preview,
             &downloads,
+            &state,
         ));
     }
 
@@ -2092,6 +2153,7 @@ async fn generate_preview(
         &parameter_controls,
         &preview,
         &render_download_prompt(model),
+        &state,
     ))
 }
 
@@ -2131,6 +2193,7 @@ async fn generate_download(
                     &parameter_controls,
                     &preview,
                     &downloads,
+                    &state,
                 ));
             }
         };
@@ -2158,6 +2221,7 @@ async fn generate_download(
             &parameter_controls,
             &preview,
             &downloads,
+            &state,
         ));
     }
 
@@ -2176,8 +2240,97 @@ async fn generate_download(
             format.slug(),
             &config_hash,
             &status_url,
-            &format!("{} export generation is queued.", format.label()),
+            &format!("{} export generation is queued.", download_label(format)),
         )?,
+        &state,
+    ))
+}
+
+async fn generate_bambu_project(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Html<String>, AppError> {
+    let catalog = state.db.catalog().await?;
+    let model = published_model(&catalog, &slug).ok_or(AppError::NotFound)?;
+    let selection = model
+        .exports
+        .bambu_project
+        .as_ref()
+        .ok_or(AppError::NotFound)?;
+    if bambu_deployment::configured_generator(&state).is_err() {
+        return Ok(render_model_html_with_project(
+            model,
+            "",
+            "",
+            &render_download_prompt(model),
+            "<p>Bambu project generation is unavailable.</p>",
+            false,
+        ));
+    }
+    let Some(parameters) = load_or_refresh_parameters(&state, model).await? else {
+        return Ok(Html(
+            "Parameter metadata is still refreshing. Try again shortly.\n".to_owned(),
+        ));
+    };
+    let values = normalize_form_values(&parameters, values);
+    let controls = render_parameter_controls_with_values(&parameters, &values);
+    let validated =
+        match validate_values(&parameters, &values, model.parameter_policy.allow_unknown) {
+            Ok(validated) => validated,
+            Err(errors) => {
+                let panel = format!(
+                    "<p>Parameter errors:</p><ul>{}</ul>",
+                    errors
+                        .iter()
+                        .map(|error| format!("<li>{}</li>", escape_html(error)))
+                        .collect::<String>()
+                );
+                return Ok(render_model_html_with_project(
+                    model,
+                    &controls,
+                    "",
+                    &render_download_prompt(model),
+                    &panel,
+                    true,
+                ));
+            }
+        };
+    let request = bambu_project::enqueue(&state, model, &validated, &selection.selectors).await?;
+    let status_url = format!(
+        "/models/{}/projects/bambu/{}/status",
+        model.slug, request.request_identity
+    );
+    let panel = render_status_polling(
+        "Bambu project 3MF",
+        &request.request_identity,
+        &status_url,
+        "Bambu project generation is queued.",
+    )?;
+    Ok(render_model_html_with_project(
+        model,
+        &controls,
+        &render_preview_for_values(&state, model, &validated).await?,
+        &render_downloads_for_values(&state, model, &validated).await?,
+        &panel,
+        true,
+    ))
+}
+
+async fn bambu_project_status(
+    State(state): State<AppState>,
+    Path((slug, request_identity)): Path<(String, String)>,
+) -> Result<Json<bambu_project::ProjectStatus>, AppError> {
+    let model = state
+        .db
+        .published_catalog_model(&slug)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if model.exports.bambu_project.is_none() {
+        return Err(AppError::NotFound);
+    }
+    Ok(Json(
+        bambu_project::status(&state, &model, &request_identity).await?,
     ))
 }
 
@@ -2684,6 +2837,15 @@ async fn process_next_job(state: &AppState) -> anyhow::Result<bool> {
         return Ok(false);
     };
 
+    if job.job_kind == "bambu_project"
+        && !state
+            .db
+            .extend_job_lease(&job.work_key, job.attempt, 35 * 60)
+            .await?
+    {
+        return Ok(true);
+    }
+
     if should_retire_legacy_export_job(&job) {
         if !state
             .db
@@ -2764,6 +2926,34 @@ async fn execute_job(state: &AppState, job: &db::JobLease) -> anyhow::Result<()>
     let payload: JobPayload = serde_json::from_str(&job.payload_json)?;
     let catalog = state.db.catalog().await?;
     match payload {
+        JobPayload::BambuProject { request } => {
+            anyhow::ensure!(
+                job.job_kind == "bambu_project",
+                "project job kind does not match payload"
+            );
+            match tokio::time::timeout(
+                Duration::from_secs(30 * 60),
+                bambu_project::execute_job(state, &request, &job.work_key),
+            )
+            .await
+            {
+                Ok(result) => result?,
+                Err(_) => {
+                    state
+                        .db
+                        .record_bambu_project_failure(
+                            &request.request_identity,
+                            Some("operational_failure"),
+                            Some("project_timeout"),
+                        )
+                        .await
+                        .map_err(|_| anyhow::anyhow!("project status persistence failed"))?;
+                    return Err(anyhow::anyhow!(
+                        "project_timeout: Bambu project generation timed out"
+                    ));
+                }
+            }
+        }
         JobPayload::ParameterRefresh { model_slug } => {
             let model = catalog
                 .find(&model_slug)
@@ -5182,6 +5372,14 @@ fn render_preview_viewer(state: &AppState, object_key: &str) -> String {
     }
 }
 
+fn download_label(format: catalog::DownloadFormat) -> &'static str {
+    if format == catalog::DownloadFormat::ThreeMf {
+        "Geometry 3MF"
+    } else {
+        format.label()
+    }
+}
+
 fn render_download_buttons(model: &catalog::Model) -> String {
     model
         .exports
@@ -5192,7 +5390,7 @@ fn render_download_buttons(model: &catalog::Model) -> String {
                 r#"<button type="submit" formaction="/models/{slug}/exports/{format_slug}">Generate {label}</button>"#,
                 slug = escape_html(&model.slug),
                 format_slug = format.slug(),
-                label = format.label(),
+                label = download_label(*format),
             )
         })
         .collect::<String>()
@@ -5213,7 +5411,7 @@ fn render_download_result(
 ) -> String {
     format!(
         "{} export is ready. {}\n",
-        format.label(),
+        download_label(format),
         render_download_link(state, format, object_key)
     )
 }
@@ -5227,11 +5425,11 @@ fn render_download_link(
         Some(url) => format!(
             r#"<a href="{}">Download {}</a>"#,
             escape_html(&url),
-            format.label()
+            download_label(format)
         ),
         None => format!(
             "<span>{} export is cached, but TIGRIS_PUBLIC_BASE_URL is not configured.</span>",
-            format.label()
+            download_label(format)
         ),
     }
 }
@@ -5285,8 +5483,13 @@ fn render_status_polling(
     target.textContent = status.errorSummary
       ? `${{status.message}} ${{status.errorSummary}}`
       : status.message;
+    if (kind === "Bambu project 3MF" && status.failureCode) {{
+      target.textContent = `${{status.message}} ${{status.failureCategory}}: ${{status.failureCode}}`;
+    }}
     if (status.status === "ready") {{
       showReadyArtifact(status);
+    }} else if (kind === "Bambu project 3MF" && !["queued", "running", "staged"].includes(status.status)) {{
+      return;
     }} else if (status.status !== "failed" && status.status !== "missing" && status.status !== "superseded") {{
       window.setTimeout(poll, 2000);
     }}
@@ -5673,9 +5876,35 @@ mod tests {
     }
 
     #[test]
+    fn bambu_project_controls_require_catalog_opt_in_and_admitted_deployment() {
+        let mut model = test_model();
+        let html = render_model_html_with_project(&model, "", "", "", "", true).0;
+        assert!(!html.contains("Generate Bambu Project"));
+        model.exports.bambu_project = Some(catalog::BambuProjectConfig {
+            selectors: vec![onshape_selection::SelectionSelector::Part {
+                part_id: "synthetic-part".to_owned(),
+            }],
+        });
+        let unavailable = render_model_html_with_project(&model, "", "", "", "", false).0;
+        assert!(!unavailable.contains("Generate Bambu Project"));
+        assert!(unavailable.contains("Bambu project generation is unavailable"));
+        let available =
+            render_model_html_with_project(&model, "", "", "", "project-result", true).0;
+        assert!(available.contains("/models/demo/projects/bambu"));
+        assert!(available.contains("Bambu Project 3MF"));
+        assert!(available.contains("project-result"));
+        assert!(available.contains("/models/demo/exports/step"));
+        assert_eq!(catalog::DownloadFormat::ThreeMf.slug(), "3mf");
+        assert_eq!(
+            download_label(catalog::DownloadFormat::ThreeMf),
+            "Geometry 3MF"
+        );
+    }
+
+    #[test]
     fn model_page_enhances_generation_submits() {
         let model = test_model();
-        let html = render_model_html(&model, "", "", "").0;
+        let html = render_model_html_with_project(&model, "", "", "", "", false).0;
 
         assert!(html.contains("model-layout"));
         assert!(html.contains("parameters-panel"));
@@ -7204,7 +7433,7 @@ mod tests {
             db,
             onshape,
             storage,
-            _deployed_generator: None,
+            deployed_generator: None,
         }
     }
 
@@ -7234,6 +7463,7 @@ mod tests {
                 link_document_id: None,
             },
             exports: catalog::ExportConfig {
+                bambu_project: None,
                 downloads: vec![catalog::DownloadFormat::Step],
                 preview: catalog::PreviewFormat::Glb,
                 preview_options: catalog::PreviewOptions {

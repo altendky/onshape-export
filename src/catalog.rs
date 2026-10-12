@@ -119,6 +119,15 @@ pub struct ExportConfig {
     pub preview: PreviewFormat,
     pub preview_options: PreviewOptions,
     pub download_options: DownloadOptions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bambu_project: Option<BambuProjectConfig>,
+}
+
+/// Reviewed catalog order, independently of raw geometry download formats.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BambuProjectConfig {
+    pub selectors: Vec<crate::onshape_selection::SelectionSelector>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -450,6 +459,31 @@ impl Catalog {
             ensure_unique(&model.exports.downloads, || {
                 format!("duplicate download format for {}", model.slug)
             })?;
+            if let Some(project) = &model.exports.bambu_project {
+                let request = crate::onshape_selection::SelectionRequest {
+                    document_id: model.onshape.document_id.clone(),
+                    version_id: model.onshape.version_id.clone(),
+                    element_id: model.onshape.element_id.clone(),
+                    element_kind: match model.onshape.element_kind {
+                        ElementKind::PartStudio => {
+                            crate::onshape_selection::SelectionElementKind::PartStudio
+                        }
+                        ElementKind::Assembly => {
+                            crate::onshape_selection::SelectionElementKind::Assembly
+                        }
+                    },
+                    configuration_encoding: crate::configuration_encoding::EncodingHandoff {
+                        source_hash: "0".repeat(64),
+                        config_hash: "0".repeat(64),
+                        encoding_context_hash: "0".repeat(64),
+                        encoded_id: "catalog_preflight".to_owned(),
+                    },
+                    selectors: project.selectors.clone(),
+                };
+                request.preflight().map_err(|_| {
+                    anyhow::anyhow!("invalid Bambu project selection for {}", model.slug)
+                })?;
+            }
             let mut preset_slugs = HashSet::new();
             for preset in &model.parameter_presets {
                 anyhow::ensure!(
@@ -857,6 +891,48 @@ mod tests {
         }
     }
 
+    #[test]
+    fn project_catalog_preserves_order_and_rejects_duplicate_or_wrong_kind_selectors() {
+        use crate::onshape_selection::SelectionSelector;
+        let mut entry = model("project-model");
+        let selectors = vec![
+            SelectionSelector::Part {
+                part_id: "synthetic-b".to_owned(),
+            },
+            SelectionSelector::Part {
+                part_id: "synthetic-a".to_owned(),
+            },
+        ];
+        entry.exports.bambu_project = Some(BambuProjectConfig {
+            selectors: selectors.clone(),
+        });
+        let catalog = Catalog::from_models(vec![entry.clone()]).unwrap();
+        assert_eq!(
+            catalog.models()[0]
+                .exports
+                .bambu_project
+                .as_ref()
+                .unwrap()
+                .selectors,
+            selectors
+        );
+        entry
+            .exports
+            .bambu_project
+            .as_mut()
+            .unwrap()
+            .selectors
+            .push(selectors[0].clone());
+        assert!(Catalog::from_models(vec![entry.clone()]).is_err());
+        entry.exports.bambu_project.as_mut().unwrap().selectors =
+            vec![SelectionSelector::Occurrence {
+                occurrence_path: vec!["synthetic-instance".to_owned()],
+            }];
+        assert!(Catalog::from_models(vec![entry.clone()]).is_err());
+        entry.onshape.element_kind = ElementKind::Assembly;
+        assert!(Catalog::from_models(vec![entry]).is_ok());
+    }
+
     fn model(slug: &str) -> Model {
         Model {
             catalog_schema_version: CATALOG_SCHEMA_VERSION,
@@ -875,6 +951,7 @@ mod tests {
                 link_document_id: None,
             },
             exports: ExportConfig {
+                bambu_project: None,
                 downloads: vec![
                     DownloadFormat::Step,
                     DownloadFormat::Stl,

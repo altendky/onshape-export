@@ -27,6 +27,16 @@ pub struct GeneratorPublicationTarget {
     pub config_values_json: String,
 }
 
+/// Stable service-owned stage classifications. Backend details remain in the
+/// error source for internal diagnosis and never determine public status text.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum GeneratorPublicationFailure {
+    #[error("generator artifact upload failed")]
+    Upload(#[source] anyhow::Error),
+    #[error("generator artifact storage verification failed")]
+    StorageVerification(#[source] anyhow::Error),
+}
+
 fn validate_target(
     prepared: &PreparedGeneratorProcessing,
     target: &GeneratorPublicationTarget,
@@ -270,7 +280,7 @@ pub async fn publish_generator_output(
                     Some("public, max-age=31536000, immutable"),
                 )
                 .await
-                .context("uploading accepted generator bytes")?;
+                .map_err(GeneratorPublicationFailure::Upload)?;
         }
         storage
             .verify_exact_object(
@@ -280,7 +290,7 @@ pub async fn publish_generator_output(
                 &candidate.sha256,
             )
             .await
-            .context("verifying stored generator bytes")
+            .map_err(|error| GeneratorPublicationFailure::StorageVerification(error).into())
     }
     .await;
     // No public key ever refers to this private service-owned retention.
