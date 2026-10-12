@@ -317,6 +317,14 @@ pub struct GeneratorArtifactState {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct BambuProjectRequestRecord {
+    pub request_json: String,
+    pub processing_hash: Option<String>,
+    pub failure_category: Option<String>,
+    pub failure_code: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratorArtifactStoredFile {
     pub role: String,
@@ -577,6 +585,7 @@ impl Database {
         const GENERATED_TABLES: &[&str] = &[
             "artifact_files",
             "artifact_sets",
+            "bambu_project_requests",
             "generator_processing_occurrences",
             "generator_processing_recipes",
             "postprocess_runs",
@@ -617,7 +626,7 @@ impl Database {
             SELECT id, catalog_schema_version, entry_version, slug, name, description,
                    published, tags_json, thumbnail, document_id, version_id, element_id,
                    element_kind, link_document_id, downloads_json, preview_format,
-                   preview_options_json, download_options_json, parameter_source,
+                   preview_options_json, download_options_json, bambu_project_json, parameter_source,
                    parameter_allow_unknown, parameter_auto_refresh
             FROM catalog_models
             ORDER BY display_order, slug
@@ -643,7 +652,7 @@ impl Database {
             SELECT id, catalog_schema_version, entry_version, slug, name, description,
                    published, tags_json, thumbnail, document_id, version_id, element_id,
                    element_kind, link_document_id, downloads_json, preview_format,
-                   preview_options_json, download_options_json, parameter_source,
+                   preview_options_json, download_options_json, bambu_project_json, parameter_source,
                    parameter_allow_unknown, parameter_auto_refresh
             FROM catalog_models
             WHERE slug = ? AND published = 1
@@ -688,16 +697,22 @@ impl Database {
             let downloads_json = serde_json::to_string(&model.exports.downloads)?;
             let preview_options_json = serde_json::to_string(&model.exports.preview_options)?;
             let download_options_json = serde_json::to_string(&model.exports.download_options)?;
+            let bambu_project_json = model
+                .exports
+                .bambu_project
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?;
             let result = sqlx::query(
                 r#"
                 INSERT INTO catalog_models (
                     display_order, catalog_schema_version, entry_version, slug, name,
                     description, published, tags_json, thumbnail, document_id, version_id,
                     element_id, element_kind, link_document_id, downloads_json,
-                    preview_format, preview_options_json, download_options_json,
+                    preview_format, preview_options_json, download_options_json, bambu_project_json,
                     parameter_source, parameter_allow_unknown, parameter_auto_refresh
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(i64::try_from(display_order).context("catalog display order overflow")?)
@@ -718,6 +733,7 @@ impl Database {
             .bind(preview_format_key(&model.exports.preview))
             .bind(preview_options_json)
             .bind(download_options_json)
+            .bind(bambu_project_json)
             .bind(parameter_source_key(&model.parameter_policy.source))
             .bind(bool_to_i64(model.parameter_policy.allow_unknown))
             .bind(bool_to_i64(model.parameter_policy.auto_refresh))
@@ -857,6 +873,10 @@ impl Database {
                 preview: enum_text_column(&row, "preview_format")?,
                 preview_options: json_column(&row, "preview_options_json")?,
                 download_options: json_column(&row, "download_options_json")?,
+                bambu_project: row
+                    .get::<Option<String>, _>("bambu_project_json")
+                    .map(|json| serde_json::from_str(&json))
+                    .transpose()?,
             },
             parameter_policy: ParameterPolicy {
                 source: enum_text_column(&row, "parameter_source")?,
@@ -1738,6 +1758,100 @@ impl Database {
         .await
     }
 
+    pub(crate) async fn insert_bambu_project_request(
+        &self,
+        request_identity: &str,
+        request_json: &str,
+    ) -> sqlx::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("INSERT INTO bambu_project_requests (request_identity, request_json) VALUES (?, ?) ON CONFLICT DO NOTHING")
+            .bind(request_identity).bind(request_json).execute(&mut *tx).await?;
+        let stored: String = sqlx::query_scalar(
+            "SELECT request_json FROM bambu_project_requests WHERE request_identity = ?",
+        )
+        .bind(request_identity)
+        .fetch_one(&mut *tx)
+        .await?;
+        if stored != request_json {
+            return Err(sqlx::Error::Protocol(
+                "immutable project request conflict".to_owned(),
+            ));
+        }
+        tx.commit().await
+    }
+
+    pub(crate) async fn bambu_project_request(
+        &self,
+        request_identity: &str,
+    ) -> sqlx::Result<Option<BambuProjectRequestRecord>> {
+        sqlx::query("SELECT request_json, processing_hash, failure_category, failure_code FROM bambu_project_requests WHERE request_identity = ?")
+            .bind(request_identity).fetch_optional(&self.pool).await
+            .map(|row| row.map(|row| BambuProjectRequestRecord {
+                request_json: row.get("request_json"),
+                processing_hash: row.get("processing_hash"),
+                failure_category: row.get("failure_category"),
+                failure_code: row.get("failure_code"),
+            }))
+    }
+
+    pub(crate) async fn bind_bambu_project_recipe(
+        &self,
+        request_identity: &str,
+        request_json: &str,
+        prepared: &PreparedGeneratorProcessing,
+    ) -> sqlx::Result<()> {
+        self.insert_generator_processing_recipe(prepared).await?;
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query("SELECT request_json, processing_hash FROM bambu_project_requests WHERE request_identity = ?")
+            .bind(request_identity).fetch_one(&mut *tx).await?;
+        let hash: Option<String> = row.get("processing_hash");
+        if row.get::<String, _>("request_json") != request_json
+            || hash
+                .as_deref()
+                .is_some_and(|hash| hash != prepared.processing_hash())
+        {
+            return Err(sqlx::Error::Protocol(
+                "immutable project recipe association conflict".to_owned(),
+            ));
+        }
+        sqlx::query("UPDATE bambu_project_requests SET processing_hash = ?, failure_category = NULL, failure_code = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE request_identity = ?")
+            .bind(prepared.processing_hash()).bind(request_identity).execute(&mut *tx).await?;
+        tx.commit().await
+    }
+
+    pub(crate) async fn record_bambu_project_failure(
+        &self,
+        request_identity: &str,
+        category: Option<&str>,
+        code: Option<&str>,
+    ) -> sqlx::Result<()> {
+        sqlx::query("UPDATE bambu_project_requests SET failure_category = ?, failure_code = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE request_identity = ?")
+            .bind(category).bind(code).bind(request_identity).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn reopen_generator_processing(
+        &self,
+        generator: &crate::deployed_generator::DeployedGenerator,
+        processing_hash: &str,
+    ) -> anyhow::Result<PreparedGeneratorProcessing> {
+        let mut tx = self.pool.begin().await?;
+        let json: String = sqlx::query_scalar(
+            "SELECT recipe_json FROM generator_processing_recipes WHERE processing_hash = ?",
+        )
+        .bind(processing_hash)
+        .fetch_one(&mut *tx)
+        .await?;
+        let prepared = crate::generator_processing::reopen_generator_processing(
+            generator,
+            processing_hash,
+            &json,
+        )?;
+        verify_persisted_generator_recipe(&mut tx, &prepared).await?;
+        tx.commit().await?;
+        Ok(prepared)
+    }
+
     async fn insert_generator_processing_recipe_fields(
         &self,
         recipe: GeneratorProcessingRecipeInsert<'_>,
@@ -2185,6 +2299,17 @@ impl Database {
                 max_attempts: row.get("max_attempts"),
             })
         })
+    }
+
+    pub(crate) async fn extend_job_lease(
+        &self,
+        work_key: &str,
+        attempt: i64,
+        lease_seconds: i64,
+    ) -> sqlx::Result<bool> {
+        let result = sqlx::query("UPDATE jobs SET lease_until = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+' || ? || ' seconds') WHERE work_key = ? AND attempt = ? AND status = 'running'")
+            .bind(lease_seconds).bind(work_key).bind(attempt).execute(&self.pool).await?;
+        Ok(result.rows_affected() == 1)
     }
 
     pub async fn finish_job(
@@ -5857,6 +5982,70 @@ mod tests {
         db
     }
 
+    #[tokio::test]
+    async fn catalog_project_selection_round_trips_explicit_order_and_nullable_opt_in() {
+        let db = test_database().await;
+        let mut selected = test_catalog_model("selected", "synthetic-document");
+        let selectors = vec![
+            crate::onshape_selection::SelectionSelector::Part {
+                part_id: "synthetic-b".to_owned(),
+            },
+            crate::onshape_selection::SelectionSelector::Part {
+                part_id: "synthetic-a".to_owned(),
+            },
+        ];
+        selected.exports.bambu_project = Some(crate::catalog::BambuProjectConfig {
+            selectors: selectors.clone(),
+        });
+        let ordinary = test_catalog_model("ordinary", "synthetic-ordinary-document");
+        db.replace_catalog(&Catalog::from_models(vec![selected, ordinary]).unwrap())
+            .await
+            .unwrap();
+        let loaded = db.catalog().await.unwrap();
+        assert_eq!(
+            loaded
+                .find("selected")
+                .unwrap()
+                .exports
+                .bambu_project
+                .as_ref()
+                .unwrap()
+                .selectors,
+            selectors
+        );
+        assert!(
+            loaded
+                .find("ordinary")
+                .unwrap()
+                .exports
+                .bambu_project
+                .is_none()
+        );
+        assert_eq!(
+            db.published_catalog_model("selected")
+                .await
+                .unwrap()
+                .unwrap()
+                .exports
+                .bambu_project
+                .unwrap()
+                .selectors,
+            selectors
+        );
+        db.clear_generated_state().await.unwrap();
+        assert_eq!(
+            db.published_catalog_model("selected")
+                .await
+                .unwrap()
+                .unwrap()
+                .exports
+                .bambu_project
+                .unwrap()
+                .selectors,
+            selectors
+        );
+    }
+
     fn test_catalog_model(slug: &str, document_id: &str) -> Model {
         Model {
             catalog_schema_version: crate::catalog::CATALOG_SCHEMA_VERSION,
@@ -5880,6 +6069,7 @@ mod tests {
                     DownloadFormat::Stl,
                     DownloadFormat::ThreeMf,
                 ],
+                bambu_project: None,
                 preview: PreviewFormat::Glb,
                 preview_options: PreviewOptions {
                     resolution: PreviewResolution::Fine,

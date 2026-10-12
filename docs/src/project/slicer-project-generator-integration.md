@@ -8,6 +8,10 @@
 > artifact publication, and reconciliation. Worker/UI orchestration and real
 > generator deployment remain separate work.
 
+The [Bambu MVP integration](bambu-project-mvp.md) is being prepared against the
+published release. Its complete neutral service identity handoff is missing, so
+real configuration, capability advertisement, and deployment remain blocked.
+
 This policy does not provide legal advice. Repository or process separation does
 not itself decide whether licenses are compatible; qualified review is required
 for licensing conclusions.

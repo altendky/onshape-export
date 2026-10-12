@@ -54,6 +54,31 @@ onshape-export catalog show <slug>
 
 No web catalog editing routes exist. Browser-based admin is intentionally deferred until authentication and CSRF requirements are designed.
 
+## Bambu Project Selection
+
+`exports.bambuProject` optionally defines a closed `selectors` array in reviewed
+catalog order. Part Studio entries use `partId`; Assembly entries use a
+single-component `occurrencePath`. The selected Onshape annotations provide
+names, printable/blocker roles, and blocker associations. The service does not
+choose objects by name, content equality, or an implicit first-part rule.
+
+The array must contain 1–256 distinct selectors of the model's element kind.
+SQLite persists the optional selection independently of ordinary download
+formats. Omitting it preserves existing catalog behavior. Reviewed public
+catalog selectors are allowed; controlled-fixture identifiers must never be
+added to the catalog or repository.
+
+The model's existing parameter form requests its complete selected project at
+`POST /models/{slug}/projects/bambu`. Request identity binds the frozen source,
+typed configuration, selector order, catalog policy, and approved deployment.
+Polling uses `/models/{slug}/projects/bambu/{request_identity}/status` and returns
+only ready storage metadata or bounded service-owned failure categories/codes.
+Raw STEP, STL, and Geometry 3MF requests retain their existing export routes.
+
+The controls require both catalog opt-in and an admitted deployment. The current
+release handoff is incomplete, so production admission and advertisement remain
+disabled; see [Bambu Project MVP Integration](bambu-project-mvp.md).
+
 ## Model Entry Shape
 
 The JSON import fixture uses the same Rust model shape that is reconstructed from

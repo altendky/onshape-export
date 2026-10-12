@@ -96,3 +96,8 @@ entry, or capability substitution.
 Real package installation and the real deployed document belong to the product
 deployment integration. This repository contract and its tests use only
 synthetic source-neutral executable bytes and identities.
+
+The [Bambu MVP integration](bambu-project-mvp.md) retains the exact released
+external component, but real configuration remains disabled until its complete
+neutral service identity handoff is reviewed. Installation of the package does
+not supply missing fields or establish service deployment approval.

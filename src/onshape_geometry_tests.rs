@@ -1388,6 +1388,13 @@ pub(super) async fn runner_test_inputs() -> crate::generator_inputs::Constructed
     .unwrap()
 }
 
+pub(super) async fn project_test_inputs(
+    policy: &crate::generator_inputs::GeneratorInputPolicy,
+) -> crate::generator_inputs::ConstructedGeneratorInputs {
+    let (trusted, acquired) = generator_assembly_fixture(&["i-a1", "i-b", "i-a2"]).await;
+    crate::generator_inputs::construct_generator_inputs(&trusted, acquired, policy).unwrap()
+}
+
 #[tokio::test]
 async fn generator_inputs_consume_real_part_studio_handoff_without_staging() {
     use crate::{generator_inputs::construct_generator_inputs, generator_protocol::InputRole};

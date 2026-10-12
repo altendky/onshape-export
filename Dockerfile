@@ -6,6 +6,15 @@ COPY . .
 
 RUN cargo build --release --locked
 
+FROM debian:bookworm-slim AS generator
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY scripts/install-bambu-generator.sh /tmp/install-bambu-generator.sh
+RUN sh /tmp/install-bambu-generator.sh
+
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update \
@@ -20,6 +29,7 @@ WORKDIR /app
 
 COPY --from=builder /app/target/release/onshape-export /app/onshape-export
 COPY --from=builder /app/catalog /app/catalog
+COPY --from=generator /opt/onshape-export/generators /opt/onshape-export/generators
 
 ENV BIND_ADDR=0.0.0.0:8080
 ENV DATABASE_URL=sqlite:///data/onshape-export.db?mode=rwc

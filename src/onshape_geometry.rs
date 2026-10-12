@@ -167,6 +167,17 @@ impl TrustedAcquisitionPlan {
         &self.record.plan
     }
 
+    /// Original validated service request identities, before configured source
+    /// projection. The plan's configuration identity belongs to Onshape's
+    /// response representation and must not replace this typed-values hash.
+    pub fn request_source_hash(&self) -> &str {
+        &self.record.configuration_encoding.source_hash
+    }
+
+    pub fn request_config_hash(&self) -> &str {
+        &self.record.configuration_encoding.config_hash
+    }
+
     pub fn lookup_request(&self) -> Result<Vec<u8>, ApiFailure> {
         bounded_canonical(&ProvenanceLookup {
             provenance_schema_version: 1,
@@ -903,6 +914,13 @@ async fn acquire_leaf(
 pub(crate) async fn generator_runner_test_inputs()
 -> crate::generator_inputs::ConstructedGeneratorInputs {
     tests::runner_test_inputs().await
+}
+
+#[cfg(test)]
+pub(crate) async fn generator_project_test_inputs(
+    policy: &crate::generator_inputs::GeneratorInputPolicy,
+) -> crate::generator_inputs::ConstructedGeneratorInputs {
+    tests::project_test_inputs(policy).await
 }
 
 #[cfg(test)]
