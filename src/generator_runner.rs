@@ -106,6 +106,20 @@ pub struct VerifiedGeneratorOutput {
 }
 
 impl VerifiedGeneratorOutput {
+    /// Only the private checkpoint verifier can produce this witness. Reopening
+    /// preserves accepted bytes and evidence; it does not claim a new invocation.
+    pub(crate) fn from_checkpoint(
+        checkpoint: crate::generator_output_checkpoint::ValidatedCheckpoint,
+    ) -> Self {
+        let (result, processing_hash, invocation_identity, bytes) = checkpoint.into_parts();
+        Self {
+            result,
+            processing_hash,
+            invocation_identity,
+            bytes: Mutex::new(bytes),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn replace_test_bytes(&mut self, bytes: &[u8], update_declaration: bool) {
         let file = self.bytes.get_mut().unwrap();

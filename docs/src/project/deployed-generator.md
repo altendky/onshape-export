@@ -101,3 +101,8 @@ The [Bambu MVP integration](bambu-project-mvp.md) retains the exact released
 external component, but real configuration remains disabled until its complete
 neutral service identity handoff is reviewed. Installation of the package does
 not supply missing fields or establish service deployment approval.
+
+The product's `GENERATOR_OUTPUT_RETENTION_DIR` is separate operational storage
+configuration, not a field in this closed deployment document. Its persistent
+database namespace, private permissions, and restart behavior are described in
+[durable product recovery](bambu-project-mvp.md#durable-product-recovery).

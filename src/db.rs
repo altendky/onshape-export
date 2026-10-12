@@ -1,8 +1,15 @@
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use sqlx::{Executor, Row, Sqlite, SqlitePool, sqlite::SqlitePoolOptions};
+use sqlx::{
+    Executor, Row, Sqlite, SqlitePool,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
 
 use crate::catalog::{
     Catalog, ExportConfig, Model, OnshapeSource, ParameterOverride, ParameterPolicy,
@@ -321,6 +328,7 @@ pub struct GeneratorArtifactState {
 pub(crate) struct BambuProjectRequestRecord {
     pub request_json: String,
     pub processing_hash: Option<String>,
+    pub output_snapshot_identity: Option<String>,
     pub failure_category: Option<String>,
     pub failure_code: Option<String>,
 }
@@ -485,6 +493,9 @@ struct ArtifactMetadata {
 #[derive(Debug, Clone)]
 pub struct Database {
     pool: SqlitePool,
+    persistent_filename: Option<PathBuf>,
+    #[cfg(test)]
+    output_test_directory: Option<std::sync::Arc<tempfile::TempDir>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -543,13 +554,58 @@ impl Database {
     }
 
     pub async fn connect_without_migrations(database_url: &str) -> sqlx::Result<Self> {
+        let options = SqliteConnectOptions::from_str(database_url)?;
+        let filename = options.get_filename().to_owned();
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
-            .connect(database_url)
+            .connect_with(options)
             .await?;
 
         Self::apply_pragmas(&pool).await?;
-        Ok(Self { pool })
+        let main = sqlx::query("PRAGMA database_list")
+            .fetch_all(&pool)
+            .await?
+            .into_iter()
+            .find(|row| row.get::<String, _>("name") == "main")
+            .ok_or_else(|| sqlx::Error::Protocol("SQLite main database is missing".to_owned()))?;
+        let persistent_filename = if main.get::<String, _>("file").is_empty() {
+            None
+        } else {
+            Some(std::fs::canonicalize(filename)?)
+        };
+        #[cfg(test)]
+        let output_test_directory = if persistent_filename.is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            let parent = PathBuf::from(std::env::var_os("TMPDIR").unwrap_or_else(|| "/tmp".into()))
+                .join("agents");
+            std::fs::create_dir_all(&parent)?;
+            let directory = tempfile::tempdir_in(parent)?;
+            std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))?;
+            Some(std::sync::Arc::new(directory))
+        } else {
+            None
+        };
+        Ok(Self {
+            pool,
+            persistent_filename,
+            #[cfg(test)]
+            output_test_directory,
+        })
+    }
+
+    /// Operational retention lives beside the persistent SQLite database, or
+    /// under an explicitly configured absolute external directory. No path is
+    /// part of processing identity or exposed by project status.
+    pub(crate) fn generator_output_root(&self) -> anyhow::Result<PathBuf> {
+        if let Some(filename) = &self.persistent_filename {
+            let configured = std::env::var_os("GENERATOR_OUTPUT_RETENTION_DIR").map(PathBuf::from);
+            return generator_output_root(filename, configured.as_deref());
+        }
+        #[cfg(test)]
+        if let Some(directory) = &self.output_test_directory {
+            return Ok(directory.path().to_owned());
+        }
+        anyhow::bail!("project output retention requires a persistent SQLite database")
     }
 
     pub async fn ping(&self) -> sqlx::Result<()> {
@@ -1784,38 +1840,50 @@ impl Database {
         &self,
         request_identity: &str,
     ) -> sqlx::Result<Option<BambuProjectRequestRecord>> {
-        sqlx::query("SELECT request_json, processing_hash, failure_category, failure_code FROM bambu_project_requests WHERE request_identity = ?")
+        sqlx::query("SELECT request_json, processing_hash, output_snapshot_identity, failure_category, failure_code FROM bambu_project_requests WHERE request_identity = ?")
             .bind(request_identity).fetch_optional(&self.pool).await
             .map(|row| row.map(|row| BambuProjectRequestRecord {
                 request_json: row.get("request_json"),
                 processing_hash: row.get("processing_hash"),
+                output_snapshot_identity: row.get("output_snapshot_identity"),
                 failure_category: row.get("failure_category"),
                 failure_code: row.get("failure_code"),
             }))
     }
 
-    pub(crate) async fn bind_bambu_project_recipe(
+    pub(crate) async fn bind_bambu_project_output(
         &self,
         request_identity: &str,
         request_json: &str,
         prepared: &PreparedGeneratorProcessing,
+        snapshot_identity: &str,
     ) -> sqlx::Result<()> {
+        if !valid_generator_sha256(snapshot_identity) {
+            return Err(sqlx::Error::Protocol(
+                "invalid project output snapshot identity".to_owned(),
+            ));
+        }
         self.insert_generator_processing_recipe(prepared).await?;
         let mut tx = self.pool.begin().await?;
-        let row = sqlx::query("SELECT request_json, processing_hash FROM bambu_project_requests WHERE request_identity = ?")
+        let row = sqlx::query("SELECT request_json, processing_hash, output_snapshot_identity FROM bambu_project_requests WHERE request_identity = ?")
             .bind(request_identity).fetch_one(&mut *tx).await?;
         let hash: Option<String> = row.get("processing_hash");
+        let snapshot: Option<String> = row.get("output_snapshot_identity");
         if row.get::<String, _>("request_json") != request_json
             || hash
                 .as_deref()
                 .is_some_and(|hash| hash != prepared.processing_hash())
+            || snapshot
+                .as_deref()
+                .is_some_and(|snapshot| snapshot != snapshot_identity)
+            || hash.is_some() != snapshot.is_some()
         {
             return Err(sqlx::Error::Protocol(
                 "immutable project recipe association conflict".to_owned(),
             ));
         }
-        sqlx::query("UPDATE bambu_project_requests SET processing_hash = ?, failure_category = NULL, failure_code = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE request_identity = ?")
-            .bind(prepared.processing_hash()).bind(request_identity).execute(&mut *tx).await?;
+        sqlx::query("UPDATE bambu_project_requests SET processing_hash = ?, output_snapshot_identity = ?, failure_category = NULL, failure_code = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE request_identity = ?")
+            .bind(prepared.processing_hash()).bind(snapshot_identity).bind(request_identity).execute(&mut *tx).await?;
         tx.commit().await
     }
 
@@ -3236,6 +3304,42 @@ fn artifact_set_record_from_row(row: sqlx::sqlite::SqliteRow) -> ArtifactSetReco
         superseded_by: row.get("superseded_by"),
         supersession_reason: row.get("supersession_reason"),
     }
+}
+
+fn generator_output_root(
+    filename: &Path,
+    override_directory: Option<&Path>,
+) -> anyhow::Result<PathBuf> {
+    let base = match override_directory {
+        Some(directory) => directory.to_owned(),
+        None => filename
+            .parent()
+            .context("persistent database has no parent")?
+            .join(".bambu-generator-outputs"),
+    };
+    anyhow::ensure!(
+        base.is_absolute(),
+        "project output retention directory must be absolute"
+    );
+    anyhow::ensure!(
+        !base
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir)),
+        "project output retention directory must not contain parent traversal"
+    );
+    let existing = base
+        .ancestors()
+        .find(|path| path.exists())
+        .context("project output retention directory has no existing ancestor")?;
+    let canonical = std::fs::canonicalize(existing)?.join(base.strip_prefix(existing)?);
+    for path in [&base, &canonical] {
+        anyhow::ensure!(
+            crate::generator_output_checkpoint::outside_repository(path),
+            "project output retention must remain outside Git checkouts"
+        );
+    }
+    let namespace = crate::cache_key::hex_sha256(filename.as_os_str().as_encoded_bytes());
+    Ok(canonical.join(namespace))
 }
 
 fn generator_artifact_conflict() -> sqlx::Error {
@@ -6044,6 +6148,56 @@ mod tests {
                 .selectors,
             selectors
         );
+    }
+
+    #[test]
+    fn output_retention_root_is_external_absolute_and_scoped_to_one_database() {
+        let parent = PathBuf::from(std::env::var_os("TMPDIR").unwrap_or_else(|| "/tmp".into()))
+            .join("agents");
+        std::fs::create_dir_all(&parent).unwrap();
+        let directory = tempfile::tempdir_in(parent).unwrap();
+        let checkout = directory.path().join("checkout");
+        std::fs::create_dir_all(checkout.join(".git")).unwrap();
+        std::fs::write(checkout.join(".git/HEAD"), "ref: refs/heads/synthetic\n").unwrap();
+        let filename = checkout.join("service.db");
+        assert!(generator_output_root(&filename, None).is_err());
+        assert!(generator_output_root(&filename, Some(Path::new("relative"))).is_err());
+        let external = directory.path().join("external");
+        let retained = generator_output_root(&filename, Some(&external)).unwrap();
+        assert!(retained.starts_with(&external));
+        assert_ne!(
+            retained,
+            generator_output_root(&checkout.join("second.db"), Some(&external)).unwrap()
+        );
+        assert!(generator_output_root(&filename, Some(&external.join("../checkout"))).is_err());
+        let worktree = directory.path().join("worktree");
+        std::fs::create_dir(&worktree).unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            "gitdir: synthetic-external-metadata\n",
+        )
+        .unwrap();
+        assert!(generator_output_root(&worktree.join("service.db"), None).is_err());
+    }
+
+    #[tokio::test]
+    async fn memory_database_output_retention_is_private_and_owned_only_by_test_database() {
+        use std::os::unix::fs::PermissionsExt;
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let root = db.generator_output_root().unwrap();
+        assert!(root.is_absolute());
+        assert_eq!(
+            std::fs::metadata(&root).unwrap().permissions().mode() & 0o077,
+            0
+        );
+        assert!(crate::generator_output_checkpoint::outside_repository(
+            &root
+        ));
+        let clone = db.clone();
+        drop(db);
+        assert!(root.exists());
+        drop(clone);
+        assert!(!root.exists());
     }
 
     fn test_catalog_model(slug: &str, document_id: &str) -> Model {

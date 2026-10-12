@@ -96,16 +96,43 @@ distribution and notice retention, paired source availability, static
 configuration, interface, cache, deployment, and publication behavior. Generator
 release approval alone does not satisfy this service review.
 
-## Remaining Service Work
+## Durable Product Recovery
 
 Catalog selection and presentation are service-owned product policy. The full
 runtime request, approved deployment, compatibility, and protocol declarations
 must remain immutable through queued execution and status lookup.
 
-An interrupted invocation with a prepared recipe but no staged artifact cannot
-silently reacquire geometry and rebind that request: new translation evidence
-would change the recipe. It remains safely unavailable pending a defined durable
-retained-input recovery or explicit new-attempt policy. Completed-upload
-reconciliation can verify existing immutable evidence without rerunning Onshape
-or the generator. This remaining service policy is separate from the missing
-generator metadata handoff; neither gap is hidden by successful synthetic tests.
+A fresh request remains unbound until the trusted runner succeeds. The service
+independently copies and remeasures its accepted output, writes a closed neutral
+receipt, syncs both files and the directory ancestry, and atomically installs a
+private immutable checkpoint. Only then does SQLite bind the exact processing
+recipe and checkpoint identity together. A generator failure before acceptance
+leaves the request unbound, allowing a retry with fresh causal acquisition.
+
+Restart recovery first attempts verified storage reconciliation. If publication
+was interrupted before staging or upload, or storage no longer contains the
+intended bytes, the service reopens the bound checkpoint. It checks the receipt's
+canonical hash, successful invocation, current prepared recipe, result bindings,
+and exact output length and SHA-256 before restoring the private accepted-byte
+handoff. Existing immutable publication and supersession guards still apply.
+Recovery never reacquires geometry or silently changes the associated recipe.
+Corrupt checkpoint evidence and inconsistent associations remain unavailable.
+
+Production requires persistent SQLite storage. By default, checkpoints live in
+`.bambu-generator-outputs/<database-path-hash>` beside the canonical database
+file. `GENERATOR_OUTPUT_RETENTION_DIR` can choose an absolute external base
+directory; it still receives the database-specific namespace. Retention paths
+must remain outside Git checkouts, including through symbolic-link ancestry.
+Checkpoint directories are mode 0700 and files are mode 0600. Paths are
+operational configuration and do not enter processing identity or public status.
+The database path and retention storage must survive application restarts.
+
+Ready checkpoints remain available for exact repair. Resetting generated SQL
+state removes associations without deleting checkpoint bytes. Automatic
+checkpoint pruning is not implemented; operator removal must preserve snapshots
+referenced by retained requests. Missing retention cannot authorize replacement
+bytes under an existing recipe. These service rules are also recorded in the
+[canonical integration policy](slicer-project-generator-integration.md#durable-accepted-output-checkpoints).
+
+The real neutral handoff and service approval remain separate activation gates;
+successful synthetic orchestration and recovery tests do not satisfy them.

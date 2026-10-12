@@ -225,6 +225,10 @@ pub(crate) async fn enqueue(
 ) -> anyhow::Result<ProjectJob> {
     let generator = configured(state)?;
     validate_selectors(model, selectors)?;
+    state
+        .db
+        .generator_output_root()
+        .map_err(|_| failure("deployment_unavailable", "output_retention_unavailable"))?;
     let source_hash = crate::resolve_source_hash(state, model)
         .await
         .map_err(|_| failure("operational_failure", "source_resolution_failed"))?;
@@ -327,6 +331,18 @@ async fn execute_inner(
         producing_job_key == work_key(&request.request_identity),
         "project work identity mismatch"
     );
+    let stored = state
+        .db
+        .bambu_project_request(&request.request_identity)
+        .await?
+        .ok_or_else(|| failure("operational_failure", "request_record_missing"))?;
+    ensure!(
+        stored.request_json == request.canonical_json()?,
+        "project request association mismatch"
+    );
+    if invalid_output_association(&stored) {
+        return Err(failure("operational_failure", "stored_output_association"));
+    }
     let model = state
         .db
         .published_catalog_model(&request.model_slug)
@@ -354,15 +370,6 @@ async fn execute_inner(
     {
         return Err(failure("stale_request", "source_or_configuration_changed"));
     }
-    let stored = state
-        .db
-        .bambu_project_request(&request.request_identity)
-        .await?
-        .ok_or_else(|| failure("operational_failure", "request_record_missing"))?;
-    ensure!(
-        stored.request_json == request.canonical_json()?,
-        "project request association mismatch"
-    );
     let publication = target(request, generator, Some(producing_job_key))?;
     if let Some(hash) = stored.processing_hash {
         let prepared = state
@@ -372,28 +379,47 @@ async fn execute_inner(
             .map_err(|_| failure("operational_failure", "stored_recipe_integrity"))?;
         validate_prepared(request, generator, &prepared)
             .map_err(|_| failure("operational_failure", "stored_recipe_policy"))?;
-        if reconcile_generator_artifact(
+        let reconciled = reconcile_generator_artifact(
             &state.db,
             &state.storage,
             generator,
             &prepared,
             &publication,
         )
-        .await
-        .map_err(|_| failure("operational_failure", "project_reconciliation_failed"))?
-        .is_some()
-        {
+        .await;
+        if matches!(reconciled, Ok(Some(_))) {
             return Ok(());
         }
-        // A new translation has fresh causal evidence and therefore a different
-        // manifest/recipe even when bytes match. Do not silently replace the
-        // immutable association after interrupted execution. Durable retained
-        // input recovery belongs to the remaining production integration.
-        return Err(failure(
-            "operational_failure",
-            "project_input_recovery_required",
-        ));
+        // Reconciliation never reruns acquisition. A durable snapshot of the
+        // already accepted output can repair an absent or corrupt stored object.
+        // Publication still enforces every immutable declaration and supersession
+        // guard; a snapshot cannot replace a malformed or superseded artifact.
+        let snapshot = stored
+            .output_snapshot_identity
+            .ok_or_else(|| failure("operational_failure", "project_input_recovery_required"))?;
+        let root = state
+            .db
+            .generator_output_root()
+            .map_err(|_| failure("deployment_unavailable", "output_retention_unavailable"))?;
+        let output = crate::generator_output_checkpoint::reopen(&root, &snapshot, &prepared)
+            .await
+            .map_err(|_| failure("operational_failure", "output_snapshot_integrity"))?;
+        publish_generator_output(
+            &state.db,
+            &state.storage,
+            generator,
+            &prepared,
+            output,
+            &publication,
+        )
+        .await
+        .map_err(|_| failure("operational_failure", "project_publication_failed"))?;
+        return Ok(());
     }
+    let output_root = state
+        .db
+        .generator_output_root()
+        .map_err(|_| failure("deployment_unavailable", "output_retention_unavailable"))?;
     let api = state.onshape.strict_api().map_err(api_failure)?;
     let trusted = plan_for_acquisition(
         &state.db,
@@ -432,29 +458,45 @@ async fn execute_inner(
     .map_err(|_| failure("operational_failure", "generator_recipe_invalid"))?;
     validate_prepared(request, generator, &prepared)
         .map_err(|_| failure("operational_failure", "recipe_request_mismatch"))?;
-    state
-        .db
-        .bind_bambu_project_recipe(
-            &request.request_identity,
-            &request.canonical_json()?,
-            &prepared,
-        )
-        .await
-        .map_err(|_| failure("operational_failure", "recipe_association_failed"))?;
-    let output = run_generator(generator, inputs, &prepared, &scratch)
-        .await
-        .map_err(runner_failure)?;
+    let result = run_generator(generator, inputs, &prepared, &scratch).await;
+    let output = persist_accepted_output(state, request, &prepared, &output_root, result).await?;
     publish_generator_output(
         &state.db,
         &state.storage,
         generator,
         &prepared,
-        Arc::new(output),
+        output,
         &publication,
     )
     .await
     .map_err(|_| failure("operational_failure", "project_publication_failed"))?;
     Ok(())
+}
+
+async fn persist_accepted_output(
+    state: &AppState,
+    request: &ProjectJob,
+    prepared: &PreparedGeneratorProcessing,
+    root: &std::path::Path,
+    result: Result<crate::generator_runner::VerifiedGeneratorOutput, GeneratorRunnerError>,
+) -> anyhow::Result<Arc<crate::generator_runner::VerifiedGeneratorOutput>> {
+    // Failure returns before any snapshot or immutable request binding. A retry
+    // is free to make a new causal acquisition until accepted bytes exist.
+    let output = Arc::new(result.map_err(runner_failure)?);
+    let snapshot = crate::generator_output_checkpoint::persist(root, output.clone(), prepared)
+        .await
+        .map_err(|_| failure("operational_failure", "output_snapshot_persistence"))?;
+    state
+        .db
+        .bind_bambu_project_output(
+            &request.request_identity,
+            &request.canonical_json()?,
+            prepared,
+            &snapshot,
+        )
+        .await
+        .map_err(|_| failure("operational_failure", "recipe_association_failed"))?;
+    Ok(output)
 }
 
 pub(crate) async fn execute_job(
@@ -514,6 +556,13 @@ pub(crate) async fn status(
     let request = ProjectJob::from_record(&stored.request_json)
         .map_err(|_| failure("operational_failure", "request_record_integrity"))?;
     if request.request_identity != request_identity || request.model_slug != model.slug {
+        return Ok(status);
+    }
+    if invalid_output_association(&stored) {
+        status.status = "failed".to_owned();
+        status.message = "Bambu project recovery evidence could not be verified.".to_owned();
+        status.failure_category = Some("operational_failure".to_owned());
+        status.failure_code = Some("stored_output_association".to_owned());
         return Ok(status);
     }
     if model
@@ -627,6 +676,18 @@ fn safe_category(category: &str) -> &str {
     }
 }
 
+fn invalid_output_association(stored: &crate::db::BambuProjectRequestRecord) -> bool {
+    (stored.processing_hash.is_none() && stored.output_snapshot_identity.is_some())
+        || stored
+            .processing_hash
+            .as_deref()
+            .is_some_and(|hash| !crate::onshape_api::is_sha256(hash))
+        || stored
+            .output_snapshot_identity
+            .as_deref()
+            .is_some_and(|hash| !crate::onshape_api::is_sha256(hash))
+}
+
 fn safe_code(code: Option<&str>) -> &str {
     match code {
         Some(
@@ -651,7 +712,11 @@ fn safe_code(code: Option<&str>) -> &str {
             | "project_publication_failed"
             | "catalog_policy_changed"
             | "project_not_enabled"
-            | "linked_source_unsupported"),
+            | "linked_source_unsupported"
+            | "output_retention_unavailable"
+            | "output_snapshot_integrity"
+            | "output_snapshot_persistence"
+            | "stored_output_association"),
         ) => code,
         _ => "project_operation_failed",
     }

@@ -8,6 +8,7 @@ pub mod configuration_encoding;
 mod db;
 pub mod deployed_generator;
 pub mod generator_inputs;
+mod generator_output_checkpoint;
 pub mod generator_processing;
 pub mod generator_protocol;
 pub mod generator_publication;

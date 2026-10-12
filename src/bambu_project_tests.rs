@@ -3,7 +3,11 @@ use super::*;
 use sqlx::{Row, SqlitePool};
 
 async fn database() -> (tempfile::TempDir, crate::db::Database, SqlitePool) {
-    let directory = tempfile::tempdir().unwrap();
+    let parent =
+        std::path::PathBuf::from(std::env::var_os("TMPDIR").unwrap_or_else(|| "/tmp".into()))
+            .join("agents");
+    std::fs::create_dir_all(&parent).unwrap();
+    let directory = tempfile::tempdir_in(parent).unwrap();
     let url = format!(
         "sqlite://{}?mode=rwc",
         directory.path().join("project.db").display()
@@ -153,12 +157,23 @@ async fn request_association_is_immutable_and_reopen_checks_every_persisted_occu
             .is_err()
     );
     let fixture = crate::generator_runner::tests::RunnerFixture::new("success").await;
-    db.bind_bambu_project_recipe(&request.request_identity, &json, &fixture.prepared)
-        .await
-        .unwrap();
-    db.bind_bambu_project_recipe(&request.request_identity, &json, &fixture.prepared)
-        .await
-        .unwrap();
+    let snapshot = "f".repeat(64);
+    db.bind_bambu_project_output(
+        &request.request_identity,
+        &json,
+        &fixture.prepared,
+        &snapshot,
+    )
+    .await
+    .unwrap();
+    db.bind_bambu_project_output(
+        &request.request_identity,
+        &json,
+        &fixture.prepared,
+        &snapshot,
+    )
+    .await
+    .unwrap();
     let record = db
         .bambu_project_request(&request.request_identity)
         .await
@@ -169,6 +184,20 @@ async fn request_association_is_immutable_and_reopen_checks_every_persisted_occu
         Some(fixture.prepared.processing_hash())
     );
     assert_eq!(
+        record.output_snapshot_identity.as_deref(),
+        Some(snapshot.as_str())
+    );
+    assert!(
+        db.bind_bambu_project_output(
+            &request.request_identity,
+            &json,
+            &fixture.prepared,
+            &"e".repeat(64)
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
         db.reopen_generator_processing(&fixture.generator, fixture.prepared.processing_hash())
             .await
             .unwrap(),
@@ -176,9 +205,14 @@ async fn request_association_is_immutable_and_reopen_checks_every_persisted_occu
     );
     let another = crate::generator_runner::tests::RunnerFixture::new("malformed").await;
     assert!(
-        db.bind_bambu_project_recipe(&request.request_identity, &json, &another.prepared)
-            .await
-            .is_err()
+        db.bind_bambu_project_output(
+            &request.request_identity,
+            &json,
+            &another.prepared,
+            &snapshot
+        )
+        .await
+        .is_err()
     );
     sqlx::query("UPDATE generator_processing_occurrences SET placement_json = '{}' WHERE processing_hash = ? AND occurrence_order = 1")
         .bind(fixture.prepared.processing_hash()).execute(&pool).await.unwrap();
@@ -241,6 +275,7 @@ struct RuntimeFixture {
     request: ProjectJob,
     prepared: PreparedGeneratorProcessing,
     object_key: String,
+    snapshot_identity: String,
     objects: RuntimeObjects,
     calls: RuntimeCalls,
     server: tokio::task::JoinHandle<()>,
@@ -366,18 +401,28 @@ impl RuntimeFixture {
         )
         .await
         .unwrap();
-        db.bind_bambu_project_recipe(
-            &request.request_identity,
-            &request.canonical_json().unwrap(),
+        let output = Arc::new(
+            run_generator(
+                &generator,
+                inputs,
+                &prepared,
+                &GeneratorRunnerOptions::default(),
+            )
+            .await
+            .unwrap(),
+        );
+        let snapshot = crate::generator_output_checkpoint::persist(
+            &db.generator_output_root().unwrap(),
+            output.clone(),
             &prepared,
         )
         .await
         .unwrap();
-        let output = run_generator(
-            &generator,
-            inputs,
+        db.bind_bambu_project_output(
+            &request.request_identity,
+            &request.canonical_json().unwrap(),
             &prepared,
-            &GeneratorRunnerOptions::default(),
+            &snapshot,
         )
         .await
         .unwrap();
@@ -495,10 +540,41 @@ impl RuntimeFixture {
             request,
             prepared,
             object_key,
+            snapshot_identity: snapshot,
             objects,
             calls,
             server,
         }
+    }
+
+    async fn remove_publication(&self) {
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            self._directory.path().join("project.db").display()
+        );
+        let pool = SqlitePool::connect(&url).await.unwrap();
+        sqlx::query("DELETE FROM artifact_files")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM artifact_sets")
+            .execute(&pool)
+            .await
+            .unwrap();
+        self.objects
+            .lock()
+            .unwrap()
+            .remove(&format!("/synthetic-bucket/{}", self.object_key));
+    }
+
+    async fn restarted_state(&self) -> AppState {
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            self._directory.path().join("project.db").display()
+        );
+        let mut state = self.state.clone();
+        state.db = crate::db::Database::connect(&url).await.unwrap();
+        state
     }
 }
 
@@ -509,9 +585,32 @@ async fn runtime_storage(
     request: axum::extract::Request,
 ) -> axum::response::Response {
     let method = request.method().as_str().to_owned();
+    let path = request.uri().path().to_owned();
     calls.lock().unwrap().push(method.clone());
+    if method == "PUT" {
+        let media = request.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let chunked = request
+            .headers()
+            .get("content-encoding")
+            .is_some_and(|value| value.to_str().unwrap().contains("aws-chunked"));
+        let mut bytes = axum::body::to_bytes(request.into_body(), 1_048_576)
+            .await
+            .unwrap()
+            .to_vec();
+        if chunked {
+            bytes = decode_storage_chunks(&bytes);
+        }
+        objects.lock().unwrap().insert(path, (bytes, media));
+        return axum::response::Response::builder()
+            .status(200)
+            .body(axum::body::Body::empty())
+            .unwrap();
+    }
     let objects = objects.lock().unwrap();
-    let Some((bytes, media)) = objects.get(request.uri().path()) else {
+    let Some((bytes, media)) = objects.get(&path) else {
         return axum::response::Response::builder()
             .status(404)
             .body(axum::body::Body::empty())
@@ -527,6 +626,28 @@ async fn runtime_storage(
             axum::body::Body::from(bytes.clone())
         })
         .unwrap()
+}
+
+fn decode_storage_chunks(mut bytes: &[u8]) -> Vec<u8> {
+    let mut decoded = Vec::new();
+    loop {
+        let end = bytes.windows(2).position(|part| part == b"\r\n").unwrap();
+        let size = usize::from_str_radix(
+            std::str::from_utf8(&bytes[..end])
+                .unwrap()
+                .split(';')
+                .next()
+                .unwrap(),
+            16,
+        )
+        .unwrap();
+        if size == 0 {
+            return decoded;
+        }
+        bytes = &bytes[end + 2..];
+        decoded.extend_from_slice(&bytes[..size]);
+        bytes = &bytes[size + 2..];
+    }
 }
 
 #[tokio::test]
@@ -600,7 +721,7 @@ async fn completed_upload_reconciles_without_acquisition_and_exact_cached_reques
 }
 
 #[tokio::test]
-async fn failed_storage_reverification_withdraws_ready_project_and_reports_safe_failure() {
+async fn failed_storage_reverification_repairs_the_exact_retained_output() {
     let fixture = RuntimeFixture::new().await;
     execute_job(
         &fixture.state,
@@ -616,29 +737,37 @@ async fn failed_storage_reverification_withdraws_ready_project_and_reports_safe_
         .get_mut(&format!("/synthetic-bucket/{}", fixture.object_key))
         .unwrap()
         .0[0] ^= 1;
-    let error = execute_job(
+    execute_job(
         &fixture.state,
         &fixture.request,
         &work_key(&fixture.request.request_identity),
     )
     .await
-    .unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "project generation failed: operational_failure (project_reconciliation_failed)"
-    );
-    let failed = status(
+    .unwrap();
+    let repaired = status(
         &fixture.state,
         &fixture.model,
         &fixture.request.request_identity,
     )
     .await
     .unwrap();
-    assert_eq!(failed.status, "failed");
-    assert!(failed.object_key.is_none() && failed.public_url.is_none());
+    assert_eq!(repaired.status, "ready");
+    assert!(repaired.failure_code.is_none());
     assert_eq!(
-        failed.failure_code.as_deref(),
-        Some("project_reconciliation_failed")
+        fixture.objects.lock().unwrap()[&format!("/synthetic-bucket/{}", fixture.object_key)]
+            .0
+            .as_slice(),
+        b"synthetic generated project"
+    );
+    assert_eq!(
+        fixture
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|method| *method == "PUT")
+            .count(),
+        1
     );
     assert_eq!(
         fixture
@@ -720,7 +849,7 @@ async fn unconfigured_project_route_returns_unavailable_without_queueing_or_stor
 }
 
 #[tokio::test]
-async fn associated_recipe_without_artifact_requires_recovery_without_new_acquisition() {
+async fn legacy_associated_recipe_without_snapshot_requires_recovery_without_new_acquisition() {
     let fixture = RuntimeFixture::new().await;
     let url = format!(
         "sqlite://{}?mode=rwc",
@@ -732,6 +861,10 @@ async fn associated_recipe_without_artifact_requires_recovery_without_new_acquis
         .await
         .unwrap();
     sqlx::query("DELETE FROM artifact_sets")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE bambu_project_requests SET output_snapshot_identity = NULL")
         .execute(&pool)
         .await
         .unwrap();
@@ -771,6 +904,516 @@ async fn associated_recipe_without_artifact_requires_recovery_without_new_acquis
             .processing_hash
             .as_deref(),
         Some(fixture.prepared.processing_hash())
+    );
+}
+
+#[tokio::test]
+async fn accepted_snapshot_resumes_after_restart_before_upload_without_reacquisition() {
+    let fixture = RuntimeFixture::new().await;
+    fixture.remove_publication().await;
+    let restarted = fixture.restarted_state().await;
+    assert_eq!(
+        restarted.db.generator_output_root().unwrap(),
+        fixture.state.db.generator_output_root().unwrap()
+    );
+    execute_job(
+        &restarted,
+        &fixture.request,
+        &work_key(&fixture.request.request_identity),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        *fixture.calls.lock().unwrap(),
+        vec!["GET", "PUT", "HEAD", "GET"]
+    );
+    let ready = status(
+        &restarted,
+        &fixture.model,
+        &fixture.request.request_identity,
+    )
+    .await
+    .unwrap();
+    assert_eq!(ready.status, "ready");
+    assert_eq!(
+        ready.object_key.as_deref(),
+        Some(fixture.object_key.as_str())
+    );
+    let record = restarted
+        .db
+        .bambu_project_request(&fixture.request.request_identity)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        record.output_snapshot_identity.as_deref(),
+        Some(fixture.snapshot_identity.as_str())
+    );
+    assert_eq!(
+        record.processing_hash.as_deref(),
+        Some(fixture.prepared.processing_hash())
+    );
+}
+
+#[tokio::test]
+async fn corrupt_output_snapshot_is_rejected_without_upload_or_new_acquisition() {
+    let fixture = RuntimeFixture::new().await;
+    fixture.remove_publication().await;
+    let retained = fixture
+        .state
+        .db
+        .generator_output_root()
+        .unwrap()
+        .join(&fixture.snapshot_identity)
+        .join("output.bin");
+    let mut bytes = std::fs::read(&retained).unwrap();
+    bytes[0] ^= 1;
+    std::fs::write(&retained, bytes).unwrap();
+    let restarted = fixture.restarted_state().await;
+    let error = execute_job(
+        &restarted,
+        &fixture.request,
+        &work_key(&fixture.request.request_identity),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "project generation failed: operational_failure (output_snapshot_integrity)"
+    );
+    assert_eq!(*fixture.calls.lock().unwrap(), vec!["GET"]);
+    let failed = status(
+        &restarted,
+        &fixture.model,
+        &fixture.request.request_identity,
+    )
+    .await
+    .unwrap();
+    assert_eq!(failed.status, "failed");
+    assert!(failed.object_key.is_none());
+    assert_eq!(
+        failed.failure_code.as_deref(),
+        Some("output_snapshot_integrity")
+    );
+}
+
+#[tokio::test]
+async fn snapshot_without_recipe_is_rejected_before_metadata_or_acquisition() {
+    let fixture = RuntimeFixture::new().await;
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        fixture._directory.path().join("project.db").display()
+    );
+    let pool = SqlitePool::connect(&url).await.unwrap();
+    sqlx::query("UPDATE bambu_project_requests SET processing_hash = NULL")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let error = execute_job(
+        &fixture.state,
+        &fixture.request,
+        &work_key(&fixture.request.request_identity),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "project generation failed: operational_failure (stored_output_association)"
+    );
+    assert!(fixture.calls.lock().unwrap().is_empty());
+    let failed = status(
+        &fixture.state,
+        &fixture.model,
+        &fixture.request.request_identity,
+    )
+    .await
+    .unwrap();
+    assert_eq!(failed.status, "failed");
+    assert_eq!(
+        failed.failure_code.as_deref(),
+        Some("stored_output_association")
+    );
+    assert!(failed.object_key.is_none());
+}
+
+#[tokio::test]
+async fn runner_failure_leaves_request_unbound_and_an_exact_retry_can_be_queued() {
+    let mut fixture = RuntimeFixture::new().await;
+    let failed = crate::generator_runner::tests::RunnerFixture::new("structured").await;
+    let generator = failed.generator.clone();
+    let inputs = crate::onshape_geometry::generator_project_test_inputs(
+        &bambu_deployment::input_policy(&generator),
+    )
+    .await;
+    let prepared = prepare_generator_processing(
+        &generator,
+        &bambu_deployment::compatibility(&generator),
+        inputs.manifest(),
+        inputs.settings(),
+        inputs.expected_placements(),
+        &bambu_deployment::protocol_inputs(&generator),
+    )
+    .unwrap();
+    let mut request = fixture.request.clone();
+    request.generator_static_identity = generator.static_identity().to_owned();
+    request.policy_identity = profile_identity(&generator).unwrap();
+    request.request_identity = request.identity().unwrap();
+    fixture.state.deployed_generator = Some(
+        crate::deployed_generator::DeployedGeneratorAvailability::Available(Box::new(
+            generator.clone(),
+        )),
+    );
+    fixture
+        .state
+        .db
+        .insert_bambu_project_request(
+            &request.request_identity,
+            &request.canonical_json().unwrap(),
+        )
+        .await
+        .unwrap();
+    let result = run_generator(
+        &generator,
+        inputs,
+        &prepared,
+        &GeneratorRunnerOptions::default(),
+    )
+    .await;
+    let error = persist_accepted_output(
+        &fixture.state,
+        &request,
+        &prepared,
+        &fixture.state.db.generator_output_root().unwrap(),
+        result,
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(
+        error.to_string(),
+        "project generation failed: operational_failure (generator_reported_failure)"
+    );
+    let record = fixture
+        .state
+        .db
+        .bambu_project_request(&request.request_identity)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(record.processing_hash.is_none() && record.output_snapshot_identity.is_none());
+    assert!(
+        fixture
+            .state
+            .db
+            .reopen_generator_processing(&generator, prepared.processing_hash())
+            .await
+            .is_err()
+    );
+    let queued = enqueue(
+        &fixture.state,
+        &fixture.model,
+        &ValidatedConfiguration {
+            values: HashMap::new(),
+            typed_values: Default::default(),
+        },
+        &request.selectors,
+    )
+    .await
+    .unwrap();
+    assert_eq!(queued.request_identity, request.request_identity);
+    assert_eq!(
+        fixture
+            .state
+            .db
+            .job(&work_key(&queued.request_identity))
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "queued"
+    );
+    assert!(fixture.calls.lock().unwrap().is_empty());
+}
+
+#[derive(Clone)]
+struct FreshApiScript {
+    replies: Arc<std::sync::Mutex<std::collections::VecDeque<FreshApiReply>>>,
+    requests: Arc<std::sync::Mutex<Vec<FreshApiRequest>>>,
+}
+
+struct FreshApiReply {
+    media: &'static str,
+    bytes: Vec<u8>,
+}
+
+struct FreshApiRequest {
+    method: String,
+    path: String,
+    bytes: Vec<u8>,
+}
+
+fn fresh_json(value: serde_json::Value) -> FreshApiReply {
+    FreshApiReply {
+        media: "application/json",
+        bytes: serde_json::to_vec(&value).unwrap(),
+    }
+}
+
+async fn fresh_api(
+    axum::extract::State(script): axum::extract::State<FreshApiScript>,
+    request: axum::extract::Request,
+) -> axum::response::Response {
+    let method = request.method().as_str().to_owned();
+    let path = request.uri().path().to_owned();
+    let bytes = axum::body::to_bytes(request.into_body(), 65_536)
+        .await
+        .unwrap()
+        .to_vec();
+    script.requests.lock().unwrap().push(FreshApiRequest {
+        method,
+        path,
+        bytes,
+    });
+    let Some(reply) = script.replies.lock().unwrap().pop_front() else {
+        return axum::response::Response::builder()
+            .status(500)
+            .body(axum::body::Body::empty())
+            .unwrap();
+    };
+    axum::response::Response::builder()
+        .status(200)
+        .header("content-type", reply.media)
+        .header("content-length", reply.bytes.len().to_string())
+        .header("connection", "close")
+        .body(axum::body::Body::from(reply.bytes))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn fresh_worker_executes_trusted_acquisition_runner_checkpoint_and_verified_publication() {
+    let mut fixture = RuntimeFixture::new().await;
+    fixture.model.onshape = catalog::OnshapeSource {
+        document_id: "fresh-document".to_owned(),
+        version_id: "fresh-version".to_owned(),
+        element_id: "fresh-element".to_owned(),
+        element_kind: catalog::ElementKind::PartStudio,
+        link_document_id: None,
+    };
+    let parts = ["fresh-part-a", "fresh-part-b", "fresh-part-c"];
+    fixture.model.exports.bambu_project = Some(catalog::BambuProjectConfig {
+        selectors: parts
+            .iter()
+            .map(|id| SelectionSelector::Part {
+                part_id: (*id).to_owned(),
+            })
+            .collect(),
+    });
+    fixture
+        .state
+        .db
+        .replace_catalog(&catalog::Catalog::from_models(vec![fixture.model.clone()]).unwrap())
+        .await
+        .unwrap();
+    let source_hash =
+        crate::cache_model::source_hash(&crate::cache_model::ResolvedOnshapeSourceIdentity {
+            document_id: fixture.model.onshape.document_id.clone(),
+            version_id: fixture.model.onshape.version_id.clone(),
+            microversion_id: "fresh-microversion".to_owned(),
+            element_id: fixture.model.onshape.element_id.clone(),
+            element_kind: catalog::ElementKind::PartStudio,
+            link_document_id: None,
+        })
+        .unwrap();
+    fixture
+        .state
+        .db
+        .upsert_source_resolution(crate::db::SourceResolutionUpsert {
+            source_hash: &source_hash,
+            model_slug: &fixture.model.slug,
+            document_id: &fixture.model.onshape.document_id,
+            version_id: &fixture.model.onshape.version_id,
+            microversion_id: "fresh-microversion",
+            element_id: &fixture.model.onshape.element_id,
+            element_kind: "part_studio",
+            link_document_id: None,
+            diagnostics_json: "{}",
+        })
+        .await
+        .unwrap();
+    let schema = crate::parameters::ParameterSchema {
+        schema_version: crate::parameters::SCHEMA_VERSION,
+        source: fixture.model.onshape.clone(),
+        parameters: vec![],
+    };
+    fixture.objects.lock().unwrap().insert(
+        "/synthetic-bucket/fresh-parameters".to_owned(),
+        (
+            serde_json::to_vec(&schema).unwrap(),
+            "application/json".to_owned(),
+        ),
+    );
+    fixture
+        .state
+        .db
+        .upsert_parameter_metadata(
+            &source_hash,
+            "fresh-parameters-raw",
+            "fresh-parameters",
+            "fresh-schema",
+            crate::parameters::SCHEMA_VERSION as i64,
+        )
+        .await
+        .unwrap();
+    let version = || {
+        fresh_json(
+            serde_json::json!({ "documentId":"fresh-document", "id":"fresh-version", "microversion":"fresh-microversion" }),
+        )
+    };
+    let metadata: Vec<_> = parts
+        .iter()
+        .map(|id| {
+            serde_json::json!({
+                "elementId":"fresh-element", "microversionId":"fresh-microversion", "partId":id,
+                "configurationId":"fresh-response-configuration", "bodyType":"solid",
+                "isFlattenedBody":false, "isMesh":false, "meshState":"NO_MESH", "isHidden":false,
+                "name":"Fresh source-neutral part", "description":"",
+            })
+        })
+        .collect();
+    let mut replies = std::collections::VecDeque::from([
+        version(),
+        fresh_json(
+            serde_json::json!({ "encodedId":"fresh-original-encoding", "queryParam":"configuration=fresh-original-encoding" }),
+        ),
+        version(),
+        fresh_json(serde_json::json!(metadata)),
+        version(),
+    ]);
+    for position in 0..3 {
+        replies.push_back(fresh_json(serde_json::json!({ "id":format!("fresh-translation-{position}"),
+            "requestState":"DONE", "resultExternalDataIds":[format!("fresh-external-{position}")] })));
+        replies.push_back(FreshApiReply {
+            media: "application/octet-stream",
+            bytes: b"fresh opaque geometry bytes".to_vec(),
+        });
+    }
+    let script = FreshApiScript {
+        replies: Arc::new(std::sync::Mutex::new(replies)),
+        requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    fixture
+        .state
+        .onshape
+        .set_test_selection_origin(format!("http://{}", listener.local_addr().unwrap()));
+    let router = axum::Router::new()
+        .fallback(fresh_api)
+        .with_state(script.clone());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let request = enqueue(
+        &fixture.state,
+        &fixture.model,
+        &ValidatedConfiguration {
+            values: HashMap::new(),
+            typed_values: Default::default(),
+        },
+        &fixture
+            .model
+            .exports
+            .bambu_project
+            .as_ref()
+            .unwrap()
+            .selectors,
+    )
+    .await
+    .unwrap();
+    let before = fixture
+        .state
+        .db
+        .bambu_project_request(&request.request_identity)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(before.processing_hash.is_none() && before.output_snapshot_identity.is_none());
+    assert!(script.requests.lock().unwrap().is_empty());
+    let result = execute_job(
+        &fixture.state,
+        &request,
+        &work_key(&request.request_identity),
+    )
+    .await;
+    server.abort();
+    result.unwrap();
+    {
+        let requests = script.requests.lock().unwrap();
+        assert_eq!(requests.len(), 11);
+        assert!(script.replies.lock().unwrap().is_empty());
+        let creates: Vec<_> = requests
+            .iter()
+            .filter(|request| request.method == "POST" && request.path.ends_with("/translations"))
+            .collect();
+        assert_eq!(creates.len(), 3);
+        for (created, part) in creates.iter().zip(parts) {
+            let body: serde_json::Value = serde_json::from_slice(&created.bytes).unwrap();
+            assert_eq!(body["configuration"], "fresh-original-encoding");
+            assert_eq!(body["partIds"], part);
+        }
+    }
+    let after = fixture
+        .state
+        .db
+        .bambu_project_request(&request.request_identity)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(after.processing_hash.is_some() && after.output_snapshot_identity.is_some());
+    let ready = status(&fixture.state, &fixture.model, &request.request_identity)
+        .await
+        .unwrap();
+    assert_eq!(ready.status, "ready");
+    assert_eq!(
+        *fixture.calls.lock().unwrap(),
+        vec!["GET", "PUT", "HEAD", "GET"]
+    );
+    let generator = configured(&fixture.state).unwrap();
+    let prepared = fixture
+        .state
+        .db
+        .reopen_generator_processing(generator, after.processing_hash.as_deref().unwrap())
+        .await
+        .unwrap();
+    assert_ne!(
+        prepared.recipe().input_manifest.configuration_identity,
+        request.config_hash
+    );
+    let retained = crate::generator_output_checkpoint::reopen(
+        &fixture.state.db.generator_output_root().unwrap(),
+        after.output_snapshot_identity.as_deref().unwrap(),
+        &prepared,
+    )
+    .await
+    .unwrap();
+    let mut bytes = Vec::new();
+    retained.copy_to(&mut bytes).unwrap();
+    assert_eq!(bytes.as_slice(), b"synthetic generated project");
+    let cached = enqueue(
+        &fixture.state,
+        &fixture.model,
+        &ValidatedConfiguration {
+            values: HashMap::new(),
+            typed_values: Default::default(),
+        },
+        &request.selectors,
+    )
+    .await
+    .unwrap();
+    assert_eq!(cached.request_identity, request.request_identity);
+    assert_eq!(script.requests.lock().unwrap().len(), 11);
+    assert_eq!(
+        *fixture.calls.lock().unwrap(),
+        vec!["GET", "PUT", "HEAD", "GET"]
     );
 }
 
