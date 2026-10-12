@@ -102,6 +102,160 @@ fn operational_failures_remain_distinct_and_hide_upstream_text() {
     assert_eq!(safe_category("private_document"), "operational_failure");
 }
 
+#[test]
+fn generator_protocol_candidate_deployment_and_storage_failures_have_distinct_safe_codes() {
+    let cases = [
+        (
+            GeneratorRunnerError::UnexpectedExit { code: 7 },
+            "generator_unexpected_exit",
+        ),
+        (
+            GeneratorRunnerError::MalformedResult,
+            "generator_protocol_invalid",
+        ),
+        (
+            GeneratorRunnerError::ResultIdentityMismatch,
+            "generator_identity_mismatch",
+        ),
+        (
+            GeneratorRunnerError::CandidateMismatch,
+            "generator_candidate_integrity",
+        ),
+        (
+            GeneratorRunnerError::DeploymentIntegrity(
+                crate::deployed_generator::DeployedGeneratorError::NotConfigured,
+            ),
+            "deployment_integrity",
+        ),
+    ];
+    let mut codes = std::collections::HashSet::new();
+    for (input, expected) in cases {
+        let error = runner_failure(input);
+        let safe = error.downcast_ref::<ProjectFailure>().unwrap();
+        assert_eq!(safe.code, expected);
+        assert_eq!(safe_code(Some(safe.code)), expected);
+        assert!(codes.insert(safe.code));
+    }
+    for (input, expected) in [
+        (
+            GeneratorPublicationFailure::Upload(anyhow::anyhow!(
+                "private source name and storage details"
+            )),
+            "project_upload_failed",
+        ),
+        (
+            GeneratorPublicationFailure::StorageVerification(anyhow::anyhow!(
+                "private source name and storage details"
+            )),
+            "project_storage_verification_failed",
+        ),
+    ] {
+        let error = publication_failure(
+            anyhow::Error::new(input).context("additional private backend context"),
+        );
+        let safe = error.downcast_ref::<ProjectFailure>().unwrap();
+        assert_eq!(safe.code, expected);
+        assert!(!error.to_string().contains("private"));
+        assert_eq!(safe_code(Some(safe.code)), expected);
+        assert!(codes.insert(safe.code));
+    }
+    let unsupported = runner_failure(GeneratorRunnerError::UnsupportedCombination);
+    assert_eq!(
+        unsupported
+            .downcast_ref::<ProjectFailure>()
+            .unwrap()
+            .category,
+        "unsupported_request"
+    );
+    let mixed = crate::generator_protocol::parse_result(br#"{"documentType":"generatorResult","protocolVersion":1,"status":"failure","diagnostics":[],"errors":[{"category":"unsupportedRequest","code":"unsupported","message":"Unsupported","context":[]},{"category":"internalError","code":"internal","message":"Internal","context":[]}]}"#).unwrap();
+    let mixed = runner_failure(GeneratorRunnerError::StructuredFailure {
+        result: Box::new(mixed),
+    });
+    assert_eq!(
+        mixed.downcast_ref::<ProjectFailure>().unwrap().category,
+        "operational_failure"
+    );
+    assert_eq!(
+        mixed.downcast_ref::<ProjectFailure>().unwrap().code,
+        "generator_reported_failure"
+    );
+}
+
+#[tokio::test]
+async fn unsupported_generator_request_remains_unavailable_with_no_published_artifact() {
+    let fixture = RuntimeFixture::new().await;
+    fixture.remove_publication().await;
+    let result = crate::generator_protocol::parse_result(br#"{"documentType":"generatorResult","protocolVersion":1,"status":"failure","diagnostics":[],"errors":[{"category":"unsupportedRequest","code":"private_source_code","message":"private source message","context":[]}]}"#).unwrap();
+    let error = runner_failure(GeneratorRunnerError::StructuredFailure {
+        result: Box::new(result),
+    });
+    let safe = error.downcast_ref::<ProjectFailure>().unwrap();
+    assert_eq!(safe.category, "unsupported_request");
+    assert_eq!(safe.code, "generator_unsupported_request");
+    assert!(!error.to_string().contains("private"));
+    fixture
+        .state
+        .db
+        .record_bambu_project_failure(
+            &fixture.request.request_identity,
+            Some(safe.category),
+            Some(safe.code),
+        )
+        .await
+        .unwrap();
+    let unavailable = status(
+        &fixture.state,
+        &fixture.model,
+        &fixture.request.request_identity,
+    )
+    .await
+    .unwrap();
+    assert_eq!(unavailable.status, "unavailable");
+    assert_eq!(
+        unavailable.failure_category.as_deref(),
+        Some("unsupported_request")
+    );
+    assert!(unavailable.object_key.is_none() && unavailable.public_url.is_none());
+}
+
+#[tokio::test]
+async fn reopened_recipe_enforces_reviewed_geometry_input_limits_before_publication() {
+    let fixture = RuntimeFixture::new().await;
+    let generator = configured(&fixture.state).unwrap();
+    let recipe = fixture.prepared.recipe();
+    let mut manifest = recipe.input_manifest.clone();
+    manifest.objects[0].retained_content.byte_length =
+        bambu_deployment::MAX_GEOMETRY_FILE_BYTES + 1;
+    manifest.input_set_identity = manifest.computed_input_set_identity().unwrap();
+    manifest.manifest_identity = manifest.computed_manifest_identity().unwrap();
+    let expected: Vec<_> = manifest
+        .objects
+        .iter()
+        .zip(&recipe.settings.placements)
+        .map(
+            |(object, placement)| crate::onshape_annotation::ExpectedPlacementSummaryV2 {
+                object_identity: object.object_identity.clone(),
+                transport_role: object.role,
+                expected_neutral_placement_matrix: placement.matrix.clone(),
+            },
+        )
+        .collect();
+    let oversized = prepare_generator_processing(
+        generator,
+        &bambu_deployment::compatibility(generator),
+        &manifest,
+        &recipe.settings,
+        &expected,
+        &bambu_deployment::protocol_inputs(generator),
+    )
+    .unwrap();
+    let error = validate_prepared(&fixture.request, generator, &oversized).unwrap_err();
+    let safe = error.downcast_ref::<ProjectFailure>().unwrap();
+    assert_eq!(safe.category, "unsupported_request");
+    assert_eq!(safe.code, "input_limit_exceeded");
+    assert!(fixture.calls.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn stored_recipe_reopens_against_current_deployment_and_rejects_any_recipe_edit() {
     let fixture = crate::generator_runner::tests::RunnerFixture::new("success").await;
@@ -264,20 +418,20 @@ async fn project_lease_extension_requires_current_running_attempt() {
     );
 }
 
-type RuntimeObjects = Arc<std::sync::Mutex<HashMap<String, (Vec<u8>, String)>>>;
-type RuntimeCalls = Arc<std::sync::Mutex<Vec<String>>>;
+pub(crate) type RuntimeObjects = Arc<std::sync::Mutex<HashMap<String, (Vec<u8>, String)>>>;
+pub(crate) type RuntimeCalls = Arc<std::sync::Mutex<Vec<String>>>;
 
-struct RuntimeFixture {
-    _directory: tempfile::TempDir,
+pub(crate) struct RuntimeFixture {
+    pub(crate) _directory: tempfile::TempDir,
     _runner: crate::generator_runner::tests::RunnerFixture,
-    state: AppState,
-    model: catalog::Model,
-    request: ProjectJob,
+    pub(crate) state: AppState,
+    pub(crate) model: catalog::Model,
+    pub(crate) request: ProjectJob,
     prepared: PreparedGeneratorProcessing,
     object_key: String,
     snapshot_identity: String,
-    objects: RuntimeObjects,
-    calls: RuntimeCalls,
+    pub(crate) objects: RuntimeObjects,
+    pub(crate) calls: RuntimeCalls,
     server: tokio::task::JoinHandle<()>,
 }
 
@@ -288,7 +442,7 @@ impl Drop for RuntimeFixture {
 }
 
 impl RuntimeFixture {
-    async fn new() -> Self {
+    pub(crate) async fn new() -> Self {
         use crate::{
             catalog::*,
             config::{OnshapeConfig, StorageConfig},
@@ -1136,30 +1290,30 @@ async fn runner_failure_leaves_request_unbound_and_an_exact_retry_can_be_queued(
 }
 
 #[derive(Clone)]
-struct FreshApiScript {
-    replies: Arc<std::sync::Mutex<std::collections::VecDeque<FreshApiReply>>>,
-    requests: Arc<std::sync::Mutex<Vec<FreshApiRequest>>>,
+pub(crate) struct FreshApiScript {
+    pub(crate) replies: Arc<std::sync::Mutex<std::collections::VecDeque<FreshApiReply>>>,
+    pub(crate) requests: Arc<std::sync::Mutex<Vec<FreshApiRequest>>>,
 }
 
-struct FreshApiReply {
-    media: &'static str,
-    bytes: Vec<u8>,
+pub(crate) struct FreshApiReply {
+    pub(crate) media: &'static str,
+    pub(crate) bytes: Vec<u8>,
 }
 
-struct FreshApiRequest {
-    method: String,
-    path: String,
-    bytes: Vec<u8>,
+pub(crate) struct FreshApiRequest {
+    pub(crate) method: String,
+    pub(crate) path: String,
+    pub(crate) bytes: Vec<u8>,
 }
 
-fn fresh_json(value: serde_json::Value) -> FreshApiReply {
+pub(crate) fn fresh_json(value: serde_json::Value) -> FreshApiReply {
     FreshApiReply {
         media: "application/json",
         bytes: serde_json::to_vec(&value).unwrap(),
     }
 }
 
-async fn fresh_api(
+pub(crate) async fn fresh_api(
     axum::extract::State(script): axum::extract::State<FreshApiScript>,
     request: axum::extract::Request,
 ) -> axum::response::Response {

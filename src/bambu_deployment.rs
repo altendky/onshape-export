@@ -1,6 +1,5 @@
-//! The real Bambu deployment remains unavailable until its complete neutral
-//! release handoff is reviewed. Test-only synthetic entries exercise the service
-//! orchestration without asserting approval of missing release identities.
+//! Admission of one exact released package through reviewed neutral metadata.
+//! The complete external handoff remains outside the service repository.
 
 use std::{os::unix::fs::MetadataExt, path::Path};
 
@@ -12,13 +11,20 @@ use crate::{
     },
     generator_inputs::GeneratorInputPolicy,
     generator_processing::GeneratorProcessingProtocolInputs,
-    generator_protocol::{OutputDeclaration, OutputRole},
+    generator_protocol::{InputManifest, OutputDeclaration, OutputRole},
 };
 
 pub const RELEASE_TAG: &str = "bambu-studio-v0.1.0";
 pub const PACKAGE_SHA256: &str = "a9c859962d23de9812a28871fa6a80334b7543ab695b52db73ca2d91387c3d9c";
 pub const BINARY_SHA256: &str = "734aa2340c954b7d06f1cea0d6c307b33279ffdd74b10cfe1639cdefc7e5e44c";
 pub const INSTALL_ROOT: &str = "/opt/onshape-export/generators/bambu-studio-v0.1.0";
+pub const HANDOFF_COMMIT: &str = "7acb58a4d631c1afdd3d7ffc450d431f184c0160";
+pub const HANDOFF_SHA256: &str = "8547eae6e1d9378040922972ab9c9bc4561d54afb9c0ba9e3e7305e320eeb40f";
+pub const STATIC_IDENTITY: &str =
+    "fd088d4e2066db7de9a26436ad081f045f1fac472429f249d58f623b3c6f8beb";
+pub const MAX_GEOMETRY_FILE_BYTES: u64 = 16_777_216;
+pub const MAX_GEOMETRY_TOTAL_BYTES: u64 = 67_108_864;
+pub const MAX_OUTPUT_BYTES: u64 = 33_554_432;
 
 pub fn configured_generator(state: &crate::AppState) -> anyhow::Result<&DeployedGenerator> {
     let Some(DeployedGeneratorAvailability::Available(generator)) =
@@ -47,13 +53,17 @@ fn validate_release(generator: &DeployedGenerator) -> anyhow::Result<()> {
         .document()
         .dialect_identity
         .starts_with("synthetic-")
+        && generator.document().package_sha256 != PACKAGE_SHA256
+        && generator.document().binary_sha256 != BINARY_SHA256
     {
         return Ok(());
     }
     let document = generator.document();
     ensure!(
-        document.package_sha256 == PACKAGE_SHA256 && document.binary_sha256 == BINARY_SHA256,
-        "configured deployment does not match the measured Bambu release bytes"
+        generator.static_identity() == STATIC_IDENTITY
+            && document.package_sha256 == PACKAGE_SHA256
+            && document.binary_sha256 == BINARY_SHA256,
+        "configured deployment does not match the complete reviewed {RELEASE_TAG} handoff"
     );
     ensure!(
         document.executable_path
@@ -64,14 +74,17 @@ fn validate_release(generator: &DeployedGenerator) -> anyhow::Result<()> {
     let config = std::env::var_os(crate::deployed_generator::CONFIG_PATH_ENVIRONMENT_VARIABLE)
         .ok_or_else(|| anyhow::anyhow!("Bambu deployment configuration path is absent"))?;
     verify_root_owned_path(Path::new(&config), false)?;
-    bail!(
-        "{RELEASE_TAG} deployment requires the missing reviewed complete neutral identity handoff"
+    let handoff = Path::new(INSTALL_ROOT).join("handoff/handoff.json");
+    verify_root_owned_path(&handoff, false)?;
+    ensure!(
+        crate::cache_key::hex_sha256(&std::fs::read(&handoff)?) == HANDOFF_SHA256,
+        "installed neutral handoff does not match reviewed commit {HANDOFF_COMMIT}"
     );
+    Ok(())
 }
 
 /// The deployment installer creates regular root-owned files in root-owned
-/// directories. This check is available for the eventual reviewed configuration;
-/// it does not substitute for the missing immutable identity handoff.
+/// directories. This check supplements complete immutable identity admission.
 pub fn verify_root_owned_path(path: &Path, executable: bool) -> anyhow::Result<()> {
     ensure!(path.is_absolute(), "deployment path must be absolute");
     for (index, current) in path.ancestors().enumerate() {
@@ -99,9 +112,7 @@ pub fn verify_root_owned_path(path: &Path, executable: bool) -> anyhow::Result<(
     Ok(())
 }
 
-/// These service-owned declarations are used only after configured_generator
-/// has admitted the deployment. Currently admission exists only for synthetic
-/// test entries; production identities are not inferred from these values.
+/// Source-neutral transport declarations from the pinned reviewed handoff.
 pub fn input_policy(generator: &DeployedGenerator) -> GeneratorInputPolicy {
     let document = generator.document();
     GeneratorInputPolicy {
@@ -109,7 +120,7 @@ pub fn input_policy(generator: &DeployedGenerator) -> GeneratorInputPolicy {
         input_kind_identity: document.input_kind_identity.clone(),
         input_schema_identity: document.input_schema_identity.clone(),
         detected_kind_identity: document.input_kind_identity.clone(),
-        media_type: "application/octet-stream".to_owned(),
+        media_type: "model/3mf".to_owned(),
     }
 }
 
@@ -137,9 +148,30 @@ pub fn protocol_inputs(generator: &DeployedGenerator) -> GeneratorProcessingProt
             role: OutputRole::GeneratedProject,
             path: "outputs/project.3mf".to_owned(),
             media_type: "model/3mf".to_owned(),
-            max_byte_length: 134_217_728,
+            max_byte_length: MAX_OUTPUT_BYTES,
         },
     }
+}
+
+/// Count every staged occurrence, including repeated references to equal bytes.
+/// The service checks neutral transport limits without interpreting geometry.
+pub(crate) fn validate_input_limits(manifest: &InputManifest) -> anyhow::Result<()> {
+    let mut total = 0_u64;
+    for object in &manifest.objects {
+        let content = &object.retained_content;
+        ensure!(
+            content.media_type == "model/3mf" && content.byte_length <= MAX_GEOMETRY_FILE_BYTES,
+            "Bambu geometry input exceeds the reviewed transport contract"
+        );
+        total = total
+            .checked_add(content.byte_length)
+            .ok_or_else(|| anyhow::anyhow!("Bambu geometry input length overflow"))?;
+        ensure!(
+            total <= MAX_GEOMETRY_TOTAL_BYTES,
+            "Bambu staged geometry exceeds the reviewed aggregate transport limit"
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -199,5 +231,26 @@ mod tests {
         let (_directory, generator) = regular_fixture(PACKAGE_SHA256.to_owned());
         let availability = DeployedGeneratorAvailability::Available(Box::new(generator));
         assert!(validate_availability(&availability).is_err());
+    }
+
+    #[test]
+    fn reviewed_geometry_limits_count_each_staged_occurrence() {
+        let mut manifest = crate::generator_protocol::parse_input_manifest(include_bytes!(
+            "../protocol/generator/v1/examples/input-manifest.json"
+        ))
+        .unwrap();
+        let mut object = manifest.objects[0].clone();
+        object.retained_content.media_type = "model/3mf".to_owned();
+        object.retained_content.byte_length = MAX_GEOMETRY_FILE_BYTES;
+        manifest.objects = vec![object.clone(); 4];
+        validate_input_limits(&manifest).unwrap();
+        manifest.objects.push(object);
+        assert!(validate_input_limits(&manifest).is_err());
+        manifest.objects.truncate(1);
+        manifest.objects[0].retained_content.byte_length += 1;
+        assert!(validate_input_limits(&manifest).is_err());
+        manifest.objects[0].retained_content.byte_length = 1;
+        manifest.objects[0].retained_content.media_type = "application/octet-stream".to_owned();
+        assert!(validate_input_limits(&manifest).is_err());
     }
 }

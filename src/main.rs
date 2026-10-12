@@ -1,5 +1,7 @@
 mod bambu_deployment;
 mod bambu_project;
+#[cfg(test)]
+mod bambu_real_package_tests;
 mod cache_key;
 mod cache_model;
 mod catalog;

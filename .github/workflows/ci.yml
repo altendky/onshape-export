@@ -34,10 +34,14 @@ jobs:
     name: Security
     uses: $/.github/workflows/reflow-security.yml
 
+  bambu-package:
+    name: Bambu package
+    uses: $/.github/workflows/reflow-bambu-package.yml
+
   all:
     name: all
     if: ${{ !cancelled() }}
-    needs: [mise, pre-commit, docs, rust, security]
+    needs: [mise, pre-commit, docs, rust, security, bambu-package]
     runs-on: ubuntu-latest
     steps:
       - uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # release/v1

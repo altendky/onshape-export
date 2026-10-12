@@ -5,12 +5,13 @@
 > The neutral protocol, static deployment identity, pure processing recipe,
 > immutable recipe/occurrence persistence, and exact ready-cache lookup are
 > implemented, alongside trusted input construction, CLI execution, verified
-> artifact publication, and reconciliation. Worker/UI orchestration and real
-> generator deployment remain separate work.
+> artifact publication, and reconciliation. The Bambu product adds worker/UI
+> orchestration and one exact reviewed static deployment.
 
-The [Bambu MVP integration](bambu-project-mvp.md) is being prepared against the
-published release. Its complete neutral service identity handoff is missing, so
-real configuration, capability advertisement, and deployment remain blocked.
+The [Bambu MVP integration](bambu-project-mvp.md) pins the unchanged published
+release and its complete reviewed neutral handoff. Service-owned installation,
+full static identity admission, transport bounds, and non-root black-box product
+verification remain distinct from the upstream release decision.
 
 This policy does not provide legal advice. Repository or process separation does
 not itself decide whether licenses are compatible; qualified review is required

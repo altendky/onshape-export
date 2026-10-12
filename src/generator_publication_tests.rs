@@ -546,7 +546,21 @@ async fn every_storage_failure_stays_nonready_and_retry_uses_exact_immutable_evi
     ] {
         let fixture = PublicationFixture::new().await;
         fixture.fault(fault);
-        assert!(fixture.publish().await.is_err(), "{fault:?}");
+        let error = fixture.publish().await.unwrap_err();
+        let expected_upload = matches!(fault, Fault::Put);
+        assert!(
+            matches!(
+                error.downcast_ref::<GeneratorPublicationFailure>(),
+                Some(GeneratorPublicationFailure::Upload(_))
+            ) == expected_upload,
+            "{fault:?} must preserve the upload/readback stage"
+        );
+        if !expected_upload {
+            assert!(matches!(
+                error.downcast_ref::<GeneratorPublicationFailure>(),
+                Some(GeneratorPublicationFailure::StorageVerification(_))
+            ));
+        }
         fixture.assert_nonready().await;
         assert_ne!(
             fixture

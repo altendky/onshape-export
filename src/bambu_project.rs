@@ -14,7 +14,8 @@ use crate::{
     generator_inputs::construct_generator_inputs,
     generator_processing::{PreparedGeneratorProcessing, prepare_generator_processing},
     generator_publication::{
-        GeneratorPublicationTarget, publish_generator_output, reconcile_generator_artifact,
+        GeneratorPublicationFailure, GeneratorPublicationTarget, publish_generator_output,
+        reconcile_generator_artifact,
     },
     generator_runner::{GeneratorRunnerError, GeneratorRunnerOptions, run_generator},
     onshape_api::{ApiFailure, FailureKind},
@@ -82,15 +83,61 @@ fn api_failure(error: ApiFailure) -> anyhow::Error {
 }
 
 fn runner_failure(error: GeneratorRunnerError) -> anyhow::Error {
+    if matches!(error, GeneratorRunnerError::UnsupportedCombination) {
+        return failure("unsupported_request", "generator_unsupported");
+    }
+    if let GeneratorRunnerError::StructuredFailure { result } = &error
+        && !result.errors.is_empty()
+        && result.errors.iter().all(|error| {
+            error.category == crate::generator_protocol::ErrorCategory::UnsupportedRequest
+        })
+    {
+        return failure("unsupported_request", "generator_unsupported_request");
+    }
     let code = match error {
-        GeneratorRunnerError::UnsupportedCombination => "generator_unsupported",
+        GeneratorRunnerError::InvalidInvocation => "generator_invocation_invalid",
+        GeneratorRunnerError::UnsupportedCombination => unreachable!(),
         GeneratorRunnerError::DeploymentIntegrity(_) => "deployment_integrity",
+        GeneratorRunnerError::Spawn => "generator_start_failed",
+        GeneratorRunnerError::Crash { .. } => "generator_crashed",
+        GeneratorRunnerError::UnexpectedExit { .. } => "generator_unexpected_exit",
         GeneratorRunnerError::Timeout => "generator_timeout",
+        GeneratorRunnerError::MissingResult => "generator_result_missing",
+        GeneratorRunnerError::MalformedResult => "generator_protocol_invalid",
+        GeneratorRunnerError::ResultIdentityMismatch => "generator_identity_mismatch",
+        GeneratorRunnerError::OutputDeclarationMismatch => "generator_output_declaration_mismatch",
+        GeneratorRunnerError::UnexpectedFiles => "generator_file_declaration_mismatch",
+        GeneratorRunnerError::CandidateMissing => "generator_candidate_missing",
+        GeneratorRunnerError::CandidateMismatch => "generator_candidate_integrity",
         GeneratorRunnerError::StructuredFailure { .. } => "generator_reported_failure",
         GeneratorRunnerError::Cancelled => "generator_cancelled",
-        _ => "generator_execution_failed",
+        GeneratorRunnerError::Staging => "generator_input_staging_failed",
+        GeneratorRunnerError::Io => "generator_retention_failed",
+        GeneratorRunnerError::ProcessCleanup { .. } | GeneratorRunnerError::Cleanup { .. } => {
+            "generator_cleanup_failed"
+        }
+        GeneratorRunnerError::Supervisor => "generator_supervisor_failed",
     };
     failure("operational_failure", code)
+}
+
+fn publication_failure(error: anyhow::Error) -> anyhow::Error {
+    let code = match error.downcast_ref::<GeneratorPublicationFailure>() {
+        Some(GeneratorPublicationFailure::Upload(_)) => "project_upload_failed",
+        Some(GeneratorPublicationFailure::StorageVerification(_)) => {
+            "project_storage_verification_failed"
+        }
+        None => "project_publication_failed",
+    };
+    failure("operational_failure", code)
+}
+
+fn recipe_failure(error: anyhow::Error, code: &'static str) -> anyhow::Error {
+    if error.is::<ProjectFailure>() {
+        error
+    } else {
+        failure("operational_failure", code)
+    }
 }
 
 fn configured(state: &AppState) -> anyhow::Result<&DeployedGenerator> {
@@ -110,6 +157,8 @@ fn profile_identity(generator: &DeployedGenerator) -> anyhow::Result<String> {
             "inputSchemaIdentity": policy.input_schema_identity,
             "detectedKindIdentity": policy.detected_kind_identity,
             "mediaType": policy.media_type,
+            "maxGeometryFileBytes": bambu_deployment::MAX_GEOMETRY_FILE_BYTES,
+            "maxGeometryTotalBytes": bambu_deployment::MAX_GEOMETRY_TOTAL_BYTES,
             "protocolVersion": compatibility.protocol_version,
             "dialectIdentity": compatibility.dialect_identity,
             "capabilityIdentities": compatibility.capability_identities,
@@ -294,6 +343,8 @@ fn validate_prepared(
     let recipe = prepared.recipe();
     let policy = bambu_deployment::input_policy(generator);
     let protocol = bambu_deployment::protocol_inputs(generator);
+    bambu_deployment::validate_input_limits(&recipe.input_manifest)
+        .map_err(|_| failure("unsupported_request", "input_limit_exceeded"))?;
     ensure!(
         recipe.input_manifest.source_identity == request.source_hash
             && recipe.input_manifest.objects.len() == request.selectors.len()
@@ -378,7 +429,7 @@ async fn execute_inner(
             .await
             .map_err(|_| failure("operational_failure", "stored_recipe_integrity"))?;
         validate_prepared(request, generator, &prepared)
-            .map_err(|_| failure("operational_failure", "stored_recipe_policy"))?;
+            .map_err(|error| recipe_failure(error, "stored_recipe_policy"))?;
         let reconciled = reconcile_generator_artifact(
             &state.db,
             &state.storage,
@@ -413,7 +464,7 @@ async fn execute_inner(
             &publication,
         )
         .await
-        .map_err(|_| failure("operational_failure", "project_publication_failed"))?;
+        .map_err(publication_failure)?;
         return Ok(());
     }
     let output_root = state
@@ -447,6 +498,8 @@ async fn execute_inner(
         &bambu_deployment::input_policy(generator),
     )
     .map_err(|_| failure("operational_failure", "generator_inputs_invalid"))?;
+    bambu_deployment::validate_input_limits(inputs.manifest())
+        .map_err(|_| failure("unsupported_request", "input_limit_exceeded"))?;
     let prepared = prepare_generator_processing(
         generator,
         &bambu_deployment::compatibility(generator),
@@ -457,7 +510,7 @@ async fn execute_inner(
     )
     .map_err(|_| failure("operational_failure", "generator_recipe_invalid"))?;
     validate_prepared(request, generator, &prepared)
-        .map_err(|_| failure("operational_failure", "recipe_request_mismatch"))?;
+        .map_err(|error| recipe_failure(error, "recipe_request_mismatch"))?;
     let result = run_generator(generator, inputs, &prepared, &scratch).await;
     let output = persist_accepted_output(state, request, &prepared, &output_root, result).await?;
     publish_generator_output(
@@ -469,7 +522,7 @@ async fn execute_inner(
         &publication,
     )
     .await
-    .map_err(|_| failure("operational_failure", "project_publication_failed"))?;
+    .map_err(publication_failure)?;
     Ok(())
 }
 
@@ -521,7 +574,7 @@ pub(crate) async fn execute_job(
                 .db
                 .record_bambu_project_failure(&request.request_identity, Some(category), Some(code))
                 .await?;
-            if category == "unavailable_source_state" {
+            if matches!(category, "unavailable_source_state" | "unsupported_request") {
                 Ok(())
             } else {
                 Err(failure(category, code))
@@ -599,8 +652,19 @@ pub(crate) async fn status(
             .reopen_generator_processing(generator, &hash)
             .await
             .map_err(|_| failure("operational_failure", "stored_recipe_integrity"))?;
-        validate_prepared(&request, generator, &prepared)
-            .map_err(|_| failure("operational_failure", "stored_recipe_policy"))?;
+        if let Err(error) = validate_prepared(&request, generator, &prepared) {
+            if let Some(safe) = error.downcast_ref::<ProjectFailure>()
+                && safe.category == "unsupported_request"
+            {
+                status.status = "unavailable".to_owned();
+                status.message =
+                    "The selected request exceeds the approved Bambu input limits.".to_owned();
+                status.failure_category = Some(safe.category.to_owned());
+                status.failure_code = Some(safe.code.to_owned());
+                return Ok(status);
+            }
+            return Err(recipe_failure(error, "stored_recipe_policy"));
+        }
         let presentation = target(&request, generator, None)?;
         if let Some(artifact) = state
             .db
@@ -639,14 +703,17 @@ pub(crate) async fn status(
         return Ok(status);
     }
     if let Some(category) = stored.failure_category {
-        status.status = if category == "unavailable_source_state" {
+        status.status = if matches!(
+            category.as_str(),
+            "unavailable_source_state" | "unsupported_request"
+        ) {
             "unavailable"
         } else {
             "failed"
         }
         .to_owned();
         status.message = if status.status == "unavailable" {
-            "The selected source state cannot produce this Bambu project."
+            "This request is unavailable for Bambu project generation."
         } else {
             "Bambu project generation failed."
         }
@@ -671,6 +738,7 @@ fn safe_category(category: &str) -> &str {
         "invalid_selection"
         | "unavailable_source_state"
         | "deployment_unavailable"
+        | "unsupported_request"
         | "stale_request" => category,
         _ => "operational_failure",
     }
@@ -705,6 +773,25 @@ fn safe_code(code: Option<&str>) -> &str {
             | "generator_reported_failure"
             | "generator_cancelled"
             | "generator_execution_failed"
+            | "generator_invocation_invalid"
+            | "generator_start_failed"
+            | "generator_crashed"
+            | "generator_unexpected_exit"
+            | "generator_result_missing"
+            | "generator_protocol_invalid"
+            | "generator_identity_mismatch"
+            | "generator_output_declaration_mismatch"
+            | "generator_file_declaration_mismatch"
+            | "generator_candidate_missing"
+            | "generator_candidate_integrity"
+            | "generator_input_staging_failed"
+            | "generator_retention_failed"
+            | "generator_cleanup_failed"
+            | "generator_supervisor_failed"
+            | "generator_unsupported_request"
+            | "input_limit_exceeded"
+            | "project_upload_failed"
+            | "project_storage_verification_failed"
             | "approved_generator_unavailable"
             | "project_timeout"
             | "project_input_recovery_required"
@@ -724,4 +811,4 @@ fn safe_code(code: Option<&str>) -> &str {
 
 #[cfg(test)]
 #[path = "bambu_project_tests.rs"]
-mod tests;
+pub(crate) mod tests;

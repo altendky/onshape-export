@@ -1,15 +1,15 @@
 # Bambu Project MVP Integration
 
-> **Status: real deployment blocked on the released generator's complete neutral
-> service identity handoff.** The published package is available and its exact
-> bytes have been measured. This work does not invent the missing deployment
-> fields, approve the release for service use, or enable Bambu output.
+> **Status: the released package and its complete neutral handoff are pinned.**
+> The image installs the unchanged external package and selects its generated
+> closed deployment document. Catalog entries explicitly opt in with ordered
+> selections; models without that configuration expose no project request.
 
 The service's neutral foundation is complete. Product orchestration connects
 controlled catalog selections to trusted planning, opaque acquisition, manifest
 and settings construction, the fixed trusted CLI, and verified publication.
-Real advertisement and activation require the exact-package review described in
-the [service integration policy](slicer-project-generator-integration.md#service-approval-gates).
+Exact-package review and black-box verification follow the
+[service integration policy](slicer-project-generator-integration.md#service-approval-gates).
 
 ## Exact External Component
 
@@ -33,41 +33,44 @@ the aggregate provenance-set identity is `BBL-MVP-PROVENANCE-SET-v1`.
 These are opaque release bindings, not implementation facts or a grant of
 service deployment approval.
 
-## Missing Neutral Handoff
+## Reviewed Neutral Handoff
 
-The release-only prerequisite is tracked in
-[slicer-project-generators#16](https://github.com/altendky/slicer-project-generators/issues/16),
-which blocks completion and real activation of
-[onshape-export#152](https://github.com/altendky/onshape-export/issues/152).
+The release-only prerequisite
+[slicer-project-generators#16](https://github.com/altendky/slicer-project-generators/issues/16)
+was completed by its merged supplemental metadata publication. The service pins
+commit `7acb58a4d631c1afdd3d7ffc450d431f184c0160` and the external
+[complete neutral handoff](https://github.com/altendky/slicer-project-generators/blob/7acb58a4d631c1afdd3d7ffc450d431f184c0160/handoffs/bambu-studio/v0.1.0-v1/handoff.json)
+SHA-256 `8547eae6e1d9378040922972ab9c9bc4561d54afb9c0ba9e3e7305e320eeb40f`.
+Its detached named review binds unchanged package, source, descriptor and binary
+digests. The complete static deployed-generator identity is
+`fd088d4e2066db7de9a26436ad081f045f1fac472429f249d58f623b3c6f8beb`.
 
 The adjacent package descriptor contains only binary, build, and provenance-set
-identities. The reviewed release identities record adds package identity and
-archive/descriptor hashes. Its CLI report records hashes of results and
-invocations rather than the complete protocol identity bindings. Neither record
-supplies the full dialect, capability, input-kind/input-schema, settings-schema,
-normalization, and validation identities required by the existing closed
-[deployment document](deployed-generator.md).
+identities. The supplement now supplies all fourteen immutable fields required
+by the existing closed [deployment document](deployed-generator.md), without
+changing those original bytes or the service's identity scopes. The installer
+adds only the service's absolute executable path. The startup loader and product
+admission check every binding through the complete static identity.
 
-A neutral identity-mismatch probe returns structured failure without reporting
-those missing identities. The service must obtain a named-review-approved,
-hash-bound complete neutral handoff for the existing exact release; it must not
-infer values, inspect target implementation source, or change its own schemas to
-match guesses. A supplemental reviewed metadata record can bind unchanged
-release bytes. The immutable existing package need not change merely to publish
-that handoff.
+Local protocol, deployment, and settings-v2 schemas match the handoff's exact
+neutral contract pins. The service treats identities as opaque values, retains
+the AGPL-authored packet externally, and imports no upstream implementation,
+target schemas, or target fixtures. Generator-local release review remains
+separate from the service's installation, interface, cache and publication checks.
 
-`bambu_deployment::configured_generator` consequently rejects every production
-deployment until this prerequisite is resolved. Synthetic test entries exercise
-the neutral orchestration only. No real deployment configuration is generated,
-and `TRUSTED_GENERATOR_CONFIG_PATH` remains unset in the image and Fly
-configuration.
+The reviewed transport declarations require `model/3mf` geometry, at most
+16 MiB per staged file and 64 MiB across all staged occurrences, including
+repeated equal bytes. Generated project output is bounded by 32 MiB. These
+limits enter the frozen product policy and apply to fresh and recovered recipes.
+The service does not inspect geometry or generated target archives.
 
 ## Installation And Distribution
 
 The Docker generator stage runs `scripts/install-bambu-generator.sh`. It checks
 Linux x86_64, downloads the exact package and corresponding-source assets,
 verifies both archive digests, and independently verifies the extracted
-executable. No generator build or source extraction occurs.
+executable and adjacent descriptor. It separately verifies the pinned handoff,
+named review, and release metadata. No generator build or source extraction occurs.
 
 The complete package, including `LICENSE`, `NOTICE`, `LICENSE-neutral-MIT`, and
 all third-party notices, remains under
@@ -75,16 +78,20 @@ all third-party notices, remains under
 archives are retained in that external component's `distribution/` directory.
 The corresponding-source archive remains opaque external distribution bytes;
 it is never extracted, inspected, or added to this repository. The published
-release provides the paired source acquisition link and its fixed digest.
+release provides the paired source acquisition link and its fixed digest. The
+supplemental metadata, its licensing information, and original corresponding
+source remain external distribution material.
 
 The installer runs as root, refuses replacement of an existing installation,
 and normalizes installed directories to mode 0755, ordinary files to 0644, and
 the executable to 0755, all owned by root. The runtime's `onshape-export` user
 can read notices and execute the component but cannot replace its bytes. The
-future reviewed configuration must likewise reside in a root-owned directory
+generated configuration must likewise reside in a root-owned directory
 with no group/world-writable ancestor. The deployment helper checks regular
 files, ownership, modes, and ancestors; the existing loader and runner retain
 their startup and immediate pre-invocation executable digest checks.
+`TRUSTED_GENERATOR_CONFIG_PATH` in Docker and Fly names
+`/opt/onshape-export/generators/bambu-studio-v0.1.0/deployed-generator.json`.
 
 The measured executable requires glibc symbols through GLIBC_2.34 plus
 `libgcc_s.so.1`. It was launched as a non-root user with a neutral failing
@@ -134,5 +141,40 @@ referenced by retained requests. Missing retention cannot authorize replacement
 bytes under an existing recipe. These service rules are also recorded in the
 [canonical integration policy](slicer-project-generator-integration.md#durable-accepted-output-checkpoints).
 
-The real neutral handoff and service approval remain separate activation gates;
-successful synthetic orchestration and recovery tests do not satisfy them.
+## Real Package Verification
+
+The `generator-verification` Docker target installs exactly the published
+component and executes the service's product tests as the non-root runtime user.
+It exercises configured Part Studio and rigid Assembly paths, named objects,
+support blockers, repeated occurrences with equal standard Geometry 3MF bytes,
+verified publication, ready-cache reuse, and an unsupported nonrigid Assembly.
+Synthetic loopback APIs provide source-neutral source and storage responses;
+the installed generator is real and owns its final target self-validation.
+
+Input geometry is independently authored from the 3MF Consortium Core standard.
+Generated archives remain opaque; only the neutral result, measured byte length,
+SHA-256, storage read-back and readiness are checked. No live Onshape fixture,
+source-derived slicer fixture, or service-side target validator is involved.
+The CI aggregate requires this real-package check as well as ordinary Rust,
+documentation, hook and security checks.
+
+## Service Technical Review
+
+On 2026-10-12, independent agent `Codex /root/readiness_contract` reviewed the
+exact package, full handoff and static identity bindings above, external notice
+and corresponding-source retention, protected installation paths, neutral
+interface limits, frozen request policy, and recovery/publication guards. It
+found no remaining technical blocker after the transport, request-field, and
+supplemental-notice integrity findings were corrected.
+
+The final non-root installed-package verification passed all three product
+cases: configured Part Studio, rigid Assembly, and unsupported nonrigid Assembly.
+Successful cases reached generator-owned final validation, verified storage
+read-back and ready-cache reuse. The ordinary Rust suite passed 417 tests, with
+the three real-package tests run separately by the mandatory Docker check.
+
+These measurements and the named technical review accept the exact static
+binding for the maintainer-authorized service integration workflow, contingent
+on current-head CI. They do not claim a human review, a legal compatibility
+opinion, live Onshape characterization, or independent target validation. Any
+package, handoff, static binding or interface change requires renewed review.
