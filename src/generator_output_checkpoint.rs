@@ -311,7 +311,8 @@ mod tests {
     use crate::generator_runner::tests::RunnerFixture;
 
     fn temporary_directory() -> tempfile::TempDir {
-        let parent = std::env::temp_dir().join("agents");
+        let parent = PathBuf::from(std::env::var_os("TMPDIR").unwrap_or_else(|| "/tmp".into()))
+            .join("agents");
         fs::create_dir_all(&parent).unwrap();
         tempfile::tempdir_in(parent).unwrap()
     }
