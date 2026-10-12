@@ -3670,7 +3670,7 @@ fn zip_inventory_json(bytes: &[u8]) -> anyhow::Result<Option<String>> {
             continue;
         }
         entries.push(RawZipEntry {
-            path: safe_zip_asset_name(file.name())?,
+            path: safe_zip_asset_name(&file.name()?)?,
             byte_len: file.size(),
         });
     }
@@ -3997,7 +3997,7 @@ fn preview_artifact_from_zip(bytes: Vec<u8>) -> anyhow::Result<PreviewArtifact> 
             validate_glb(&bytes).context("validating zipped GLB preview export")?;
             Ok(PreviewArtifact {
                 logical_path: "preview.glb".to_owned(),
-                original_path: Some(safe_zip_asset_name(archive.by_index(*index)?.name())?),
+                original_path: Some(safe_zip_asset_name(&archive.by_index(*index)?.name()?)?),
                 content_type: "model/gltf-binary",
                 bytes,
                 sidecars: Vec::new(),
@@ -4024,7 +4024,7 @@ fn preview_artifact_from_gltf_zip(
             "Onshape preview ZIP contained multiple glTF files; grouped preview export did not produce a single viewer asset"
         ),
     };
-    let primary_name = safe_zip_asset_name(archive.by_index(primary_index)?.name())?;
+    let primary_name = safe_zip_asset_name(&archive.by_index(primary_index)?.name()?)?;
     let primary_bytes = read_zip_entry(&mut archive, primary_index)?;
     let referenced_assets = referenced_gltf_sidecar_assets(&primary_name, &primary_bytes)
         .context("validating zipped glTF preview JSON")?;
@@ -4039,7 +4039,7 @@ fn preview_artifact_from_gltf_zip(
         if file.is_dir() {
             continue;
         }
-        let asset_name = safe_zip_asset_name(file.name())?;
+        let asset_name = safe_zip_asset_name(&file.name()?)?;
         let mut bytes = Vec::with_capacity(file.size() as usize);
         file.read_to_end(&mut bytes)?;
         sidecar_paths.insert(asset_name.clone());
@@ -4242,7 +4242,7 @@ fn zip_entry_indices_with_extension(
         if file.is_dir() {
             continue;
         }
-        let name = file.name().to_ascii_lowercase();
+        let name = file.name()?.to_ascii_lowercase();
         if name.ends_with(&suffix) {
             indices.push(index);
         }
@@ -4259,7 +4259,7 @@ fn zip_file_entry_indices(
         if file.is_dir() {
             continue;
         }
-        safe_zip_asset_name(file.name())?;
+        safe_zip_asset_name(&file.name()?)?;
         indices.push(index);
     }
     Ok(indices)
@@ -4270,7 +4270,7 @@ fn zip_entry_safe_name(
     index: usize,
 ) -> anyhow::Result<String> {
     let file = archive.by_index(index)?;
-    safe_zip_asset_name(file.name())
+    safe_zip_asset_name(&file.name()?)
 }
 
 fn read_zip_entry(
@@ -6891,6 +6891,24 @@ mod tests {
     }
 
     #[test]
+    fn preserves_utf8_names_in_zipped_gltf_preview_exports() {
+        let bytes = test_zip(&[
+            (
+                "scène/modèle.gltf",
+                r#"{"asset":{"version":"2.0"},"buffers":[{"uri":"géométrie.bin"}]}"#.as_bytes(),
+            ),
+            ("scène/géométrie.bin", b"mesh"),
+        ]);
+
+        let artifact = preview_artifact_from_onshape_bytes(bytes).unwrap();
+
+        assert_eq!(artifact.logical_path, "scène/modèle.gltf");
+        assert_eq!(artifact.sidecars.len(), 1);
+        assert_eq!(artifact.sidecars[0].logical_path, "scène/géométrie.bin");
+        assert_eq!(artifact.sidecars[0].bytes, b"mesh");
+    }
+
+    #[test]
     fn rejects_gltf_zip_with_missing_referenced_sidecars() {
         let bytes = test_zip(&[(
             "scene.gltf",
@@ -7020,6 +7038,35 @@ mod tests {
         assert_eq!(artifact.logical_path, "demo-step.step");
         assert_eq!(artifact.original_path.as_deref(), Some("new-bin.step"));
         assert_eq!(artifact.content_type, "model/step");
+        assert_eq!(artifact.bytes, step);
+    }
+
+    #[test]
+    fn preserves_cp437_names_in_zip_inventory_and_step_downloads() {
+        let step = b"ISO-10303-21;\nEND-ISO-10303-21;";
+        let mut bytes = test_zip(&[("x.STEP", step.as_slice())]);
+        // Replace the filename's first byte in the local and central headers
+        // with CP437 é. Keep the data and its CRC unchanged.
+        for (signature, name_offset) in [(b"PK\x03\x04", 30), (b"PK\x01\x02", 46)] {
+            let header = bytes
+                .windows(signature.len())
+                .position(|window| window == signature)
+                .unwrap();
+            bytes[header + name_offset] = 0x82;
+        }
+        let inventory = zip_inventory_json(&bytes).unwrap().unwrap();
+        let entries: Value = serde_json::from_str(&inventory).unwrap();
+        assert_eq!(entries[0]["path"], "é.STEP");
+
+        let artifact = download_artifact_from_onshape_bytes(
+            &test_model(),
+            catalog::DownloadFormat::Step,
+            bytes,
+        )
+        .unwrap();
+
+        assert_eq!(artifact.logical_path, "demo-step.step");
+        assert_eq!(artifact.original_path.as_deref(), Some("é.STEP"));
         assert_eq!(artifact.bytes, step);
     }
 
