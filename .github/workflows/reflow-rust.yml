@@ -7,6 +7,28 @@ permissions:
   contents: read
 
 jobs:
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Read minimum supported Rust version
+        id: msrv
+        run: python3 -c 'import tomllib; print("version=" + tomllib.load(open("Cargo.toml", "rb"))["package"]["rust-version"])' >> "$GITHUB_OUTPUT"
+
+      - name: Setup Rust
+        uses: $/.github/actions/setup-rust
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - name: Check minimum supported Rust version
+        env:
+          MSRV: ${{ steps.msrv.outputs.version }}
+        run: cargo +"$MSRV" check --locked --all-targets --all-features
+
   check:
     name: Rust
     runs-on: ubuntu-latest

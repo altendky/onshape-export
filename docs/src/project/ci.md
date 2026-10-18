@@ -10,7 +10,7 @@ The aggregate `all` job currently requires these workflow groups:
 - `mise`: verifies the checked-in `mise.lock` with `mise install --locked --dry-run`.
 - `pre-commit`: runs `pre-commit run --show-diff-on-failure --color=always --all-files`.
 - `docs`: runs `mise exec -- mdbook build docs` and `mise exec -- mdbook test docs`.
-- `rust`: runs Rust formatting, clippy, and `cargo nextest run`.
+- `rust`: checks the minimum supported Rust version, and runs Rust formatting, clippy, and `cargo nextest run` on the development toolchain.
 - `security`: runs slower CI-native security scanners in parallel.
 
 GitHub Actions are pinned to full commit SHAs.
@@ -38,8 +38,11 @@ Configured tools include:
 - `aqua:hadolint/hadolint` for Dockerfile linting.
 - `aqua:superfly/flyctl` for Fly operations.
 
-Rust itself is pinned separately in `rust-toolchain.toml`.
-`Cargo.toml` declares the same `rust-version` so package metadata matches the toolchain used by CI.
+The development Rust toolchain is pinned in `rust-toolchain.toml`; the Docker
+builder also pins its Rust image. `Cargo.toml` declares the minimum supported Rust
+version independently. CI reads that minimum and runs
+`cargo +<MSRV> check --locked --all-targets --all-features` as part of the required
+Rust workflow, so dependency updates must continue to compile at the declared floor.
 
 ## Local Checks
 
@@ -141,11 +144,17 @@ The workflow expects repository or organization credentials for the Renovate Git
 - `RENOVATE_APP_PRIVATE_KEY` as a GitHub Actions secret.
 
 Renovate is allowed to run mise lock update commands so `mise.lock` stays synchronized with `mise.toml` changes.
+Python updates stay within 3.14 and Node updates stay within 24. Raising those
+release lines or the Cargo minimum Rust version requires a deliberate policy
+change; development Rust toolchain and Docker image updates remain enabled.
+Generated `.mise/locks` tool environments receive no independent dependency updates.
 
 ## Reference
 
 `onshape-mcp` remains the reference for repository policy and reusable workflow patterns.
-This repository intentionally uses a smaller Rust workflow than `onshape-mcp`: a single Ubuntu Rust job with `cargo nextest`, not the full archive/test platform matrix.
+This repository intentionally uses a smaller Rust workflow than `onshape-mcp`:
+Ubuntu MSRV and development-toolchain jobs, rather than the full archive/test
+platform matrix.
 
 ## Deferred Workflows
 

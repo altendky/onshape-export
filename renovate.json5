@@ -17,8 +17,7 @@
     "mise": "v2026.10.8"
   },
 
-  // Use custom Rust managers so rust-toolchain.toml and Cargo.toml
-  // rust-version updates are grouped together.
+  // Manage the development toolchain separately from the manual Rust MSRV.
   "rust-toolchain": {
     "enabled": false
   },
@@ -43,6 +42,11 @@
   ],
 
   "packageRules": [
+    // Mise owns these generated tool environments and their dependencies.
+    {
+      "matchFileNames": ["**/.mise/locks/**"],
+      "enabled": false
+    },
     // Keep 0.4 patch updates until num-rational and jsonschema/fraction support 0.5.
     // Remove when https://github.com/altendky/onshape-export/issues/251 is resolved.
     {
@@ -53,6 +57,24 @@
     {
       "matchDepNames": ["rust-lang/rust"],
       "groupName": "Rust toolchain"
+    },
+    // Raising the MSRV is a deliberate compatibility decision.
+    {
+      "matchManagers": ["custom.regex"],
+      "matchFileNames": ["/^Cargo\\.toml$/"],
+      "matchDepNames": ["rust-lang/rust"],
+      "enabled": false
+    },
+    // Keep runtime release lines deliberate while accepting updates within them.
+    {
+      "matchManagers": ["mise"],
+      "matchDepNames": ["python", "python/cpython"],
+      "allowedVersions": "/^3\\.14\\./"
+    },
+    {
+      "matchManagers": ["mise"],
+      "matchDepNames": ["node"],
+      "allowedVersions": "/^24(?:\\.|$)/"
     },
     {
       "matchDepNames": ["github:nextest-rs/nextest"],
