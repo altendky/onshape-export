@@ -14,7 +14,7 @@
   },
 
   "constraints": {
-    "mise": "v2026.11.2"
+    "mise": "v2026.11.3"
   },
 
   // Manage the development toolchain separately from the manual Rust MSRV.
