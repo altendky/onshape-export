@@ -14,7 +14,7 @@ repos:
       - id: gitleaks-docker
 
   - repo: https://github.com/semgrep/pre-commit
-    rev: v1.184.0
+    rev: v1.186.0
     hooks:
       - id: semgrep
         args:
@@ -25,7 +25,7 @@ repos:
           - --skip-unknown-extensions
 
   - repo: https://github.com/crate-ci/typos
-    rev: v1.52.0
+    rev: v1.52.2
     hooks:
       - id: typos
 
