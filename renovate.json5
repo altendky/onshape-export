@@ -13,6 +13,15 @@
     "enabled": true
   },
 
+  // Refresh Cargo's compatible dependencies during the Monday workflow runs.
+  // Scope maintenance to Cargo so mise's platform locks remain separate.
+  "cargo": {
+    "lockFileMaintenance": {
+      "enabled": true,
+      "schedule": ["* * * * 1"]
+    }
+  },
+
   "constraints": {
     "mise": "v2026.11.12"
   },

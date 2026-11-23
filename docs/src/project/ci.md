@@ -149,6 +149,30 @@ release lines or the Cargo minimum Rust version requires a deliberate policy
 change; development Rust toolchain and Docker image updates remain enabled.
 Generated `.mise/locks` tool environments receive no independent dependency updates.
 
+### Cargo lockfile maintenance
+
+Cargo lockfile maintenance is enabled throughout Monday in UTC, overlapping the
+workflow's 00:00, 06:00, 12:00, and 18:00 runs and tolerating delayed starts.
+Renovate reuses its maintenance branch for the grouped refresh. It updates
+compatible direct and transitive dependencies within the Cargo manifest's
+constraints without changing those constraints. The existing review, merge
+queue, security checks, and Rust MSRV check still apply.
+
+The scope is Cargo-managed lockfiles, currently only the root `Cargo.lock`.
+Maintenance is not enabled for `mise.lock` or generated `.mise/locks` tool
+environments; tool pins continue to use their separate platform-lock workflow.
+
+To reproduce the Cargo refresh locally with the pinned development compiler:
+
+```sh
+bash scripts/cargo-pinned.sh update --config net.git-fetch-with-cli=true --manifest-path Cargo.toml
+```
+
+Inspect the resulting lockfile diff and run the Rust and security checks before
+publishing it. To retry a stalled maintenance PR, use its Renovate rebase/retry
+checkbox or the corresponding Dependency Dashboard checkbox. The Renovate
+workflow also supports manual dispatch with debug logging for diagnosis.
+
 ## Reference
 
 `onshape-mcp` remains the reference for repository policy and reusable workflow patterns.
