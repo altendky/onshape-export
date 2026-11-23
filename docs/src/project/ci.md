@@ -136,7 +136,7 @@ The Rust CI workflow runs `cargo nextest` on every required CI run, and the secu
 ## Renovate
 
 Renovate is configured by `renovate.json5` and `.github/workflows/renovate.yml`.
-The workflow runs every 6 hours and supports manual dispatch with optional debug logging.
+The workflow defines the bot's run times and supports manual dispatch with optional debug logging.
 
 The workflow expects repository or organization credentials for the Renovate GitHub App:
 
@@ -151,8 +151,8 @@ Generated `.mise/locks` tool environments receive no independent dependency upda
 
 ### Cargo lockfile maintenance
 
-Cargo lockfile maintenance is enabled throughout Monday in UTC, overlapping the
-workflow's 00:00, 06:00, 12:00, and 18:00 runs and tolerating delayed starts.
+Cargo lockfile maintenance is enabled throughout Monday in UTC, covering the
+workflow's scheduled Monday runs and tolerating delayed starts.
 Renovate reuses its maintenance branch for the grouped refresh. It updates
 compatible direct and transitive dependencies within the Cargo manifest's
 constraints without changing those constraints. The existing review, merge
